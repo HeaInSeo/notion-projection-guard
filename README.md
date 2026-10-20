@@ -46,6 +46,36 @@ This is workflow enforcement when the supervisor uses this entry point, not an
 access-control claim that it cannot invoke a different connector. Adoption must
 be recorded in the actual supervisor prompt and verified on real observations.
 
+## Successor and concurrency accounting
+
+Use one repository per ordinary observation: NodeKit needs body6/native2 and
+Sori body8/native2, including every shared projection. A busy unrelated worker
+does not defer these decisions. The canonical broker's global pending barrier
+continues to apply. Combined observations remain supported for an actually
+inseparable event, not as the default waiting policy.
+
+Evaluate `supervision_gate.js` as a function expression and call the returned
+`assess(snapshot)` before ending supervision. Its version-1 input contains a fresh
+UTC `observedAt`, `canonical: {active, nonterminal}`, `previousPending`, and
+`events`. Each event binds `repository` to a source (actual `MERGED` PR with full
+head/merge SHAs and timestamp, or an own `RELEASE` identity), canonical
+`expectedSuccessors`, complete projection certificate/source key and one
+disposition per successor. `eventKey(event)` supplies the stable key. PROMOTE or
+RECIRCULATE needs a real request receipt and a task/session/time/input-bound own
+receipt; KEEP_GATED needs an explicitly unmet condition with owner/trigger/source;
+DONE needs its completion proof. An omitted prior pending event remains pending.
+Persist the returned pending list in the existing private audit area and read it
+first next time. This check cannot discover omitted DAG successors or authenticate
+caller evidence; obtain them from current canonical documents and connector reads.
+
+`prewriteDecision(input)` allows fresh re-observation only for a known native
+preflight conflict before the body runner, bodyWrites0, all responses known,
+no registered batch and an idle canonical journal. It bounds attempts to three.
+Any unknown result, entered runner, registered batch or unresolved canonical state
+requires preservation/reconciliation. A decision is not permission to replay a
+write or bypass the approved runner. The module never mutates remote state,
+creates worker proof or declares product acceptance.
+
 ## Exact transport pre-prepare closure
 
 `reconcile_transport_preprepare.cjs` handles only the recorded seven-page

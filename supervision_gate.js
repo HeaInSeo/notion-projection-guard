@@ -1,0 +1,105 @@
+(function createSupervisionGate() {
+  'use strict';
+  // Pure accounting: this module never writes Notion, releases ownership,
+  // retries a broker batch, starts a worker or grants execution authority.
+  const need=(ok,message)=>{if(!ok)throw new Error('SUPERVISION_INPUT: '+message);};
+  const nonempty=x=>typeof x==='string'&&x.trim().length>0;
+  const sha=x=>typeof x==='string'&&/^[a-f0-9]{40}$/.test(x);
+  const time=x=>{
+    if(typeof x!=='string'||!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/.test(x))return false;
+    const stamp=Date.parse(x),canonical=x.replace(/(?:\.(\d{1,3}))?Z$/,(_,f)=>'.'+(f??'').padEnd(3,'0')+'Z');
+    return Number.isFinite(stamp)&&new Date(stamp).toISOString()===canonical;
+  };
+  const actions=new Set(['PROMOTE','RECIRCULATE','KEEP_GATED','DONE']);
+  function eventKey(event) {
+    need(nonempty(event.repository)&&event.source,'repository/source required');
+    const s=event.source;
+    need(time(s.at),'source time required');
+    if(s.kind==='MERGED') {
+      need(Number.isSafeInteger(s.pr)&&s.pr>0&&s.merged===true&&sha(s.head)&&sha(s.mergeSha),'actual merged PR/full SHAs required');
+      return event.repository+'#'+s.pr+':'+s.head+':'+s.mergeSha+':MERGED';
+    }
+    need(s.kind==='RELEASE'&&nonempty(s.taskId)&&nonempty(s.eventId)&&sha(s.head),'own RELEASE identity required');
+    return event.repository+'/'+s.taskId+'/'+s.eventId+'/'+s.head;
+  }
+  function canonicalBarrier(canonical) {
+    need(canonical&&Object.hasOwn(canonical,'active')&&Array.isArray(canonical.nonterminal),'fresh canonical state required');
+    return canonical.active!==null||canonical.nonterminal.length>0;
+  }
+  function prewriteDecision(input) {
+    const blocked=canonicalBarrier(input.canonical);
+    need(Number.isSafeInteger(input.bodyWrites)&&input.bodyWrites>=0,'body write count required');
+    need(Number.isSafeInteger(input.attempt)&&input.attempt>=1,'attempt required');
+    // Never infer zero writes from the wording of an exception.
+    if(blocked||input.bodyWrites!==0||input.bodyRunnerEntered!==false||input.resultsKnown!==true||input.batchRegistered!==false)
+      return {action:'PRESERVE_AND_RECONCILE',retry:false};
+    if(input.phase!=='NATIVE_PREFLIGHT'||input.reason!=='NATIVE_EXPECTATION_CHANGED')
+      return {action:'REPORT_CAPABILITY',retry:false};
+    if(input.attempt>=3)return {action:'RECORD_PENDING',retry:false};
+    return {action:'REOBSERVE_SAME_REPOSITORY',retry:true};
+  }
+  function assess(snapshot) {
+    need(snapshot?.version===1&&time(snapshot.observedAt),'version/clock required');
+    need(Array.isArray(snapshot.events)&&Array.isArray(snapshot.previousPending),'events/previous pending required');
+    const blocked=canonicalBarrier(snapshot.canonical),now=Date.parse(snapshot.observedAt);
+    const pending=new Map(),issues=[],eligible=new Set(),seen=new Set();
+    for(const old of snapshot.previousPending) {
+      need(nonempty(old.key)&&nonempty(old.repository)&&time(old.firstSeenAt)&&!pending.has(old.key),'unique prior pending identity required');
+      need(Date.parse(old.firstSeenAt)<=now,'prior pending time is in the future');
+      pending.set(old.key,{...old,status:'UNOBSERVED_PENDING'});
+    }
+    const add=(key,repository,code,detail)=>issues.push({key,repository,code,detail});
+    for(const event of snapshot.events) {
+      const key=eventKey(event),repo=event.repository;
+      need(!seen.has(key),'duplicate event');seen.add(key);
+      need(Date.parse(event.source.at)<=now,'source time is in the future');
+      need(Array.isArray(event.expectedSuccessors)&&event.expectedSuccessors.length>0&&
+        new Set(event.expectedSuccessors).size===event.expectedSuccessors.length&&event.expectedSuccessors.every(nonempty),'canonical successor IDs required');
+      need(Array.isArray(event.successors),'successor dispositions required');
+      const actual=new Map();
+      for(const s of event.successors){need(nonempty(s.id)&&!actual.has(s.id),'unique successor ID required');actual.set(s.id,s);}
+      need([...actual.keys()].every(id=>event.expectedSuccessors.includes(id)),'unexpected successor');
+      let complete=true;
+      if(event.projection?.status!=='COMPLETE'||event.projection.sourceKey!==key||!nonempty(event.projection.certificate)) {
+        complete=false;add(key,repo,'PROJECT_SOURCE','fresh single-repository complete manifest required');
+      }
+      // Another repository's valid worker can delay shared worker intake, but
+      // is never a reason to drop this repository's projection/decision.
+      if(event.deferredBecauseOtherRepository===true) {
+        complete=false;add(key,repo,'CROSS_REPOSITORY_DEFER','replan this repository independently');
+      }
+      for(const id of event.expectedSuccessors) {
+        const s=actual.get(id);
+        if(!s||!actions.has(s.action)||s.sourceKey!==key||!nonempty(s.owner)||!nonempty(s.next)) {
+          complete=false;add(key,repo,'DECIDE_SUCCESSOR',id);continue;
+        }
+        if(s.action==='KEEP_GATED') {
+          const b=s.blocker;
+          if(!b||!nonempty(b.owner)||!nonempty(b.trigger)||!nonempty(b.source)||b.conditionMet!==false) {
+            complete=false;add(key,repo,'INVALID_WAIT',id);
+          }
+        } else if(s.action==='DONE') {
+          if(!nonempty(s.completionReceipt)){complete=false;add(key,repo,'MISSING_COMPLETION_PROOF',id);}
+        } else {
+          const h=s.handoff;
+          const request=h&&time(h.requestedAt)&&Date.parse(h.requestedAt)<=now&&nonempty(h.requestReceipt);
+          const own=h?.ownReceipt;
+          const received=request&&own&&own.taskId===id&&own.inputKey===key&&nonempty(own.eventId)&&nonempty(own.sessionId)&&
+            ['CLAIM','CHECKPOINT','RELEASE'].includes(own.kind)&&time(own.at)&&
+            Date.parse(own.at)>=Date.parse(h.requestedAt)&&Date.parse(own.at)<=now;
+          if(!received){complete=false;add(key,repo,request?'AWAIT_OWN_RECEIPT':'DISPATCH_SUCCESSOR',id);}
+        }
+      }
+      if(complete)pending.delete(key);
+      else {
+        const prior=pending.get(key);
+        pending.set(key,{key,repository:repo,firstSeenAt:prior?.firstSeenAt??event.source.at,status:blocked?'CANONICAL_BARRIER':'ACTION_PENDING'});
+        if(!blocked)eligible.add(repo);
+      }
+    }
+    return {status:pending.size?'PENDING':'COMPLETE',canonicalBarrier:blocked,
+      eligibleRepositories:[...eligible].sort(),issues,pending:[...pending.values()],
+      productAcceptance:'NOT_ASSESSED'};
+  }
+  return {assess,eventKey,prewriteDecision};
+})
