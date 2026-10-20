@@ -58,7 +58,8 @@ inseparable event, not as the default waiting policy.
 Evaluate `supervision_gate.js` as a function expression and call the returned
 `assess(snapshot)` before ending supervision. Its version-1 input contains a fresh
 UTC `observedAt`, `canonical: {active, nonterminal}`, `previousPending`, and
-`events`. Each event binds `repository` to a source (actual `MERGED` PR with full
+`events`. Event and carried pending repositories must be `nodekit` or `sori`,
+matching the complete projection manifest. Each event binds `repository` to a source (actual `MERGED` PR with full
 head/merge SHAs and timestamp, or an own `RELEASE` identity), canonical
 `expectedSuccessors`, complete projection certificate/source key and one
 disposition per successor. `eventKey(event)` supplies the stable key. PROMOTE or

@@ -11,8 +11,9 @@
     return Number.isFinite(stamp)&&new Date(stamp).toISOString()===canonical;
   };
   const actions=new Set(['PROMOTE','RECIRCULATE','KEEP_GATED','DONE']);
+  const repositories=new Set(['nodekit','sori']); // Same scope as complete_projection.js.
   function eventKey(event) {
-    need(nonempty(event.repository)&&event.source,'repository/source required');
+    need(repositories.has(event.repository)&&event.source,'known projection repository/source required');
     const s=event.source;
     need(time(s.at),'source time required');
     if(s.kind==='MERGED') {
@@ -50,7 +51,7 @@
     const blocked=canonicalBarrier(snapshot.canonical),now=Date.parse(snapshot.observedAt);
     const pending=new Map(),issues=[],eligible=new Set(),seen=new Set();
     for(const old of snapshot.previousPending) {
-      need(nonempty(old.key)&&nonempty(old.repository)&&time(old.firstSeenAt)&&!pending.has(old.key),'unique prior pending identity required');
+      need(nonempty(old.key)&&repositories.has(old.repository)&&time(old.firstSeenAt)&&!pending.has(old.key),'unique known prior pending identity required');
       need(Date.parse(old.firstSeenAt)<=now,'prior pending time is in the future');
       pending.set(old.key,{...old,status:'UNOBSERVED_PENDING'});
     }

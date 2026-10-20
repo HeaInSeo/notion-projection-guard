@@ -103,3 +103,13 @@ test('DONE rejects another source, task or pre-source completion timestamp',()=>
 test('DONE accepts a current structured task/input-bound accepted release',()=>{
  const s=fixture();completion(s);assert.equal(gate.assess(s).status,'COMPLETE');
 });
+test('repository typos and unsupported projection scopes fail before accounting',()=>{
+ for(const repository of ['nodekti','nodevault','NodeKit','constructor','__proto__']){
+  const s=fixture();s.events[0].repository=repository;
+  assert.throws(()=>gate.eventKey(s.events[0]),/SUPERVISION_INPUT/);
+ }
+});
+test('unsupported repository in a carried pending ledger fails closed',()=>{
+ const s=fixture();s.previousPending=[{key:'old',repository:'nodekti',firstSeenAt:'2026-10-20T06:00:00Z'}];
+ assert.throws(()=>gate.assess(s),/SUPERVISION_INPUT/);
+});
