@@ -20,11 +20,17 @@
       return event.repository+'#'+s.pr+':'+s.head+':'+s.mergeSha+':MERGED';
     }
     need(s.kind==='RELEASE'&&nonempty(s.taskId)&&nonempty(s.eventId)&&sha(s.head),'own RELEASE identity required');
-    return event.repository+'/'+s.taskId+'/'+s.eventId+'/'+s.head;
+    return JSON.stringify(['RELEASE',event.repository,s.taskId,s.eventId,s.head]);
   }
   function canonicalBarrier(canonical) {
     need(canonical&&Object.hasOwn(canonical,'active')&&Array.isArray(canonical.nonterminal),'fresh canonical state required');
     return canonical.active!==null||canonical.nonterminal.length>0;
+  }
+  function ownProof(receipt,id,key,earliest,now) {
+    return receipt&&typeof receipt==='object'&&receipt.taskId===id&&receipt.inputKey===key&&
+      nonempty(receipt.eventId)&&nonempty(receipt.sessionId)&&
+      ['CLAIM','CHECKPOINT','RELEASE'].includes(receipt.kind)&&time(receipt.at)&&
+      Date.parse(receipt.at)>=earliest&&Date.parse(receipt.at)<=now;
   }
   function prewriteDecision(input) {
     const blocked=canonicalBarrier(input.canonical);
@@ -79,14 +85,17 @@
             complete=false;add(key,repo,'INVALID_WAIT',id);
           }
         } else if(s.action==='DONE') {
-          if(!nonempty(s.completionReceipt)){complete=false;add(key,repo,'MISSING_COMPLETION_PROOF',id);}
+          const proof=s.completionReceipt;
+          if(!ownProof(proof,id,key,Date.parse(event.source.at),now)||proof.kind!=='RELEASE'||
+            proof.verdict!=='PASS'||!nonempty(proof.acceptanceReceipt)) {
+            complete=false;add(key,repo,'MISSING_COMPLETION_PROOF',id);
+          }
         } else {
           const h=s.handoff;
-          const request=h&&time(h.requestedAt)&&Date.parse(h.requestedAt)<=now&&nonempty(h.requestReceipt);
+          const request=h&&time(h.requestedAt)&&Date.parse(h.requestedAt)>=Date.parse(event.source.at)&&
+            Date.parse(h.requestedAt)<=now&&nonempty(h.requestReceipt);
           const own=h?.ownReceipt;
-          const received=request&&own&&own.taskId===id&&own.inputKey===key&&nonempty(own.eventId)&&nonempty(own.sessionId)&&
-            ['CLAIM','CHECKPOINT','RELEASE'].includes(own.kind)&&time(own.at)&&
-            Date.parse(own.at)>=Date.parse(h.requestedAt)&&Date.parse(own.at)<=now;
+          const received=request&&ownProof(own,id,key,Date.parse(h.requestedAt),now);
           if(!received){complete=false;add(key,repo,request?'AWAIT_OWN_RECEIPT':'DISPATCH_SUCCESSOR',id);}
         }
       }

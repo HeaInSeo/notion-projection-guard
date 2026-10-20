@@ -70,3 +70,36 @@ test('invalid merged/own evidence fails rather than becoming completion',()=>{
   const s=fixture();mutate(s);assert.throws(()=>gate.assess(s),/SUPERVISION_INPUT/);
  }
 });
+test('distinct RELEASE task/event components never erase an older pending event',()=>{
+ const s=fixture();const first={repository:'sori',source:{kind:'RELEASE',taskId:'a/b',eventId:'c',head:'c'.repeat(40),at:'2026-10-20T06:00:00Z'}};
+ const second=structuredClone(first);second.source.taskId='a';second.source.eventId='b/c';
+ const firstKey=gate.eventKey(first),secondKey=gate.eventKey(second);
+ s.previousPending=[{key:firstKey,repository:'sori',firstSeenAt:first.source.at}];
+ const e=s.events[0];e.repository=second.repository;e.source=second.source;e.projection.sourceKey=secondKey;
+ for(const x of e.successors){x.sourceKey=secondKey;if(x.handoff)x.handoff.ownReceipt.inputKey=secondKey;}
+ const r=gate.assess(s);assert.equal(r.status,'PENDING');assert.equal(r.pending[0].key,firstKey);
+});
+test('request and CLAIM before the triggering event cannot consume it',()=>{
+ const s=fixture(),h=s.events[0].successors[0].handoff;
+ h.requestedAt='2026-10-20T05:00:00Z';h.ownReceipt.at='2026-10-20T05:01:00Z';
+ assert.notEqual(gate.assess(s).status,'COMPLETE');
+});
+function completion(s){
+ const e=s.events[0],x=e.successors[0];x.action='DONE';delete x.handoff;
+ x.completionReceipt={taskId:x.id,inputKey:gate.eventKey(e),eventId:'accepted-release',sessionId:'own-session',kind:'RELEASE',
+  at:'2026-10-20T08:58:00Z',verdict:'PASS',acceptanceReceipt:'current pair/CI/landing evidence'};
+ return x.completionReceipt;
+}
+test('DONE rejects a free-form receipt borrowed from another task',()=>{
+ const s=fixture();const x=s.events[0].successors[0];x.action='DONE';x.completionReceipt='unrelated-old-receipt';
+ assert.notEqual(gate.assess(s).status,'COMPLETE');
+});
+test('DONE rejects another source, task or pre-source completion timestamp',()=>{
+ for(const field of ['inputKey','taskId','at']){
+  const s=fixture(),c=completion(s);c[field]=field==='at'?'2026-10-20T05:00:00Z':'unrelated';
+  assert.notEqual(gate.assess(s).status,'COMPLETE');
+ }
+});
+test('DONE accepts a current structured task/input-bound accepted release',()=>{
+ const s=fixture();completion(s);assert.equal(gate.assess(s).status,'COMPLETE');
+});

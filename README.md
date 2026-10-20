@@ -64,7 +64,11 @@ head/merge SHAs and timestamp, or an own `RELEASE` identity), canonical
 disposition per successor. `eventKey(event)` supplies the stable key. PROMOTE or
 RECIRCULATE needs a real request receipt and a task/session/time/input-bound own
 receipt; KEEP_GATED needs an explicitly unmet condition with owner/trigger/source;
-DONE needs its completion proof. An omitted prior pending event remains pending.
+DONE needs a structured completion proof with taskId, inputKey, eventId,
+sessionId, kind RELEASE, verdict PASS, acceptanceReceipt and UTC at. Requests
+and receipts cannot predate the triggering source. RELEASE keys encode an array
+of components as JSON, so slashes in task/event identities cannot alias another
+event. An omitted prior pending event remains pending.
 Persist the returned pending list in the existing private audit area and read it
 first next time. This check cannot discover omitted DAG successors or authenticate
 caller evidence; obtain them from current canonical documents and connector reads.
