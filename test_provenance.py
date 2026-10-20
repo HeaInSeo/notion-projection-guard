@@ -22,6 +22,10 @@ class ProvenanceTests(unittest.TestCase):
         git(root, "init", "-q")
         git(root, "config", "user.name", "Fixture Author")
         git(root, "config", "user.email", "fixture@example.invalid")
+        # This fixture is copied immediately after creating many Git objects.
+        # Background maintenance must not repack/delete them during copytree.
+        git(root, "config", "gc.auto", "0")
+        git(root, "config", "maintenance.auto", "false")
         folder = root / ANCHORS["sourcePath"]
         folder.mkdir(parents=True)
         for name in CODE_PATHS:
