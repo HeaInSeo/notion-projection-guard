@@ -4,6 +4,10 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const runtimeNames = ['broker.cjs', 'runner.js', 'policy.json'];
+const entryPaths = Object.freeze({
+  'HeaInSeo/infra-lab': 'ops/notion-projection-guard/complete_projection.js',
+  'HeaInSeo/notion-projection-guard': 'complete_projection.js'
+});
 const sha256 = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 function requireThat(ok, code) {
   if (!ok) throw Object.assign(new Error(code), { code });
@@ -13,7 +17,7 @@ function read(file) {
   return fs.readFileSync(file);
 }
 function verifyRuntime({ release, runtimeDir, receiptPath, sourceDir }) {
-  requireThat(release?.version === 1 && release.repository === 'HeaInSeo/infra-lab'
+  requireThat(release?.version === 1 && Object.hasOwn(entryPaths, release.repository)
     && /^[a-f0-9]{40}$/.test(release.sourceCommit), 'RELEASE_SCHEMA');
   requireThat(Object.keys(release.runtimeSha256 ?? {}).sort().join(',') === 'broker.cjs,runner.js'
     && Object.values(release.runtimeSha256).every(h => /^[a-f0-9]{64}$/.test(h))
@@ -48,7 +52,7 @@ function verifyRuntime({ release, runtimeDir, receiptPath, sourceDir }) {
     for (const name of ['broker.cjs', 'runner.js']) {
       requireThat(sha256(read(path.join(sourceDir, name))) === expected[name], 'SOURCE_HASH_MISMATCH');
     }
-    requireThat(release.hostedEntryPoint?.path === 'ops/notion-projection-guard/complete_projection.js'
+    requireThat(release.hostedEntryPoint?.path === entryPaths[release.repository]
       && /^[a-f0-9]{64}$/.test(release.hostedEntryPoint.sha256), 'RELEASE_SCHEMA');
     requireThat(sha256(read(path.join(sourceDir, 'complete_projection.js')))
       === release.hostedEntryPoint.sha256, 'SOURCE_HASH_MISMATCH');

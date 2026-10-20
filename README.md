@@ -3,9 +3,10 @@
 ## Source and installed version
 
 The source repository is `HeaInSeo/notion-projection-guard`. Runtime, tests and
-incident helpers retain their exact imported bytes. See [MIGRATION.md](MIGRATION.md)
+incident helpers preserve the immutable import; later operational updates have
+explicit code pins in the provenance verifier. See [MIGRATION.md](MIGRATION.md)
 for the 35-commit history map, legacy installation provenance and source cutover.
-Run `node --test test_guard.cjs test_runtime.cjs test_revision.cjs supervision_gate_cases.cjs`
+Run `node --test test_guard.cjs test_runtime.cjs test_revision.cjs supervision_gate_cases.cjs serialized_format_cases.cjs`
 on Node 22 or 24.
 
 [OPERATIONS.md](OPERATIONS.md) records the public/private storage boundary,
@@ -30,8 +31,9 @@ Evaluate the file as a function expression and call
 and canonical broker command. The bundle contains `observationId` (ASCII letters,
 digits, underscore and hyphen), `repositories` (`nodekit` and/or `sori`), ordinary
 `edits`, and `native: [{pageId, properties}]`. Each new body literal and each native
-`큐 정리 근거` must contain the identical `observation_id=` field with a backtick
-quoted ID. Native expectations must include 작업 상태, 다음 담당자, 큐 구획,
+`큐 정리 근거` use the identical `observation_id=` field with a backtick
+quoted ID by default. The optional plain observation marker is described below;
+native expectations include 작업 상태, 다음 담당자, 큐 구획,
 차단 대상, 재개 지시 and 큐 정리 근거; only central metadata keys are accepted.
 
 First check the canonical journal and authority, then reconcile native properties
@@ -408,4 +410,25 @@ The five untouched old instructions are not replayed. A separately guarded bound
 repair restores the original central V01/V02 fields and valid code boundaries;
 a fresh complete observation then consumes the later genuine NodeKit paired PASS
 alongside Sori's PASS. Only that full readback can establish current synchronization.
+
+## Serialized central fields
+
+Some complete Notion reads serialize an inline code annotation as
+`<code>value</code>` and an underscore in a heading as `\_`. The planner accepts
+only these narrowly observed representations: balanced, exact lowercase code
+wrappers containing plain text on the existing-literal side, and underscore
+escapes when locating an already policy-authorized heading. A selection must
+include the complete code field. Attributes, nested tags, new HTML and worker
+event syntax remain forbidden. Canonical and escaped aliases together are
+ambiguous. No body bytes, offsets, revision tokens, properties, protected hashes
+or post-write comparisons are normalized.
+
+For a new complete observation, `observationMarkerStyle: 'plain-v1'` opts into the
+plain prefix `observation-id: ID;` in both body literals and native metadata.
+Its ID uses letters, digits and hyphens only. The default Markdown marker remains
+supported. Mixed styles or duplicate identities are rejected. The
+same mandatory original, paired, index and five shared body targets, native
+metadata checks and exact full readbacks remain required. Use plain text in
+the new observation when exact Markdown export would otherwise be uncertain;
+this mode does not predict or forgive rendering changes.
 The helper defaults to check-only and cannot be called automatically by run/resume.

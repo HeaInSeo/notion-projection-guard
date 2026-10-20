@@ -125,7 +125,11 @@ function validateEdit(edit, policy) {
     const value = edit[field];
     if (typeof value !== 'string' || !value.length || value.length > 1024 || /[\r\n\u0000]/.test(value))
       fail('RANGE_LIMIT', 'Use one nonempty exact literal of at most 1024 characters');
-    if (/^\s*#|```|~~~|<\/?[a-z][^>]*>|QUEUE_EVENT_V1/i.test(value))
+    // A fetched inline-code annotation may be serialized as <code>...</code>.
+    // Admit only complete existing spans on the removal side. New text still
+    // cannot introduce HTML/native tags, and own-event syntax is never masked.
+    const syntax = field === 'oldStr' ? maskSerializedCode(value) : value;
+    if (/^\s*#|```|~~~|<\/?[a-z][^>]*>/i.test(syntax) || /QUEUE_EVENT_V1/i.test(value))
       fail('PROTECTED_SYNTAX', 'Headings, native blocks and own event records are protected');
   }
   if (edit.oldStr === edit.newStr) fail('NO_CHANGE', 'No-op is not an update');
@@ -158,7 +162,18 @@ function scanInline(text,open=null) {
   // Escapes outside spans are Markdown escapes; inside, backslashes are literal.
   const spans=[];
   for(let i=0;i<text.length;) {
+    if(open?.html) {
+      if(text.startsWith('</code>',i)) {
+        const end=i+7;spans.push({start:open.start,end,html:true});open=null;i=end;continue;
+      }
+      if(/^<\/?code(?:\s|>|\/)/i.test(text.slice(i)))
+        fail('INLINE_CODE_BOUNDARY','Only exact balanced serialized code tags are supported');
+      i++;continue;
+    }
     if(!open && text[i]==='\\') { i+=2; continue; }
+    if(!open && text.startsWith('<code>',i)){open={start:i,html:true};i+=6;continue;}
+    if(!open && /^<\/?code(?:\s|>|\/)/i.test(text.slice(i)))
+      fail('INLINE_CODE_BOUNDARY','Only exact balanced serialized code tags are supported');
     if(text[i]!=='`') { i++; continue; }
     let end=i+1; while(text[end]==='`')end++;
     const size=end-i;
@@ -167,6 +182,20 @@ function scanInline(text,open=null) {
     i=end;
   }
   return {spans,open};
+}
+function maskSerializedCode(text) {
+  // Historical halted plans can contain the original broken Markdown field.
+  // Leave their existing admission/reconciliation path unchanged when there
+  // is no serialized code wrapper to admit.
+  if(!/<\/?code(?:\s|>|\/)/i.test(text))return text;
+  const spans=inlineSpans(text).filter(span=>span.html);
+  let out=text;
+  for(const span of [...spans].reverse()) {
+    if(/[<>]/.test(text.slice(span.start+6,span.end-7)))
+      fail('PROTECTED_SYNTAX','Serialized code must contain plain text only');
+    out=out.slice(0,span.start)+' '.repeat(span.end-span.start)+out.slice(span.end);
+  }
+  return out;
 }
 function inlineSpans(text) {
   const parsed=scanInline(text);
@@ -190,7 +219,9 @@ function reviewedArrowLiteral(edit) {
   return edit.newStr.replaceAll(' -> ', ' -\\> ');
 }
 function plan(page, edit) {
-  const matches = headings(page.body).filter(h => h.text === edit.heading);
+  // Decode only the observed underscore escape in a heading identity. Body,
+  // offsets, properties, snapshots and post-write verification remain exact.
+  const matches = headings(page.body).filter(h => h.text.replaceAll('\\_','_') === edit.heading);
   if (matches.length !== 1) fail('AMBIGUOUS_SECTION', 'Central heading must occur exactly once');
   const section = matches[0];
   const boundary = headings(page.body).find(h => h.start > section.start && h.level <= section.level);

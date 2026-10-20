@@ -36,6 +36,13 @@ CODE_PATHS = frozenset((
 CORRECTIONS = frozenset(("broker.cjs", "test_guard.cjs", "router_stale_prewrite_cases.cjs",
                          "transport_preprepare_cases.cjs", "v02_partial_cases.cjs"))
 FINDING = "https://github.com/HeaInSeo/notion-projection-guard/pull/1#discussion_r4320358702"
+# Reviewed operational source updates are separate from the immutable import
+# and correction commit. Never obtain these pins from a mutable manifest.
+SOURCE_UPDATES = {
+    "broker.cjs": "0422d34c082e5f1acb890acf27fb633cdb9083a7",
+    "complete_projection.js": "cef172b96eb58356e65429b92c319791d64adb5d",
+    "verify_runtime.cjs": "4880f8e6c57b87153318f852ccacaa4f7004c929",
+}
 
 
 class VerificationError(Exception):
@@ -47,7 +54,7 @@ def require(condition, message):
         raise VerificationError(message)
 
 
-def verify(root, anchors=ANCHORS):
+def verify(root, anchors=ANCHORS, source_updates=SOURCE_UPDATES):
     root = pathlib.Path(root)
 
     def git(*args):
@@ -115,6 +122,9 @@ def verify(root, anchors=ANCHORS):
     require(isinstance(changes, list) and len(changes) == len(CORRECTIONS), "correction path count differs")
     require({entry["path"] for entry in changes} == CORRECTIONS and all(entry.get("finding") == FINDING for entry in changes), "undeclared correction paths")
     changed = set()
+    require(set(source_updates) <= CODE_PATHS and all(
+        isinstance(value, str) and re.fullmatch(r"[0-9a-f]{40}", value)
+        for value in source_updates.values()), "invalid source update pins")
     for name in sorted(CODE_PATHS):
         original = rev(imported + ":" + name)
         require(blobs[name] == original, "import blob metadata differs: " + name)
@@ -125,14 +135,17 @@ def verify(root, anchors=ANCHORS):
         actual = hashlib.sha1(b"blob " + str(len(data)).encode() + b"\0" + data).hexdigest()
         if actual != original:
             changed.add(name)
-        if name in CORRECTIONS:
+        if name in source_updates:
+            require(actual == source_updates[name], "pinned operational source differs: " + name)
+        elif name in CORRECTIONS:
             require(actual == rev(anchors["correctionCommit"] + ":" + name), "pinned correction blob differs: " + name)
         else:
             require(actual == original, "undeclared post-import code change: " + name)
         require(git("ls-tree", imported, "--", name).split()[0] == git("ls-tree", "HEAD", "--", name).split()[0], "code mode differs: " + name)
-    require(changed == CORRECTIONS, "declared correction set differs from actual code delta")
+    require(changed == CORRECTIONS | set(source_updates), "declared correction set differs from actual code delta")
     return {"historyPairs": len(entries), "migrationBlobs": len(CODE_PATHS),
-            "unchangedCurrentBlobs": len(CODE_PATHS - CORRECTIONS), "postImportChanges": sorted(changed)}
+            "unchangedCurrentBlobs": len(CODE_PATHS - CORRECTIONS - set(source_updates)),
+            "postImportChanges": sorted(changed), "operationalSourceUpdates": sorted(source_updates)}
 
 
 if __name__ == "__main__":
