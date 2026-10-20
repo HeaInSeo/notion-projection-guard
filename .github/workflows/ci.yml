@@ -25,7 +25,7 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
       - name: Guard and installed-runtime regressions
-        run: node --test test_guard.cjs test_runtime.cjs test_revision.cjs supervision_gate_cases.cjs
+        run: node --test test_guard.cjs test_runtime.cjs test_revision.cjs supervision_gate_cases.cjs serialized_format_cases.cjs
       - name: Provenance gate regression tests
         run: python3 -m unittest -v test_provenance.py
       - name: Fetch the fixed source archive and import tag

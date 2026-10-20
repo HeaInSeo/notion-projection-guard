@@ -1,4 +1,5 @@
 """Exercise provenance failures against real temporary Git objects, without network."""
+import hashlib
 import json
 import os
 import pathlib
@@ -85,10 +86,10 @@ class ProvenanceTests(unittest.TestCase):
 
     def rejected(self, fragment):
         with self.assertRaisesRegex(VerificationError, fragment):
-            verify(self.root, self.anchors)
+            verify(self.root, self.anchors, {})
 
     def test_all_35_pairs_and_explicit_code_delta_pass(self):
-        report = verify(self.root, self.anchors)
+        report = verify(self.root, self.anchors, {})
         self.assertEqual(report["historyPairs"], 35)
         self.assertEqual(report["migrationBlobs"], 15)
         self.assertEqual(report["postImportChanges"], sorted(CORRECTIONS))
@@ -142,6 +143,31 @@ class ProvenanceTests(unittest.TestCase):
                 file.write_text("arbitrary replacement\n")
                 self.rejected("pinned correction blob differs")
                 file.write_bytes(before)
+
+    def test_explicit_operational_updates_preserve_the_immutable_import(self):
+        pins = {}
+        for name in ("broker.cjs", "complete_projection.js"):
+            file = self.root / name
+            file.write_text(file.read_text() + "reviewed operational update\n")
+            data = file.read_bytes()
+            pins[name] = hashlib.sha1(b"blob " + str(len(data)).encode() + b"\0" + data).hexdigest()
+        report = verify(self.root, self.anchors, pins)
+        self.assertEqual(report["historyPairs"], 35)
+        self.assertEqual(report["operationalSourceUpdates"], sorted(pins))
+        for name in pins:
+            with self.subTest(path=name):
+                file = self.root / name
+                before = file.read_bytes()
+                file.write_text("unreviewed replacement\n")
+                with self.assertRaisesRegex(VerificationError, "pinned operational source differs"):
+                    verify(self.root, self.anchors, pins)
+                file.write_bytes(before)
+
+    def test_operational_pins_do_not_admit_changes_to_the_runner(self):
+        file = self.root / "runner.js"
+        file.write_text("unreviewed runner\n")
+        with self.assertRaisesRegex(VerificationError, "undeclared post-import code change"):
+            verify(self.root, self.anchors, {})
 
     def rewrite_import(self, extra_parent=False, bad_author=False, bad_message=False):
         """Retain all 35 source trees/messages while changing selected Git facts."""
