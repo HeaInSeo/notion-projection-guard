@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "sourceRepository": "HeaInSeo/infra-lab",
+  "sourcePath": "ops/notion-projection-guard",
+  "sourceCommit": "6ea3729948a9210c557b82094caee44ab3889560",
+  "sourceArchive": "archive/npg-before-split-20261020",
+  "targetRepository": "HeaInSeo/notion-projection-guard",
+  "targetPath": ".",
+  "importCommit": "890e9d38e4a0a50a6a44232fe378da2f7f7727fa",
+  "importTag": "import/infra-lab-20261020",
+  "importTree": "366a7e650a7b71bb0bc4d0b3e2b0a7d326cff7b2",
+  "preservedCommits": 35,
+  "historyMap": "history/infra-lab-commit-map.json",
+  "unchangedCodeBlobs": {
+    "broker.cjs": "22f4f7f6c5c6201383d80da3a98e98254d4fe2b5",
+    "complete_projection.js": "cafa2f37d40d7f4cb8d863d11d58a0933aea7b27",
+    "complete_projection_cases.cjs": "c252db644a20401185e0e04a8fa30ba7f8c255cd",
+    "reconcile_preflight_connection.cjs": "b2616468ae09e4a98b4cb596531a0fc978b19fc5",
+    "reconcile_router_stale_prewrite.cjs": "fc13480473a059239cb966778262d5895b2648c6",
+    "reconcile_transport_preprepare.cjs": "c12e14c93e514e070e9c2ec15bf02ead5bc20a84",
+    "reconcile_v02_partial.cjs": "f317fb05d5899792671a10da08f5ad577f6d9365",
+    "reconcile_w02_prewrite.cjs": "e680d820312570c511258f017e62abf75b07052b",
+    "router_stale_prewrite_cases.cjs": "038ee4037bdcbde865837d2cc74ac7a0b2e21982",
+    "runner.js": "4cb1f4799560b946312b156064b5cede9bb34cd8",
+    "test_guard.cjs": "5dfeab2c8e4363c119162873e861a9747b7de509",
+    "test_runtime.cjs": "b94c8fc4ea3486ac84c85c675495d809f2b77592",
+    "transport_preprepare_cases.cjs": "79b73c865e9d6fb6cd85d7e411ec18b856f922e8",
+    "v02_partial_cases.cjs": "ff12be0287af73de6bb191bd8d2a500554cf6dbc",
+    "verify_runtime.cjs": "d2331514130974c9791742073f237bd39e3ba1f1"
+  },
+  "installationProvenance": {
+    "repository": "HeaInSeo/infra-lab",
+    "sourceCommit": "01b8a7897bc8709450f536744577313c805c66ca",
+    "manifest": "deployment/runtime-01b8a789.json"
+  },
+  "scope": "Source-location and CI migration; runtime code bytes, canonical journal, installed policy and existing receipts are preserved."
+}

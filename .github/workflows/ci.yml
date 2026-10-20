@@ -1,0 +1,45 @@
+name: Notion projection guard CI
+
+on:
+  push:
+    branches: [main, 'migration/**', 'fix/**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  guard:
+    name: Node ${{ matrix.node }} tests and source provenance
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22, 24]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Guard and installed-runtime regressions
+        run: node --test test_guard.cjs test_runtime.cjs
+      - name: Verify preserved source and history
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, pathlib, subprocess
+          meta = json.loads(pathlib.Path('deployment/source-import.json').read_text())
+          history = json.loads(pathlib.Path(meta['historyMap']).read_text())
+          assert len(history['commits']) == meta['preservedCommits'] == 35
+          tree = subprocess.check_output(['git', 'rev-parse', meta['importCommit'] + '^{tree}'], text=True).strip()
+          assert tree == meta['importTree']
+          subprocess.run(['git', 'merge-base', '--is-ancestor', meta['importCommit'], 'HEAD'], check=True)
+          for name, expected in meta['unchangedCodeBlobs'].items():
+              data = pathlib.Path(name).read_bytes()
+              actual = hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
+              assert actual == expected, name
+          print('35 history records and all imported executable/test blobs verified')
+          PY
