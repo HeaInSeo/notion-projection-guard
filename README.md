@@ -5,7 +5,8 @@
 The source repository is `HeaInSeo/notion-projection-guard`. Runtime, tests and
 incident helpers retain their exact imported bytes. See [MIGRATION.md](MIGRATION.md)
 for the 35-commit history map, legacy installation provenance and source cutover.
-Run `node --test test_guard.cjs test_runtime.cjs` on Node 22 or 24.
+Run `node --test test_guard.cjs test_runtime.cjs test_revision.cjs supervision_gate_cases.cjs`
+on Node 22 or 24.
 
 [OPERATIONS.md](OPERATIONS.md) records the public/private storage boundary,
 deployment procedure, reusable supervisor/watch modules and offline version check.
@@ -45,6 +46,52 @@ certificate; preserve existing writes and re-observe rather than rolling back.
 This is workflow enforcement when the supervisor uses this entry point, not an
 access-control claim that it cannot invoke a different connector. Adoption must
 be recorded in the actual supervisor prompt and verified on real observations.
+
+## Successor and concurrency accounting
+
+Use one repository per ordinary observation: NodeKit needs body6/native2 and
+Sori body8/native2, including every shared projection. A busy unrelated worker
+does not defer these decisions. The canonical broker's global pending barrier
+continues to apply. Combined observations remain supported for an actually
+inseparable event, not as the default waiting policy.
+
+Evaluate `supervision_gate.js` as a function expression and call the returned
+`assess(snapshot)` before ending supervision. Its version-1 input contains a fresh
+UTC `observedAt`, `canonical: {active, nonterminal}`, `previousPending`, and
+`events`. Event and carried pending repositories must be `nodekit` or `sori`,
+matching the complete projection manifest. Each event binds `repository` to a source (actual `MERGED` PR with full
+head/merge SHAs and timestamp, or an own `RELEASE` identity), canonical
+`expectedSuccessors`, complete projection certificate/source key and one
+disposition per successor. `eventKey(event)` supplies the stable key. PROMOTE or
+RECIRCULATE needs a real request receipt and a task/session/time/input-bound own
+receipt; KEEP_GATED needs an explicitly unmet condition with owner/trigger/source;
+DONE needs a structured completion proof with taskId, inputKey, eventId,
+sessionId, kind RELEASE, verdict PASS, acceptanceReceipt and UTC at. Requests
+and receipts cannot predate the triggering source. RELEASE keys encode an array
+of components as JSON, so slashes in task/event identities cannot alias another
+event. An omitted prior pending event remains pending.
+Carried keys must use the exact canonical encoding and name their declared
+repository. An active/nonterminal canonical barrier keeps the overall status
+PENDING even with no remaining source events; it never yields COMPLETE.
+Pending entries retain immutable `sourceAt` alongside `firstSeenAt`. Reobserving
+the same key must preserve that source instant, so moving a timestamp backwards
+cannot admit earlier request/completion proof. Legacy entries without sourceAt
+use firstSeenAt conservatively; an explicit malformed sourceAt is rejected.
+Pending entries also retain every known expectedSuccessors identity. Later
+observations may add obligations but cannot silently remove one; all retained
+successors still need valid dispositions. Legacy records without that list need
+explicit enrichment from their preserved canonical source snapshot before use.
+Persist the returned pending list in the existing private audit area and read it
+first next time. This check cannot discover omitted DAG successors or authenticate
+caller evidence; obtain them from current canonical documents and connector reads.
+
+`prewriteDecision(input)` allows fresh re-observation only for a known native
+preflight conflict before the body runner, bodyWrites0, all responses known,
+no registered batch and an idle canonical journal. It bounds attempts to three.
+Any unknown result, entered runner, registered batch or unresolved canonical state
+requires preservation/reconciliation. A decision is not permission to replay a
+write or bypass the approved runner. The module never mutates remote state,
+creates worker proof or declares product acceptance.
 
 ## Exact transport pre-prepare closure
 

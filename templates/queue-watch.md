@@ -17,6 +17,12 @@
   재요청·raw Notion 수정·새 batch·worker 실행·서비스 재시작·merge를 하지 않는다.
 - 필요한 보고에는 관측 시각, 정확한 head/batch, 실제 blocker, 담당자와 다음 정상
   단계를 쓴다. 새 사실과 상태 전환을 중심으로 보고하며 전체 제품 완료를 과장하지 않는다.
+- 중앙의 private pending 인계 장부와 최신 merged PR를 대조한다. 다른 repo worker가
+  ACTIVE라는 이유로 저장소별 중앙 투영/후속 판정이 생략되면 CROSS_REPOSITORY_DEFER다.
+  본문 쓰기 전 known native 충돌 뒤 재계획이 없으면 내부 인계 미이행으로 보고한다.
+  NodeKit 단독 COMPLETE는 body6/native2, Sori 단독은 body8/native2다. 결합9/4만
+  성공으로 인정해 정상 독립 처리를 장애로 오인하지 않는다. 요청/실제 own 수신/제품
+  완료는 구분하며 감시가 중앙 조치나 worker 실행을 대신하지 않는다.
 
 공통 템플릿에는 실제 session·인증값·Notion 전체 원문을 넣지 않는다. 기존 자동화의
 스케줄을 유지하며 실제 설정 변경은 별도로 기록한다.
