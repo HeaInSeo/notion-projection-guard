@@ -50,20 +50,20 @@
     must(Array.isArray(bundle.native)&&bundle.native.length===native.length&&
       new Set(bundle.native.map(n=>n.pageId)).size===native.length,'Every native metadata target required exactly once');
     const marker='observation_id=`'+bundle.observationId+'`';
-    const style=bundle.bodyMarkerStyle??'markdown-v1';
-    must(['markdown-v1','plain-v1'].includes(style),'Known body marker style required');
-    must(style!=='plain-v1'||/^[A-Za-z0-9-]+$/.test(bundle.observationId),'Plain body identity must avoid Markdown escapes');
-    const bodyMarker=style==='plain-v1'?'observation-id: '+bundle.observationId:marker;
+    const style=bundle.observationMarkerStyle??'markdown-v1';
+    must(['markdown-v1','plain-v1'].includes(style),'Known observation marker style required');
+    must(style!=='plain-v1'||/^[A-Za-z0-9-]+$/.test(bundle.observationId),'Plain identity must avoid Markdown escapes');
+    const observationMarker=style==='plain-v1'?'observation-id: '+bundle.observationId:marker;
     const edits=bodies.map(([id,heading])=>{
       const e=bundle.edits.find(e=>e.pageId===id);
       must(e&&e.heading===heading&&typeof e.oldStr==='string'&&e.oldStr.length>0&&e.oldStr!==e.newStr&&
-        identity(e.newStr,bodyMarker),'Wrong target/heading or missing unique shared observation ID');
+        identity(e.newStr,observationMarker),'Wrong target/heading or missing unique shared observation ID');
       return e;
     });
     for(const id of native){
       const n=bundle.native.find(n=>n.pageId===id),p=n?.properties;
       must(p&&requiredProps.every(k=>Object.hasOwn(p,k))&&Object.keys(p).every(k=>centralProps.has(k))&&
-        identity(p['큐 정리 근거'],marker),'Native central metadata manifest with unique identity required');
+        identity(p['큐 정리 근거'],observationMarker),'Native central metadata manifest with unique identity required');
     }
     return {edits,native,ids:[...new Set([...native,...bodies.map(([id])=>id)])]};
   }

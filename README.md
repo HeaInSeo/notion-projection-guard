@@ -32,8 +32,8 @@ and canonical broker command. The bundle contains `observationId` (ASCII letters
 digits, underscore and hyphen), `repositories` (`nodekit` and/or `sori`), ordinary
 `edits`, and `native: [{pageId, properties}]`. Each new body literal and each native
 `큐 정리 근거` use the identical `observation_id=` field with a backtick
-quoted ID by default. The optional plain body marker is described below;
-native expectations always use the original marker and include 작업 상태, 다음 담당자, 큐 구획,
+quoted ID by default. The optional plain observation marker is described below;
+native expectations include 작업 상태, 다음 담당자, 큐 구획,
 차단 대상, 재개 지시 and 큐 정리 근거; only central metadata keys are accepted.
 
 First check the canonical journal and authority, then reconcile native properties
@@ -423,10 +423,10 @@ event syntax remain forbidden. Canonical and escaped aliases together are
 ambiguous. No body bytes, offsets, revision tokens, properties, protected hashes
 or post-write comparisons are normalized.
 
-For a new complete observation, `bodyMarkerStyle: 'plain-v1'` opts into the
-plain body prefix `observation-id: ID;`. Its ID uses letters, digits and hyphens
-only. The default Markdown marker remains supported, and native metadata still
-uses `observation_id=\`ID\``. Mixed or duplicate identities are rejected. The
+For a new complete observation, `observationMarkerStyle: 'plain-v1'` opts into the
+plain prefix `observation-id: ID;` in both body literals and native metadata.
+Its ID uses letters, digits and hyphens only. The default Markdown marker remains
+supported. Mixed styles or duplicate identities are rejected. The
 same mandatory original, paired, index and five shared body targets, native
 metadata checks and exact full readbacks remain required. Use plain text in
 the new observation when exact Markdown export would otherwise be uncertain;

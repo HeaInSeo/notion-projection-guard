@@ -40,7 +40,7 @@ FINDING = "https://github.com/HeaInSeo/notion-projection-guard/pull/1#discussion
 # and correction commit. Never obtain these pins from a mutable manifest.
 SOURCE_UPDATES = {
     "broker.cjs": "0422d34c082e5f1acb890acf27fb633cdb9083a7",
-    "complete_projection.js": "03430840f378894a473e79faf4a5b1899491a160",
+    "complete_projection.js": "cef172b96eb58356e65429b92c319791d64adb5d",
     "verify_runtime.cjs": "4880f8e6c57b87153318f852ccacaa4f7004c929",
 }
 

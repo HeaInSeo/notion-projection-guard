@@ -128,8 +128,8 @@ const bodies={nodekit:[['3f086e6dd1d1818e9aecdc093a08cda9','## CURRENT CENTRAL O
 function projection(repositories=['sori']){
   const nativeIds=repositories.flatMap(r=>native[r]),targets=repositories.flatMap(r=>bodies[r]).concat(shared);
   const properties={'작업 상태':'검증대기','다음 담당자':'설계 에이전트','큐 구획':'조건 대기',
-    '차단 대상':'design review','재개 지시':'existing D01 follow-up','큐 정리 근거':'observation_id=`PLAIN-TEST-1`; source'};
-  const bundle={observationId:'PLAIN-TEST-1',bodyMarkerStyle:'plain-v1',repositories,
+    '차단 대상':'design review','재개 지시':'existing D01 follow-up','큐 정리 근거':'observation-id: PLAIN-TEST-1; source'};
+  const bundle={observationId:'PLAIN-TEST-1',observationMarkerStyle:'plain-v1',repositories,
     native:nativeIds.map(pageId=>({pageId,properties:{...properties}})),
     edits:targets.map(([pageId,heading])=>({pageId,heading,oldStr:'previous: '+pageId,newStr:'observation-id: PLAIN-TEST-1; next: '+pageId}))};
   const pages=new Map([...new Set([...nativeIds,...targets.map(([id])=>id)])].map(id=>[id,{
@@ -152,15 +152,19 @@ for(const repos of [['nodekit'],['sori'],['nodekit','sori']])test('plain identit
   assert.equal(r.nativeTargets,repos.length*2);assert.equal(r.protectedContent,'UNCHANGED');assert.equal(f.calls,1);
   for(const p of f.pages.values())assert.equal(p.props['이벤트 ID'],'genuine-release');
 });
+test('serialized native metadata is not normalized to satisfy a plain manifest',async()=>{
+  const f=projection();f.pages.get(native.sori[0]).props['큐 정리 근거']='observation\\_id=<code>PLAIN-TEST-1</code>; source';
+  await assert.rejects(f.client.run(f.bundle),/Native property differs/);assert.equal(f.calls,0);
+});
 for(const [name,mutate] of [
-  ['unknown style',b=>{b.bodyMarkerStyle='normalize-v1';}],
+  ['unknown style',b=>{b.observationMarkerStyle='normalize-v1';}],
   ['underscore in plain identity',b=>{b.observationId='PLAIN_TEST_1';}],
   ['legacy marker in plain body',b=>{b.edits[0].newStr='observation_id=`PLAIN-TEST-1`; next';}],
-  ['plain marker in legacy body',b=>{delete b.bodyMarkerStyle;}],
+  ['plain marker in legacy body',b=>{delete b.observationMarkerStyle;}],
   ['mixed duplicate identity',b=>{b.edits[0].newStr+='; observation_id=`STALE`';}],
   ['plain duplicate identity',b=>{b.edits[0].newStr+='; observation-id: STALE';}],
-  ['plain identity in native metadata',b=>{b.native[0].properties['큐 정리 근거']='observation-id: PLAIN-TEST-1; next';}],
-  ['mixed metadata duplicate',b=>{b.native[0].properties['큐 정리 근거']+='; observation-id: STALE';}],
+  ['legacy identity in plain native metadata',b=>{b.native[0].properties['큐 정리 근거']='observation_id=`PLAIN-TEST-1`; next';}],
+  ['mixed metadata duplicate',b=>{b.native[0].properties['큐 정리 근거']+='; observation_id=`STALE`';}],
   ['missing mandatory body',b=>{b.edits.pop();}],
   ['missing mandatory native',b=>{b.native.pop();}]
 ])test('invalid plain manifest rejects before reads or writes: '+name,async()=>{
