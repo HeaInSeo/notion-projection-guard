@@ -41,6 +41,16 @@ function pageData(raw, expectedId) {
   if (id(page.id) !== id(expectedId)) fail('WRONG_PAGE', 'Fetched page does not match the plan');
   if (page.truncated === true || (page.unknown_block_count ?? 0) !== 0 ||
       (page.unknown_block_ids?.length ?? 0) !== 0) fail('INCOMPLETE_READ', 'Incomplete native read');
+  // A missing/invalid revision is not a concurrency token. In particular, two
+  // incomplete reads must never authorize a write through null === null.
+  const revision = page.page_last_edited_at;
+  const stamp = typeof revision === 'string' &&
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/.test(revision)
+    ? Date.parse(revision) : NaN;
+  const canonical = typeof revision === 'string'
+    ? revision.replace(/(?:\.(\d{1,3}))?Z$/, (_, fraction) => '.' + (fraction ?? '').padEnd(3, '0') + 'Z') : '';
+  if (!Number.isFinite(stamp) || new Date(stamp).toISOString() !== canonical)
+    fail('INCOMPLETE_READ', 'A valid UTC page revision is required');
   const text = page.text;
   if (typeof text !== 'string') fail('INCOMPLETE_READ', 'Missing page text');
   const begin = '<content>\n', end = '\n</content>';
@@ -56,7 +66,7 @@ function pageData(raw, expectedId) {
   try { props = JSON.parse(properties[1]); } catch { fail('INCOMPLETE_READ', 'Invalid properties'); }
   const ordered = Object.fromEntries(Object.entries(props).sort(([a], [b]) => a.localeCompare(b)));
   return { body: text.slice(start, stop), properties: JSON.stringify(ordered),
-    revision: page.page_last_edited_at ?? null, raw: clone(raw) };
+    revision, raw: clone(raw) };
 }
 function headings(body) {
   const result = []; let offset = 0, fence = null, inline = null; const stack = [];

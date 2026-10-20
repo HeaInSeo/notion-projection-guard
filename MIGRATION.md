@@ -22,9 +22,17 @@ infra-lab에는 이 도구의 고정 조회 버전과 서버 설치 버전을 �
 
 ## 실행 코드와 설치 증거
 
-이번 이전에서 broker·runner·complete entry·검증 도구·사고별 helper·시험 파일의
-bytes는 바꾸지 않았다. CI는 source-import에 기록한 모든 코드 blob과 35개 이력,
-추출 커밋의 포함 관계를 검증하고 기존 271개 시험을 Node 22·24에서 실행한다.
+최초 이전 커밋 `089aea20`의 실행·시험 파일 15개는 추출 커밋과 byte 단위로 같다.
+이후 PR1의 P1 `r4320358702` 보정은 별도 변경으로 기록한다. broker가 유효한
+UTC 수정 시각이 없는 읽기를 거부하고, 기존 시험 4파일의 가짜 revision 값을
+실제 형식의 시각으로 바꾼다. 이 5파일을 동일 bytes라고 표시하지 않는다.
+
+CI는 고정된 원본 archive tag를 가져와 대응표 35항목의 유일성·누락·양쪽
+ancestry·각 subtree tree·작성자·작성 시각·메시지와 source/import head·tag를
+직접 검증한다. 최초 이전의 15개 blob은 불변 import 커밋과 대조한다. 현재
+작업 트리에서는 명시한 P1 보정 5파일을 제외한 10개 blob을 같은 import와
+대조하며, 명세 파일의 hash만 고쳐 검사를 통과할 수 없다. 별도 regression은
+누락 revision·잘못된 대응표·코드와 명세의 동시 변경을 검증한다.
 새 저장소의 CI 통과는 새 커밋에 대한 리뷰 완료나 제품 검수를 대신하지 않는다.
 
 현재 설치 receipt는 당시 실제 설치한 infra-lab
@@ -36,7 +44,9 @@ bytes는 바꾸지 않았다. CI는 source-import에 기록한 모든 코드 blo
 운영 코드는 새 저장소의 고정된 전체 커밋에서 루트 경로 `runner.js`와
 `complete_projection.js`를 읽는다. broker는 현재 서버의 같은 고정 명령·같은
 canonical state를 사용한다. 새 코드 조회 커밋과 원래 설치 커밋을 구분해 기록한다.
-전환 시 세 실행 파일의 Git blob·SHA256이 기존 승인 파일과 같은지 다시 확인한다.
+runner·complete entry 조회 전환과 broker 설치를 구분한다. 보정된 broker는
+현재 과거 설치와 다른 bytes다. 검토·설치 승인·원자적 교체와 새 receipt 없이
+배포됐다고 간주하거나 기존 설치 명세를 덮어쓰지 않는다.
 
 ## 전환 순서
 

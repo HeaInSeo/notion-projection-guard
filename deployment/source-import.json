@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "sourceRepository": "HeaInSeo/infra-lab",
   "sourcePath": "ops/notion-projection-guard",
   "sourceCommit": "6ea3729948a9210c557b82094caee44ab3889560",
@@ -11,7 +11,14 @@
   "importTree": "366a7e650a7b71bb0bc4d0b3e2b0a7d326cff7b2",
   "preservedCommits": 35,
   "historyMap": "history/infra-lab-commit-map.json",
-  "unchangedCodeBlobs": {
+  "installationProvenance": {
+    "repository": "HeaInSeo/infra-lab",
+    "sourceCommit": "01b8a7897bc8709450f536744577313c805c66ca",
+    "manifest": "deployment/runtime-01b8a789.json"
+  },
+  "scope": "Immutable 35-commit import and 15-blob migration baseline preserved. Post-import revision P1 and CI provenance P2 corrections are explicit source changes; runtime installation, policy and canonical state remain separate.",
+  "migrationCommit": "089aea20a24326d71f8c51f38c4e5d7bc7337cb5",
+  "importedCodeBlobs": {
     "broker.cjs": "22f4f7f6c5c6201383d80da3a98e98254d4fe2b5",
     "complete_projection.js": "cafa2f37d40d7f4cb8d863d11d58a0933aea7b27",
     "complete_projection_cases.cjs": "c252db644a20401185e0e04a8fa30ba7f8c255cd",
@@ -28,10 +35,31 @@
     "v02_partial_cases.cjs": "ff12be0287af73de6bb191bd8d2a500554cf6dbc",
     "verify_runtime.cjs": "d2331514130974c9791742073f237bd39e3ba1f1"
   },
-  "installationProvenance": {
-    "repository": "HeaInSeo/infra-lab",
-    "sourceCommit": "01b8a7897bc8709450f536744577313c805c66ca",
-    "manifest": "deployment/runtime-01b8a789.json"
-  },
-  "scope": "Source-location and CI migration; runtime code bytes, canonical journal, installed policy and existing receipts are preserved."
+  "postImportChanges": [
+    {
+      "path": "broker.cjs",
+      "finding": "https://github.com/HeaInSeo/notion-projection-guard/pull/1#discussion_r4320358702",
+      "scope": "Reject incomplete page revisions; test files use valid revision timestamps."
+    },
+    {
+      "path": "router_stale_prewrite_cases.cjs",
+      "finding": "https://github.com/HeaInSeo/notion-projection-guard/pull/1#discussion_r4320358702",
+      "scope": "Reject incomplete page revisions; test files use valid revision timestamps."
+    },
+    {
+      "path": "test_guard.cjs",
+      "finding": "https://github.com/HeaInSeo/notion-projection-guard/pull/1#discussion_r4320358702",
+      "scope": "Reject incomplete page revisions; test files use valid revision timestamps."
+    },
+    {
+      "path": "transport_preprepare_cases.cjs",
+      "finding": "https://github.com/HeaInSeo/notion-projection-guard/pull/1#discussion_r4320358702",
+      "scope": "Reject incomplete page revisions; test files use valid revision timestamps."
+    },
+    {
+      "path": "v02_partial_cases.cjs",
+      "finding": "https://github.com/HeaInSeo/notion-projection-guard/pull/1#discussion_r4320358702",
+      "scope": "Reject incomplete page revisions; test files use valid revision timestamps."
+    }
+  ]
 }

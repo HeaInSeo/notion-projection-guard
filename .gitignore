@@ -9,3 +9,4 @@
 /approved.sha256
 *.local.json
 .env*
+__pycache__/

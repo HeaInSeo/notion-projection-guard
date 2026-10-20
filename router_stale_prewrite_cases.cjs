@@ -99,7 +99,7 @@ test('check-only is read-only and is the exported default',t=>{
 });
 test('later genuine worker body and property records on a completed page survive read-only receipt validation',t=>{
   const f=fixture(t);
-  f.raw[0]=raw(0,body(0,f.edits[0].newStr)+'\nnew own release preserved',{title:'Private test',version:19},'later');
+  f.raw[0]=raw(0,body(0,f.edits[0].newStr)+'\nnew own release preserved',{title:'Private test',version:19},'2026-10-20T00:01:00.000Z');
   f.helper.apply(f.b,f.raw,false);
   const saved=JSON.parse(fs.readFileSync(path.join(f.root,hash(BATCH)+'.router-stale-prewrite-closure.json')));
   assert.equal(saved.freshPages[0].structuredContent.text,f.raw[0].structuredContent.text);
@@ -118,14 +118,14 @@ for(const [name,mutate] of [
   ['unknown fresh body',f=>{f.raw[0]=raw(0,body(0,f.edits[0].newStr)+'\n<unknown/>');}],
   ['changed reviewed Router body',f=>{f.raw[4]=raw(4,body(4,'another concurrent value'));}],
   ['changed reviewed Router properties',f=>{f.raw[4]=raw(4,body(4,'central_status=FRESH_EXTRA_CONTEXT'),{title:'changed'});}],
-  ['changed reviewed Router revision',f=>{f.raw[4]=raw(4,body(4,'central_status=FRESH_EXTRA_CONTEXT'),{title:'Private test'},'later');}],
+  ['changed reviewed Router revision',f=>{f.raw[4]=raw(4,body(4,'central_status=FRESH_EXTRA_CONTEXT'),{title:'Private test'},'2026-10-20T00:01:00.000Z');}],
   ['missing latest successor RELEASE',f=>{f.raw[1]=raw(1,body(1,f.edits[1].newStr).replace(own.event_id,'old-event'));}],
   ['different successor head',f=>{f.raw[1]=raw(1,body(1,f.edits[1].newStr).replace(HEAD,'e'.repeat(40)));}],
   ['different successor role',f=>{f.raw[1]=raw(1,body(1,f.edits[1].newStr).replace('"role":"guardrail"','"role":"operator"'));}],
   ['later successor CLAIM while old RELEASE remains',f=>{f.raw[1]=raw(1,body(1,f.edits[1].newStr)+'\n## CURRENT OWN EVENT\n```json\nQUEUE_EVENT_V1 '+JSON.stringify({...own,event_id:'later-claim',version:13,kind:'CLAIM',lease_state:'CLAIM_HELD'})+'\n```');}],
   ['later successor HOLD while old RELEASE remains',f=>{f.raw[1]=raw(1,body(1,f.edits[1].newStr)+'\n## CURRENT OWN EVENT\n```json\nQUEUE_EVENT_V1 '+JSON.stringify({...own,event_id:'later-hold',version:13,kind:'HOLD'})+'\n```');}],
   ['old RELEASE quoted outside worker record',f=>{f.raw[1]=raw(1,heads[1]+'\n'+f.edits[1].newStr+'\n## Quoted history\nQUEUE_EVENT_V1 '+JSON.stringify(own));}],
-  ['paired revision changed without a body delta',f=>{f.raw[1]=raw(1,body(1,f.edits[1].newStr),{title:'Private test'},'later');}],
+  ['paired revision changed without a body delta',f=>{f.raw[1]=raw(1,body(1,f.edits[1].newStr),{title:'Private test'},'2026-10-20T00:01:00.000Z');}],
   ['completed central projection changed',f=>{f.raw[2]=raw(2,body(2,'central_status=other'));}],
   ['prepared final-page snapshot',f=>{atomic(f.b.snapshot(BATCH,4),{ticket:'exists'});}],
   ['unexpected old readback mismatch',f=>{atomic(f.b.snapshot(BATCH,0)+'.actual.json',{error:'old mismatch'});}],

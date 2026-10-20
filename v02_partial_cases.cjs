@@ -8,7 +8,7 @@ const IDS=['3f086e6dd1d1818e9aecdc093a08cda9','3f586e6dd1d181ebb43dd7de62aa2ca4'
  '3bf86e6dd1d18110938bc358e17c779e','3ed86e6dd1d18118b0b8d98bb91892fb','3b286e6dd1d1811d9308d9a2b56c9de4'];
 const heads=IDS.map((_,i)=>i===1?'## CURRENT · 마지막 중앙 관측 · QSYNC-20261010T145034Z-v6 · W02.A KEEP_GATED ON W01.3':
  i===2?'## CURRENT · 마지막 중앙 관측 · QSYNC-20261010T145034Z-v6 · W02.A REVIEW KEEP_GATED':'## CURRENT CENTRAL OBSERVATION · test'+i);
-const raw=(i,literal,revision='fresh')=>({structuredContent:{id:IDS[i],text:'<properties>\n{"own":"preserved"}\n</properties>\n<content>\n'+heads[i]+'\n'+literal+'\n## WORKER HISTORY\nimmutable own proof\n</content>',page_last_edited_at:revision}});
+const raw=(i,literal,revision='2026-10-20T00:00:00.000Z')=>({structuredContent:{id:IDS[i],text:'<properties>\n{"own":"preserved"}\n</properties>\n<content>\n'+heads[i]+'\n'+literal+'\n## WORKER HISTORY\nimmutable own proof\n</content>',page_last_edited_at:revision}});
 function helper(f,override={}){
  let source=fs.readFileSync(path.join(__dirname,'reconcile_v02_partial.cjs'),'utf8');
  for(const [k,v] of Object.entries({ROOT:f.root,RUNTIME:f.runtime,PLAN:hash(JSON.stringify(f.edits)),TICKET:f.ticket}))
@@ -65,7 +65,7 @@ for(const [name,change] of [
  ['other active',f=>{f.b.state.active='other';f.b.save();}],
  ['pending extra escape',f=>{f.pages[3].structuredContent.text=f.pages[3].structuredContent.text.replace('kept`','kept\\`');}],
  ['pending worker delta',f=>{f.pages[3].structuredContent.text=f.pages[3].structuredContent.text.replace('immutable','changed');}],
- ['pending revision',f=>{f.pages[3].structuredContent.page_last_edited_at='later';}],
+ ['pending revision',f=>{f.pages[3].structuredContent.page_last_edited_at='2026-10-20T00:01:00.000Z';}],
  ['prior worker delta',f=>{f.pages[1].structuredContent.text=f.pages[1].structuredContent.text.replace('immutable','new genuine proof');}],
  ['prior properties',f=>{f.pages[0].structuredContent.text=f.pages[0].structuredContent.text.replace('preserved','new');}],
  ['changed receipt time',f=>{const p=f.b.snapshot(BATCH,1)+'.verified.json',x=JSON.parse(fs.readFileSync(p));x.at='later';atomic(p,x);}],

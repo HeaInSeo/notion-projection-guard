@@ -9,7 +9,7 @@ const IDS=['3f086e6dd1d1818e9aecdc093a08cda9','3f586e6dd1d181ebb43dd7de62aa2ca4'
   '3b286e6dd1d1817aa093fca807659f07','3b286e6dd1d181f2a75cfbd3885071c4','3bf86e6dd1d18110938bc358e17c779e'];
 const heads=IDS.map((_,i)=>i===1?'## CURRENT · 마지막 중앙 관측 · QSYNC-20261010T145034Z-v6 · W02.A KEEP_GATED ON W01.3':
   i===2?'## CURRENT · 마지막 중앙 관측 · QSYNC-20261010T145034Z-v6 · W02.A REVIEW KEEP_GATED':'## CURRENT CENTRAL OBSERVATION · test'+i);
-function raw(i,literal,props={title:'Private test'},revision='fresh'){
+function raw(i,literal,props={title:'Private test'},revision='2026-10-20T00:00:00.000Z'){
   return {structuredContent:{id:IDS[i],text:'<properties>\n'+JSON.stringify(props)+'\n</properties>\n<content>\n'+
     heads[i]+'\n'+literal+'\n## OWN WORKER PROOF\nimmutable-tail-'+i+'\n</content>',page_last_edited_at:revision}};
 }
@@ -84,7 +84,7 @@ for(const [name,mutate] of [
   ['tampered snapshot',f=>{const p=f.b.snapshot(BATCH,0),s=JSON.parse(fs.readFileSync(p));s.page.body+='bad';atomic(p,s);}],
   ['changed completed body',f=>{f.raw[0]=raw(0,f.edits[0].newStr+' changed');}],
   ['changed completed properties',f=>{f.raw[0]=raw(0,f.edits[0].newStr,{title:'other'});}],
-  ['changed completed revision',f=>{f.raw[0]=raw(0,f.edits[0].newStr,{title:'Private test'},'later');}],
+  ['changed completed revision',f=>{f.raw[0]=raw(0,f.edits[0].newStr,{title:'Private test'},'2026-10-20T00:01:00.000Z');}],
   ['already written remaining page',f=>{f.raw[1]=raw(1,f.edits[1].newStr);}],
   ['missing old literal',f=>{f.raw[2]=raw(2,'another value');}],
   ['incomplete source',f=>{f.raw[3]=raw(3,f.edits[3].oldStr+'<unknown/>');}],

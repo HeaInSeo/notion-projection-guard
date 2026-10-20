@@ -312,7 +312,7 @@ test('completed receipt/protected properties drift blocks recovery without clear
 });
 test('changed current preimage, revision or applied output never reauthorizes',t=>{
   const {b}=fixture(t);begin(b);const pending=prepare(b);haltAuthorization(b,pending);
-  for(const p of [page(A,body()+'new own RELEASE'),page(A,body(),{title:'changed'}),page(A,body(),{title:'Test'},'later'),page(A,body(newStr))])
+  for(const p of [page(A,body()+'new own RELEASE'),page(A,body(),{title:'changed'}),page(A,body(),{title:'Test'},'2026-10-20T00:01:00.000Z'),page(A,body(newStr))])
     rejects('RECONCILE_CHANGED',()=>b.handle(repairInput(b,'reconcile_unwritten',{ticket:pending.ticket,page:p})));
   assert.equal(b.state.batches.observation.status,'HALTED');assert.equal(b.state.batches.observation.next,0);
 });
@@ -551,7 +551,7 @@ for(const [name,render] of [
 test('arrow recovery pins fresh revision, policy, original evidence and six-page scope',t=>{
   const {b,p}=fixture(t,{productionPages:arrowIds});const legacy=legacyArrows(b);
   const text=legacy.p.structuredContent.text.split('<content>\n')[1].split('\n</content>')[0];
-  rejects('RECONCILE_CHANGED',()=>b.handle({...legacy.input,page:page(A,text,{title:'Test'},'later')}));
+  rejects('RECONCILE_CHANGED',()=>b.handle({...legacy.input,page:page(A,text,{title:'Test'},'2026-10-20T00:01:00.000Z')}));
   rejects('PERSISTENCE',()=>b.handle({...legacy.input,actualSnapshotHash:'wrong'}));
   p.productionPages=[A];rejects('PRODUCTION_HOLD',()=>b.handle(legacy.input));p.productionPages=arrowIds;
   const edits=b.state.batches.observation.edits;edits.pop();
