@@ -18,6 +18,7 @@ ANCHORS = {
     "importTag": "import/infra-lab-20261020",
     "importTree": "366a7e650a7b71bb0bc4d0b3e2b0a7d326cff7b2",
     "migrationCommit": "089aea20a24326d71f8c51f38c4e5d7bc7337cb5",
+    "correctionCommit": "5b67791a51aa4637571adf5c45989922c91190fd",
     "preservedCommits": 35,
     "historyMap": "history/infra-lab-commit-map.json",
 }
@@ -73,6 +74,8 @@ def verify(root, anchors=ANCHORS):
     require(rev(source + ":" + anchors["sourcePath"]) == anchors["importTree"], "source subtree differs")
     ancestor(imported, migration)
     ancestor(migration, "HEAD")
+    ancestor(migration, anchors["correctionCommit"])
+    ancestor(anchors["correctionCommit"], "HEAD")
 
     history = json.loads((root / anchors["historyMap"]).read_text())
     for key in ("sourceRepository", "sourcePath", "targetRepository", "targetPath"):
@@ -86,15 +89,23 @@ def verify(root, anchors=ANCHORS):
     sources = [entry["sourceCommit"] for entry in entries]
     imports = [entry["importCommit"] for entry in entries]
     require(len(set(sources)) == len(entries) and len(set(imports)) == len(entries), "duplicate history mapping")
-    source_set = set(git("rev-list", source, "--", anchors["sourcePath"]).decode().splitlines())
-    import_set = set(git("rev-list", imported).decode().splitlines())
-    require(set(sources) == source_set and set(imports) == import_set, "history mapping is not exhaustive")
+    # Git rewrites parents across commits that do not affect the extracted
+    # path. Compare that path-filtered graph, preserving merge-parent order.
+    def graph(*args):
+        return {parts[0]: parts[1:] for parts in
+                (line.split() for line in git("rev-list", "--parents", *args).decode().splitlines())}
+    source_graph = graph(source, "--", anchors["sourcePath"])
+    import_graph = graph(imported)
+    require(set(sources) == set(source_graph) and set(imports) == set(import_graph), "history mapping is not exhaustive")
+    mapping = dict(zip(sources, imports))
     for entry in entries:
         old, new, tree = (entry[key] for key in ("sourceCommit", "importCommit", "subtreeTree"))
         ancestor(old, source)
         ancestor(new, imported)
         require(rev(old + ":" + anchors["sourcePath"]) == rev(new + "^{tree}") == tree, "mapped tree differs: " + old)
         require(author_message(old) == author_message(new), "mapped author/date/message differs: " + old)
+        require(all(parent in mapping for parent in source_graph[old]), "unmapped source parent")
+        require([mapping[parent] for parent in source_graph[old]] == import_graph[new], "mapped parent topology differs: " + old)
 
     paths = set(git("ls-tree", "-r", "--name-only", imported).decode().splitlines())
     require({name for name in paths if name.endswith((".cjs", ".js"))} == CODE_PATHS, "fixed imported code path set differs")
@@ -114,7 +125,9 @@ def verify(root, anchors=ANCHORS):
         actual = hashlib.sha1(b"blob " + str(len(data)).encode() + b"\0" + data).hexdigest()
         if actual != original:
             changed.add(name)
-        if name not in CORRECTIONS:
+        if name in CORRECTIONS:
+            require(actual == rev(anchors["correctionCommit"] + ":" + name), "pinned correction blob differs: " + name)
+        else:
             require(actual == original, "undeclared post-import code change: " + name)
         require(git("ls-tree", imported, "--", name).split()[0] == git("ls-tree", "HEAD", "--", name).split()[0], "code mode differs: " + name)
     require(changed == CORRECTIONS, "declared correction set differs from actual code delta")

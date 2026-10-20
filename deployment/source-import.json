@@ -61,5 +61,6 @@
       "finding": "https://github.com/HeaInSeo/notion-projection-guard/pull/1#discussion_r4320358702",
       "scope": "Reject incomplete page revisions; test files use valid revision timestamps."
     }
-  ]
+  ],
+  "correctionCommit": "5b67791a51aa4637571adf5c45989922c91190fd"
 }

@@ -1,5 +1,4 @@
 """Exercise provenance failures against real temporary Git objects, without network."""
-import copy
 import json
 import os
 import pathlib
@@ -57,6 +56,11 @@ class ProvenanceTests(unittest.TestCase):
         (root / ANCHORS["historyMap"]).write_text(json.dumps(history))
         git(root, "add", ".")
         git(root, "commit", "-qm", "post-import corrections")
+        cls.anchors["correctionCommit"] = git(root, "rev-parse", "HEAD")
+        meta.update(cls.anchors)
+        (root / "deployment/source-import.json").write_text(json.dumps(meta))
+        git(root, "add", ".")
+        git(root, "commit", "-qm", "pin correction commit")
 
     @classmethod
     def tearDownClass(cls):
@@ -67,6 +71,7 @@ class ProvenanceTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.root = pathlib.Path(self.tmp.name) / "repo"
         shutil.copytree(self.template.name, self.root)
+        self.anchors = dict(type(self).anchors)
 
     def change_json(self, path, mutate):
         file = self.root / path
@@ -124,6 +129,56 @@ class ProvenanceTests(unittest.TestCase):
         path = self.root / "runner.js"
         path.write_text("unreviewed change\n")
         self.rejected("undeclared post-import code change")
+
+    def test_every_permitted_correction_is_pinned(self):
+        for name in CORRECTIONS:
+            with self.subTest(path=name):
+                file = self.root / name
+                before = file.read_bytes()
+                file.write_text("arbitrary replacement\n")
+                self.rejected("pinned correction blob differs")
+                file.write_bytes(before)
+
+    def rewrite_import(self, extra_parent=False, bad_author=False, bad_message=False):
+        """Retain all 35 source trees/messages while changing selected Git facts."""
+        file = self.root / ANCHORS["historyMap"]
+        history = json.loads(file.read_text())
+        rebuilt = []
+        for n, entry in enumerate(history["commits"]):
+            env = dict(os.environ, GIT_AUTHOR_DATE="2026-10-01T00:00:%02d+0900" % n,
+                       GIT_COMMITTER_DATE="2026-10-01T00:00:%02d+0900" % n)
+            if bad_author and n == 3:
+                env["GIT_AUTHOR_NAME"] = "Wrong Author"
+            parents = ["-p", rebuilt[-1]] if rebuilt else []
+            if extra_parent and n == 3:
+                parents += ["-p", rebuilt[0]]
+            message = "wrong message" if bad_message and n == 3 else "source " + str(n)
+            new = git(self.root, "commit-tree", entry["subtreeTree"], *parents,
+                      data=(message + "\n").encode(), env=env)
+            rebuilt.append(new)
+            entry["importCommit"] = new
+        new_import = rebuilt[-1]
+        correction_tree = git(self.root, "rev-parse", self.anchors["correctionCommit"] + "^{tree}")
+        correction = git(self.root, "commit-tree", correction_tree, "-p", new_import, data=b"corrected source\n")
+        head = git(self.root, "commit-tree", "HEAD^{tree}", "-p", correction, data=b"manifest pin\n")
+        git(self.root, "reset", "--soft", head)
+        git(self.root, "tag", "-f", ANCHORS["importTag"], new_import)
+        self.anchors.update(importCommit=new_import, migrationCommit=new_import, correctionCommit=correction)
+        self.change_json("deployment/source-import.json", lambda meta: meta.update(self.anchors))
+        history["importHead"] = new_import
+        file.write_text(json.dumps(history))
+
+    def test_rewired_merge_with_identical_members_trees_and_messages_fails(self):
+        self.rewrite_import(extra_parent=True)
+        self.rejected("mapped parent topology differs")
+
+    def test_changed_author_fails(self):
+        self.rewrite_import(bad_author=True)
+        self.rejected("mapped author/date/message differs")
+
+    def test_changed_message_fails(self):
+        self.rewrite_import(bad_message=True)
+        self.rejected("mapped author/date/message differs")
 
 
 if __name__ == "__main__":
