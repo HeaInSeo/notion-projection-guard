@@ -2,6 +2,8 @@
 const {test}=require('node:test'),assert=require('node:assert/strict');
 const fs=require('node:fs'),os=require('node:os'),path=require('node:path'),vm=require('node:vm');
 const {Broker,pageData,plan}=require('./broker.cjs');
+const {verifyRuntime}=require('./verify_runtime.cjs');
+const crypto=require('node:crypto');
 const A='a'.repeat(32),heading='## CURRENT CENTRAL OBSERVATION · operator_queue';
 const exportedHeading=heading.replaceAll('_','\\_');
 const oldStr='observation\\_id=<code>OLD-1</code>; state=<code>WAIT</code>';
@@ -164,4 +166,37 @@ for(const [name,mutate] of [
 ])test('invalid plain manifest rejects before reads or writes: '+name,async()=>{
   const f=projection();mutate(f.bundle);await assert.rejects(f.client.run(f.bundle));
   assert.equal(f.calls,0);assert.equal(f.reads,0);
+});
+
+function standaloneRuntime(t){
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'npg-standalone-source-'));
+  t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
+  const pins={};
+  for(const name of ['broker.cjs','runner.js','policy.json']){
+    const bytes='throw new Error("verification must not execute this"); // '+name;
+    fs.writeFileSync(path.join(dir,name),bytes);pins[name]=crypto.createHash('sha256').update(bytes).digest('hex');
+  }
+  const entry='hosted entry';fs.writeFileSync(path.join(dir,'complete_projection.js'),entry);
+  const release={version:1,repository:'HeaInSeo/notion-projection-guard',sourceCommit:'b'.repeat(40),
+    runtimeSha256:{'broker.cjs':pins['broker.cjs'],'runner.js':pins['runner.js']},policySha256:pins['policy.json'],
+    hostedEntryPoint:{path:'complete_projection.js',sha256:crypto.createHash('sha256').update(entry).digest('hex')}};
+  fs.writeFileSync(path.join(dir,'approved.sha256'),Object.entries(pins).map(([n,h])=>h+'  '+n+'\n').join(''));
+  const receiptPath=path.join(dir,'receipt.json');
+  fs.writeFileSync(receiptPath,JSON.stringify({sourceCommit:release.sourceCommit,at:'2026-10-20T00:00:00Z',after:pins}));
+  fs.writeFileSync(path.join(dir,'journal.json'),'{"active":"unrelated"}');
+  fs.writeFileSync(path.join(dir,'broker.lock'),'existing lock');
+  return {release,runtimeDir:dir,receiptPath,sourceDir:dir};
+}
+test('offline runtime verification supports the standalone source beside a live lock',t=>{
+  const f=standaloneRuntime(t);
+  const before=fs.readFileSync(path.join(f.runtimeDir,'journal.json'),'utf8');
+  assert.equal(verifyRuntime(f).status,'MATCH');
+  assert.equal(fs.readFileSync(path.join(f.runtimeDir,'journal.json'),'utf8'),before);
+  assert.equal(fs.readFileSync(path.join(f.runtimeDir,'broker.lock'),'utf8'),'existing lock');
+});
+for(const [repository,entryPath] of [['untrusted/other','complete_projection.js'],
+  ['HeaInSeo/notion-projection-guard','ops/notion-projection-guard/complete_projection.js'],
+  ['HeaInSeo/infra-lab','complete_projection.js']])test('runtime source identity and entry path remain bound: '+repository+'/'+entryPath,t=>{
+  const f=standaloneRuntime(t);f.release.repository=repository;f.release.hostedEntryPoint.path=entryPath;
+  assert.throws(()=>verifyRuntime(f),e=>e.code==='RELEASE_SCHEMA');
 });
