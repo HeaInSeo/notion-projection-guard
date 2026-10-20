@@ -140,3 +140,28 @@ test('valid canonical RELEASE keys survive omitted observations and retain age',
  const next=gate.assess(s);assert.equal(next.status,'PENDING');assert.equal(next.pending[0].key,key);
  assert.equal(next.pending[0].firstSeenAt,e.source.at);
 });
+test('reobserving the same key cannot backdate its source and consume older handoff proof',()=>{
+ const s=fixture(),e=s.events[0];delete e.successors[0].handoff.ownReceipt;
+ s.previousPending=gate.assess(s).pending;e.source.at='2026-10-20T05:00:00Z';
+ const h=e.successors[0].handoff;h.requestedAt='2026-10-20T05:01:00Z';
+ h.ownReceipt={taskId:e.successors[0].id,inputKey:gate.eventKey(e),eventId:'earlier-claim',sessionId:'s',kind:'CLAIM',at:'2026-10-20T05:02:00Z'};
+ assert.throws(()=>gate.assess(s),/SUPERVISION_INPUT/);
+});
+test('carried source-time binding also rejects a backdated DONE completion',()=>{
+ const s=fixture(),e=s.events[0];delete e.successors[0].handoff.ownReceipt;
+ s.previousPending=gate.assess(s).pending;e.source.at='2026-10-20T05:00:00Z';completion(s).at='2026-10-20T05:02:00Z';
+ assert.throws(()=>gate.assess(s),/SUPERVISION_INPUT/);
+});
+test('equivalent UTC precision preserves the carried source and permits actual intake',()=>{
+ const s=fixture(),e=s.events[0],own=e.successors[0].handoff.ownReceipt;
+ delete e.successors[0].handoff.ownReceipt;s.previousPending=gate.assess(s).pending;
+ e.source.at='2026-10-20T06:49:03.000Z';e.successors[0].handoff.ownReceipt=own;
+ assert.equal(gate.assess(s).status,'COMPLETE');
+});
+test('legacy source-time fallback is conservative and explicit malformed sourceAt rejects',()=>{
+ const s=fixture(),key=gate.eventKey(s.events[0]);
+ s.previousPending=[{key,repository:'nodekit',firstSeenAt:'2026-10-20T07:00:00Z'}];
+ assert.throws(()=>gate.assess(s),/SUPERVISION_INPUT/);
+ s.previousPending[0].firstSeenAt=s.events[0].source.at;s.previousPending[0].sourceAt=null;
+ assert.throws(()=>gate.assess(s),/SUPERVISION_INPUT/);
+});

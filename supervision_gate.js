@@ -62,13 +62,17 @@
       need(nonempty(old.key)&&repositories.has(old.repository)&&time(old.firstSeenAt)&&!pending.has(old.key),'unique known prior pending identity required');
       need(carriedRepository(old.key)===old.repository,'carried key/repository mismatch');
       need(Date.parse(old.firstSeenAt)<=now,'prior pending time is in the future');
-      pending.set(old.key,{...old,status:'UNOBSERVED_PENDING'});
+      const sourceAt=Object.hasOwn(old,'sourceAt')?old.sourceAt:old.firstSeenAt;
+      need(time(sourceAt)&&Date.parse(sourceAt)<=Date.parse(old.firstSeenAt),'invalid carried source time');
+      pending.set(old.key,{...old,sourceAt,status:'UNOBSERVED_PENDING'});
     }
     const add=(key,repository,code,detail)=>issues.push({key,repository,code,detail});
     for(const event of snapshot.events) {
       const key=eventKey(event),repo=event.repository;
       need(!seen.has(key),'duplicate event');seen.add(key);
       need(Date.parse(event.source.at)<=now,'source time is in the future');
+      const carried=pending.get(key);
+      if(carried)need(Date.parse(event.source.at)===Date.parse(carried.sourceAt),'source timestamp changed for carried event');
       need(Array.isArray(event.expectedSuccessors)&&event.expectedSuccessors.length>0&&
         new Set(event.expectedSuccessors).size===event.expectedSuccessors.length&&event.expectedSuccessors.every(nonempty),'canonical successor IDs required');
       need(Array.isArray(event.successors),'successor dispositions required');
@@ -112,7 +116,8 @@
       if(complete)pending.delete(key);
       else {
         const prior=pending.get(key);
-        pending.set(key,{key,repository:repo,firstSeenAt:prior?.firstSeenAt??event.source.at,status:blocked?'CANONICAL_BARRIER':'ACTION_PENDING'});
+        pending.set(key,{key,repository:repo,sourceAt:prior?.sourceAt??event.source.at,
+          firstSeenAt:prior?.firstSeenAt??event.source.at,status:blocked?'CANONICAL_BARRIER':'ACTION_PENDING'});
         if(!blocked)eligible.add(repo);
       }
     }

@@ -73,6 +73,10 @@ event. An omitted prior pending event remains pending.
 Carried keys must use the exact canonical encoding and name their declared
 repository. An active/nonterminal canonical barrier keeps the overall status
 PENDING even with no remaining source events; it never yields COMPLETE.
+Pending entries retain immutable `sourceAt` alongside `firstSeenAt`. Reobserving
+the same key must preserve that source instant, so moving a timestamp backwards
+cannot admit earlier request/completion proof. Legacy entries without sourceAt
+use firstSeenAt conservatively; an explicit malformed sourceAt is rejected.
 Persist the returned pending list in the existing private audit area and read it
 first next time. This check cannot discover omitted DAG successors or authenticate
 caller evidence; obtain them from current canonical documents and connector reads.
