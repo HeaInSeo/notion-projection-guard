@@ -1,5 +1,4 @@
 'use strict';
-require('./supervision_gate_cases.cjs');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');

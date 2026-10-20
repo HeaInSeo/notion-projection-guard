@@ -5,7 +5,8 @@
 The source repository is `HeaInSeo/notion-projection-guard`. Runtime, tests and
 incident helpers retain their exact imported bytes. See [MIGRATION.md](MIGRATION.md)
 for the 35-commit history map, legacy installation provenance and source cutover.
-Run `node --test test_guard.cjs test_runtime.cjs` on Node 22 or 24.
+Run `node --test test_guard.cjs test_runtime.cjs test_revision.cjs supervision_gate_cases.cjs`
+on Node 22 or 24.
 
 [OPERATIONS.md](OPERATIONS.md) records the public/private storage boundary,
 deployment procedure, reusable supervisor/watch modules and offline version check.
