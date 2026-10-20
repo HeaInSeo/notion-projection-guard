@@ -77,6 +77,10 @@ Pending entries retain immutable `sourceAt` alongside `firstSeenAt`. Reobserving
 the same key must preserve that source instant, so moving a timestamp backwards
 cannot admit earlier request/completion proof. Legacy entries without sourceAt
 use firstSeenAt conservatively; an explicit malformed sourceAt is rejected.
+Pending entries also retain every known expectedSuccessors identity. Later
+observations may add obligations but cannot silently remove one; all retained
+successors still need valid dispositions. Legacy records without that list need
+explicit enrichment from their preserved canonical source snapshot before use.
 Persist the returned pending list in the existing private audit area and read it
 first next time. This check cannot discover omitted DAG successors or authenticate
 caller evidence; obtain them from current canonical documents and connector reads.

@@ -74,7 +74,7 @@ test('distinct RELEASE task/event components never erase an older pending event'
  const s=fixture();const first={repository:'sori',source:{kind:'RELEASE',taskId:'a/b',eventId:'c',head:'c'.repeat(40),at:'2026-10-20T06:00:00Z'}};
  const second=structuredClone(first);second.source.taskId='a';second.source.eventId='b/c';
  const firstKey=gate.eventKey(first),secondKey=gate.eventKey(second);
- s.previousPending=[{key:firstKey,repository:'sori',firstSeenAt:first.source.at}];
+ s.previousPending=[{key:firstKey,repository:'sori',firstSeenAt:first.source.at,expectedSuccessors:['old-task']}];
  const e=s.events[0];e.repository=second.repository;e.source=second.source;e.projection.sourceKey=secondKey;
  for(const x of e.successors){x.sourceKey=secondKey;if(x.handoff)x.handoff.ownReceipt.inputKey=secondKey;}
  const r=gate.assess(s);assert.equal(r.status,'PENDING');assert.equal(r.pending[0].key,firstKey);
@@ -160,8 +160,27 @@ test('equivalent UTC precision preserves the carried source and permits actual i
 });
 test('legacy source-time fallback is conservative and explicit malformed sourceAt rejects',()=>{
  const s=fixture(),key=gate.eventKey(s.events[0]);
- s.previousPending=[{key,repository:'nodekit',firstSeenAt:'2026-10-20T07:00:00Z'}];
+ s.previousPending=[{key,repository:'nodekit',firstSeenAt:'2026-10-20T07:00:00Z',expectedSuccessors:[...s.events[0].expectedSuccessors]}];
  assert.throws(()=>gate.assess(s),/SUPERVISION_INPUT/);
  s.previousPending[0].firstSeenAt=s.events[0].source.at;s.previousPending[0].sourceAt=null;
+ assert.throws(()=>gate.assess(s),/SUPERVISION_INPUT/);
+});
+test('a repeated event cannot forget a previously missing direct successor',()=>{
+ const s=fixture(),e=s.events[0];e.successors.pop();s.previousPending=gate.assess(s).pending;
+ e.expectedSuccessors.pop();const r=gate.assess(s);
+ assert.equal(r.status,'PENDING');assert(r.issues.some(x=>x.code==='DECIDE_SUCCESSOR'&&x.detail==='P10.ci_verify'));
+ assert.deepEqual(Array.from(r.pending[0].expectedSuccessors),['P10.cancel','P10.ci_verify']);
+});
+test('known obligations can close with valid dispositions even if the fresh list omits one',()=>{
+ const s=fixture(),e=s.events[0],old=e.successors.pop();s.previousPending=gate.assess(s).pending;
+ e.expectedSuccessors.pop();e.successors.push(old);assert.equal(gate.assess(s).status,'COMPLETE');
+});
+test('newly discovered successors extend rather than replace retained obligations',()=>{
+ const s=fixture(),e=s.events[0];e.successors.pop();s.previousPending=gate.assess(s).pending;
+ e.expectedSuccessors=['P10.cancel','P10.docs'];const r=gate.assess(s);
+ assert.deepEqual(Array.from(r.pending[0].expectedSuccessors),['P10.cancel','P10.ci_verify','P10.docs']);
+});
+test('legacy pending without known successor identities requires explicit enrichment',()=>{
+ const s=fixture();s.previousPending=[{key:gate.eventKey(s.events[0]),repository:'nodekit',firstSeenAt:s.events[0].source.at}];
  assert.throws(()=>gate.assess(s),/SUPERVISION_INPUT/);
 });

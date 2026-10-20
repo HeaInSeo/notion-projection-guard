@@ -64,7 +64,10 @@
       need(Date.parse(old.firstSeenAt)<=now,'prior pending time is in the future');
       const sourceAt=Object.hasOwn(old,'sourceAt')?old.sourceAt:old.firstSeenAt;
       need(time(sourceAt)&&Date.parse(sourceAt)<=Date.parse(old.firstSeenAt),'invalid carried source time');
-      pending.set(old.key,{...old,sourceAt,status:'UNOBSERVED_PENDING'});
+      need(Array.isArray(old.expectedSuccessors)&&old.expectedSuccessors.length>0&&
+        new Set(old.expectedSuccessors).size===old.expectedSuccessors.length&&old.expectedSuccessors.every(nonempty),
+        'carried successor identities required');
+      pending.set(old.key,{...old,sourceAt,expectedSuccessors:[...old.expectedSuccessors],status:'UNOBSERVED_PENDING'});
     }
     const add=(key,repository,code,detail)=>issues.push({key,repository,code,detail});
     for(const event of snapshot.events) {
@@ -75,10 +78,11 @@
       if(carried)need(Date.parse(event.source.at)===Date.parse(carried.sourceAt),'source timestamp changed for carried event');
       need(Array.isArray(event.expectedSuccessors)&&event.expectedSuccessors.length>0&&
         new Set(event.expectedSuccessors).size===event.expectedSuccessors.length&&event.expectedSuccessors.every(nonempty),'canonical successor IDs required');
+      const expectedSuccessors=[...new Set([...(carried?.expectedSuccessors??[]),...event.expectedSuccessors])];
       need(Array.isArray(event.successors),'successor dispositions required');
       const actual=new Map();
       for(const s of event.successors){need(nonempty(s.id)&&!actual.has(s.id),'unique successor ID required');actual.set(s.id,s);}
-      need([...actual.keys()].every(id=>event.expectedSuccessors.includes(id)),'unexpected successor');
+      need([...actual.keys()].every(id=>expectedSuccessors.includes(id)),'unexpected successor');
       let complete=true;
       if(event.projection?.status!=='COMPLETE'||event.projection.sourceKey!==key||!nonempty(event.projection.certificate)) {
         complete=false;add(key,repo,'PROJECT_SOURCE','fresh single-repository complete manifest required');
@@ -88,7 +92,7 @@
       if(event.deferredBecauseOtherRepository===true) {
         complete=false;add(key,repo,'CROSS_REPOSITORY_DEFER','replan this repository independently');
       }
-      for(const id of event.expectedSuccessors) {
+      for(const id of expectedSuccessors) {
         const s=actual.get(id);
         if(!s||!actions.has(s.action)||s.sourceKey!==key||!nonempty(s.owner)||!nonempty(s.next)) {
           complete=false;add(key,repo,'DECIDE_SUCCESSOR',id);continue;
@@ -117,7 +121,8 @@
       else {
         const prior=pending.get(key);
         pending.set(key,{key,repository:repo,sourceAt:prior?.sourceAt??event.source.at,
-          firstSeenAt:prior?.firstSeenAt??event.source.at,status:blocked?'CANONICAL_BARRIER':'ACTION_PENDING'});
+          firstSeenAt:prior?.firstSeenAt??event.source.at,expectedSuccessors,
+          status:blocked?'CANONICAL_BARRIER':'ACTION_PENDING'});
         if(!blocked)eligible.add(repo);
       }
     }
