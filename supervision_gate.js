@@ -27,6 +27,14 @@
     need(canonical&&Object.hasOwn(canonical,'active')&&Array.isArray(canonical.nonterminal),'fresh canonical state required');
     return canonical.active!==null||canonical.nonterminal.length>0;
   }
+  function carriedRepository(key) {
+    const merged=key.match(/^(nodekit|sori)#([1-9]\d*):([a-f0-9]{40}):([a-f0-9]{40}):MERGED$/);
+    if(merged){need(Number.isSafeInteger(Number(merged[2])),'invalid carried PR number');return merged[1];}
+    let value;try{value=JSON.parse(key);}catch{need(false,'unknown carried event key');}
+    need(Array.isArray(value)&&value.length===5&&value[0]==='RELEASE'&&repositories.has(value[1])&&
+      nonempty(value[2])&&nonempty(value[3])&&sha(value[4])&&JSON.stringify(value)===key,'noncanonical carried RELEASE key');
+    return value[1];
+  }
   function ownProof(receipt,id,key,earliest,now) {
     return receipt&&typeof receipt==='object'&&receipt.taskId===id&&receipt.inputKey===key&&
       nonempty(receipt.eventId)&&nonempty(receipt.sessionId)&&
@@ -52,6 +60,7 @@
     const pending=new Map(),issues=[],eligible=new Set(),seen=new Set();
     for(const old of snapshot.previousPending) {
       need(nonempty(old.key)&&repositories.has(old.repository)&&time(old.firstSeenAt)&&!pending.has(old.key),'unique known prior pending identity required');
+      need(carriedRepository(old.key)===old.repository,'carried key/repository mismatch');
       need(Date.parse(old.firstSeenAt)<=now,'prior pending time is in the future');
       pending.set(old.key,{...old,status:'UNOBSERVED_PENDING'});
     }
@@ -107,7 +116,8 @@
         if(!blocked)eligible.add(repo);
       }
     }
-    return {status:pending.size?'PENDING':'COMPLETE',canonicalBarrier:blocked,
+    if(blocked)add(snapshot.canonical.active,null,'CANONICAL_BARRIER','preserve current batch and use its existing reconcile path');
+    return {status:blocked||pending.size?'PENDING':'COMPLETE',canonicalBarrier:blocked,
       eligibleRepositories:[...eligible].sort(),issues,pending:[...pending.values()],
       productAcceptance:'NOT_ASSESSED'};
   }

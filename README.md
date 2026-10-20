@@ -70,6 +70,9 @@ sessionId, kind RELEASE, verdict PASS, acceptanceReceipt and UTC at. Requests
 and receipts cannot predate the triggering source. RELEASE keys encode an array
 of components as JSON, so slashes in task/event identities cannot alias another
 event. An omitted prior pending event remains pending.
+Carried keys must use the exact canonical encoding and name their declared
+repository. An active/nonterminal canonical barrier keeps the overall status
+PENDING even with no remaining source events; it never yields COMPLETE.
 Persist the returned pending list in the existing private audit area and read it
 first next time. This check cannot discover omitted DAG successors or authenticate
 caller evidence; obtain them from current canonical documents and connector reads.

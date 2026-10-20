@@ -113,3 +113,30 @@ test('unsupported repository in a carried pending ledger fails closed',()=>{
  const s=fixture();s.previousPending=[{key:'old',repository:'nodekti',firstSeenAt:'2026-10-20T06:00:00Z'}];
  assert.throws(()=>gate.assess(s),/SUPERVISION_INPUT/);
 });
+test('an active or nonterminal canonical barrier is never overall COMPLETE, including empty events',()=>{
+ for(const empty of [false,true])for(const active of [false,true]){
+  const s=fixture();if(empty)s.events=[];
+  s.canonical=active?{active:'live-batch',nonterminal:[]}:{active:null,nonterminal:[{id:'halted',status:'HALTED'}]};
+  const r=gate.assess(s);assert.equal(r.status,'PENDING');assert.equal(r.canonicalBarrier,true);
+  assert.equal(r.eligibleRepositories.length,0);
+ }
+});
+test('a carried key cannot declare a different known repository and then disappear',()=>{
+ const s=fixture();s.previousPending=[{key:gate.eventKey(s.events[0]),repository:'sori',firstSeenAt:'2026-10-20T06:00:00Z'}];
+ assert.throws(()=>gate.assess(s),/SUPERVISION_INPUT/);
+});
+test('unknown and noncanonical carried key encodings are rejected',()=>{
+ for(const key of ['garbage','[ "RELEASE", "sori", "t", "e", "'+ 'a'.repeat(40)+'" ]',
+  JSON.stringify(['RELEASE','nodekit','t','e','a'.repeat(40)])]){
+  const s=fixture();s.previousPending=[{key,repository:'sori',firstSeenAt:'2026-10-20T06:00:00Z'}];
+  assert.throws(()=>gate.assess(s),/SUPERVISION_INPUT/);
+ }
+});
+test('valid canonical RELEASE keys survive omitted observations and retain age',()=>{
+ const s=fixture(),e=s.events[0];e.repository='sori';e.source={kind:'RELEASE',taskId:'task/a',eventId:'evt/b',head:'c'.repeat(40),at:e.source.at};
+ const key=gate.eventKey(e);e.projection.sourceKey=key;
+ for(const x of e.successors){x.sourceKey=key;if(x.handoff)x.handoff.ownReceipt=null;}
+ const first=gate.assess(s);s.previousPending=first.pending;s.events=[];
+ const next=gate.assess(s);assert.equal(next.status,'PENDING');assert.equal(next.pending[0].key,key);
+ assert.equal(next.pending[0].firstSeenAt,e.source.at);
+});
