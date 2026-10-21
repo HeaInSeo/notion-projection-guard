@@ -222,6 +222,12 @@ failures halted from durable `PREPARED`, retaining the exact original ticket.
 Its pending page must equal the entire saved preimage and revision. An applied
 output is refused and never replayed. The historical single-incident CLAIM40
 helper retains its original module pin; its synthetic tests use fixture pins.
+New verification receipts have full immutable fingerprints. Earlier reviewed
+arrow/applied-readback receipts can use their original bound reconciliation
+audit instead; their complete raw preimages, output, properties, revisions,
+timestamps and rendering evidence are revalidated. Only validated historical
+rendering evidence may remain beside a completed page. Untracked ordinary
+legacy receipts and unexplained orphan files remain blocked.
 
 ### Unwritten authorize transport recovery
 

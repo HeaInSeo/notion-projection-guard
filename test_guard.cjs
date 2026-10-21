@@ -528,6 +528,25 @@ function legacyArrows(b, render=s=>s.replaceAll(' -> ',' -\\> ')) {
   const legacy=legacyAutolink(b,edits,render(body(edits[0].newStr)));
   legacy.input.action='reconcile_escaped_arrows';return {...legacy,edits};
 }
+for(const phase of ['READY','PREPARED'])test('native-read recovery admits and preserves a validated historical arrow receipt: '+phase,t=>{
+ const f=fixture(t,{productionPages:arrowIds}),legacy=legacyArrows(f.b);f.b.handle(legacy.input);
+ delete f.b.state.batches.observation.verifications;f.b.save(); // Historical source predates fingerprints.
+ const actualFile=f.b.snapshot('observation',0)+'.actual.json',actual=fs.readFileSync(actualFile,'utf8');
+ const pending=phase==='PREPARED'?prepare(f.b,page(B)):null;
+ f.b.handle({action:'halt',batchId:'observation',reason:'FETCH_ERROR: native read failed'});
+ const b=f.b.state.batches.observation,identity={batchId:'observation',planHash:b.planHash,expectedError:b.error};
+ if(phase==='READY')assert.equal(f.b.handle({action:'reconcile_unprepared_read',...identity,page:page(B),apply:true}).status,'READY');
+ else {f.b.handle({action:'reconcile_receipts',...identity});assert.equal(f.b.handle({action:'reconcile_unwritten',...identity,ticket:pending.ticket,page:page(B)}).status,'PREPARED');}
+ assert.equal(b.next,1);assert.equal(fs.readFileSync(actualFile,'utf8'),actual);
+});
+test('native-read recovery rejects altered historical rendering evidence',t=>{
+ const f=fixture(t,{productionPages:arrowIds}),legacy=legacyArrows(f.b);f.b.handle(legacy.input);
+ delete f.b.state.batches.observation.verifications;f.b.save();
+ const file=f.b.snapshot('observation',0)+'.actual.json',d=JSON.parse(fs.readFileSync(file));d.page.body+='tampered';atomic(file,d);
+ f.b.handle({action:'halt',batchId:'observation',reason:'FETCH_ERROR: native read failed'});
+ const b=f.b.state.batches.observation;rejects('PERSISTENCE',()=>f.b.handle({action:'reconcile_unprepared_read',batchId:'observation',planHash:b.planHash,expectedError:b.error,page:page(B),apply:true}));
+ assert.equal(b.status,'HALTED');
+});
 test('plain ASCII arrows reject before fetch or durable admission; code and Unicode arrows remain stable',async t=>{
   const f=runnerFixture(t);
   await assert.rejects(f.runner.run('arrows',[edit(A,{newStr:'central_status=writer -> review'})]),/MARKDOWN_ESCAPE_RISK/);
@@ -668,6 +687,19 @@ test('a genuine failed pre-prepare read restores the same READY plan without ack
  const before=fs.readFileSync(f.f.b.file,'utf8');assert.equal(f.f.b.handle(input).checkOnly,true);assert.equal(fs.readFileSync(f.f.b.file,'utf8'),before);
  const r=f.f.b.handle({...input,apply:true});assert.equal(r.status,'READY');assert.equal(r.audit.pageAdvances,0);assert.equal(f.writes,0);
  assert.equal((await f.newRunner().run('pre-read',[edit()])).status,'COMPLETED');assert.equal(f.writes,1);
+});
+for(const phase of ['READY','PREPARED'])test('native-read recovery preserves a fully audited historical applied-readback receipt: '+phase,t=>{
+ const f=fixture(t);begin(f.b,[edit(),edit(B)]);const r=prepare(f.b);authorize(f.b,r);
+ f.b.handle({action:'halt',batchId:'observation',reason:'REVISION_READ_ERROR'});let b=f.b.state.batches.observation;
+ f.b.handle({action:'reconcile_applied_readback',batchId:'observation',planHash:b.planHash,expectedError:b.error,
+  snapshotHash:b.receipt.snapshotHash,page:page(A,body(newStr),undefined,'2026-10-12T00:01:00Z'),apply:true});
+ delete b.verifications;f.b.save(); // Historical source has the immutable recovery audit instead.
+ const pending=phase==='PREPARED'?prepare(f.b,page(B)):null;
+ f.b.handle({action:'halt',batchId:'observation',reason:'FETCH_ERROR: native read failed'});
+ const identity={batchId:'observation',planHash:b.planHash,expectedError:b.error};
+ if(phase==='READY')assert.equal(f.b.handle({action:'reconcile_unprepared_read',...identity,page:page(B),apply:true}).status,'READY');
+ else {f.b.handle({action:'reconcile_receipts',...identity});assert.equal(f.b.handle({action:'reconcile_unwritten',...identity,ticket:pending.ticket,page:page(B)}).status,'PREPARED');}
+ assert.equal(b.next,1);
 });
 test('prepared native-read recovery retains its exact original ticket and authorizes only once',async t=>{
  const f=runnerFixture(t,'read-before-authorize');await assert.rejects(f.runner.run('prepared-read',[edit()]),/FETCH_ERROR/);

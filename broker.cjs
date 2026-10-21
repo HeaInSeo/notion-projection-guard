@@ -375,7 +375,9 @@ class Broker {
     const at = new Date().toISOString();
     const evidence = { kind, at, planHash, snapshotHash, actualHash, actualSnapshotHash,
       ticket, plannedExpectedHash:snapshot.expectedHash, protectedContent:'UNCHANGED', notionWrites:0 };
-    atomic(file + '.verified.json', { page:fresh, bodyHash:hash(fresh.body), at, reconciliation:evidence });
+    const verified={page:fresh,bodyHash:hash(fresh.body),at,reconciliation:evidence};
+    atomic(file + '.verified.json',verified);
+    b.verifications=[...(b.verifications??[]),{index:0,snapshotHash:hash(JSON.stringify(snapshot)),verifiedHash:hash(JSON.stringify(verified))}];
     b.reconciliations = [...(b.reconciliations ?? []), evidence];
     b.next = 1; b.receipt = null; b.status = b.edits.length === 1 ? 'COMPLETED' : 'READY';
     if (b.status === 'COMPLETED') this.state.active = null;
@@ -485,6 +487,21 @@ class Broker {
     this.save();
     return {status:b.status,next:b.next,reconciled:true,audit};
   }
+  verifiedFingerprint(s,v,b,index) {
+    const edit=b.edits[index],raw=pageData(s.page.raw,edit.pageId),after=pageData(v.page.raw,edit.pageId),p=plan(s.page,s.edit);
+    if(s.index!==index||JSON.stringify(s.edit)!==JSON.stringify(edit)||
+        hash(s.page.body)!==s.bodyHash||hash(s.page.properties)!==s.propertiesHash||hash(s.expected)!==s.expectedHash||
+        p.expected!==s.expected||p.beforeHash!==s.beforeHash||p.afterHash!==s.afterHash||
+        raw.body!==s.page.body||raw.properties!==s.page.properties||raw.revision!==s.page.revision||
+        v.page.body!==this.verifiedExpected(s,v,b,index)||v.bodyHash!==hash(v.page.body)||v.page.properties!==s.page.properties||
+        after.body!==v.page.body||after.properties!==v.page.properties||after.revision!==v.page.revision)
+      fail('PERSISTENCE','Prior protected-content verification changed');
+    const fingerprint={index,snapshotHash:hash(JSON.stringify(s)),verifiedHash:hash(JSON.stringify(v))};
+    const original=(b.verifications??[]).find(r=>r.index===index);
+    if(original?JSON.stringify(original)!==JSON.stringify(fingerprint):!['REVIEWED_CENTRAL_ARROW_ESCAPING','EXACT_APPLIED_REVISION_READ'].includes(v.reconciliation?.kind))
+      fail('PERSISTENCE','Original full receipt fingerprint or validated legacy rendering audit required');
+    return fingerprint;
+  }
   reconcileUnpreparedRead(input) {
     const {batchId,planHash,expectedError,apply}=input,b=this.state.batches[batchId];
     if(this.state.active!==batchId||!b||b.status!=='HALTED'||b.planHash!==planHash||
@@ -493,27 +510,17 @@ class Broker {
     if(b.haltedFrom!=='READY'||b.receipt!==null||! /^(?:FETCH_ERROR|INCOMPLETE_READ):/.test(b.error))
       fail('RECONCILE_SCOPE','Only an unprepared failed native read may restore READY');
     if(JSON.stringify(read(this.file))!==JSON.stringify(this.state))fail('PERSISTENCE','Journal changed outside its lock');
-    for(const edit of b.edits){validateScope(edit,this.policy);stableNewText(edit);}
-    const prefix=hash(batchId)+'-',prior=[];
-    for(const name of fs.readdirSync(this.root))if(name.startsWith(prefix)){
-      const match=/^(\d+)\.json(?:\.verified\.json)?$/.exec(name.slice(prefix.length));
-      if(!match||Number(match[1])>=b.next)fail('PERSISTENCE','Pending or unexpected prepared evidence exists');
-    }
+    b.edits.forEach((edit,i)=>{validateScope(edit,this.policy);if(i>=b.next)stableNewText(edit);});
+    const prefix=hash(batchId)+'-',prior=[],allowed=new Set();
     for(let i=0;i<b.next;i++){
       const file=this.snapshot(batchId,i),s=read(file),v=read(file+'.verified.json');
-      const fingerprint={index:i,snapshotHash:hash(JSON.stringify(s)),verifiedHash:hash(JSON.stringify(v))};
-      if(!(b.verifications??[]).some(r=>JSON.stringify(r)===JSON.stringify(fingerprint)))
-        fail('PERSISTENCE','Original complete receipt fingerprint missing or changed');
-      const raw=pageData(s.page.raw,b.edits[i].pageId),after=pageData(v.page.raw,b.edits[i].pageId),p=plan(s.page,s.edit);
-      if(s.batchId!==batchId||s.index!==i||JSON.stringify(s.edit)!==JSON.stringify(b.edits[i])||
-          hash(s.page.body)!==s.bodyHash||hash(s.page.properties)!==s.propertiesHash||hash(s.expected)!==s.expectedHash||
-          p.expected!==s.expected||p.beforeHash!==s.beforeHash||p.afterHash!==s.afterHash||
-          raw.body!==s.page.body||raw.properties!==s.page.properties||raw.revision!==s.page.revision||
-          v.page.body!==this.verifiedExpected(s,v,b,i)||v.bodyHash!==hash(v.page.body)||v.page.properties!==s.page.properties||
-          after.body!==v.page.body||after.properties!==v.page.properties||after.revision!==v.page.revision)
-        fail('PERSISTENCE','Prior protected-content verification changed');
-      prior.push({index:i,snapshotHash:hash(JSON.stringify(s)),verifiedHash:hash(JSON.stringify(v))});
+      if(s.batchId!==batchId)fail('PERSISTENCE','Prior snapshot batch changed');
+      prior.push(this.verifiedFingerprint(s,v,b,i));
+      allowed.add(prefix+i+'.json');allowed.add(prefix+i+'.json.verified.json');
+      if(v.reconciliation?.kind==='REVIEWED_CENTRAL_ARROW_ESCAPING')allowed.add(prefix+i+'.json.actual.json');
     }
+    for(const name of fs.readdirSync(this.root))if(name.startsWith(prefix)&&!allowed.has(name))
+      fail('PERSISTENCE','Pending or unexpected prepared evidence exists');
     const page=pageData(input.page,b.edits[b.next].pageId);
     if(page.body.includes(b.edits[b.next].newStr))fail('RECONCILE_CHANGED','Already-applied output cannot restore an unwritten plan');
     const p=plan(page,b.edits[b.next]);
@@ -542,10 +549,10 @@ class Broker {
       const prefix=hash(batchId)+'-',allowed=new Set([prefix+b.next+'.json']);
       for(let i=0;i<b.next;i++){
         allowed.add(prefix+i+'.json');allowed.add(prefix+i+'.json.verified.json');
-        const file=this.snapshot(batchId,i),fingerprint={index:i,
-          snapshotHash:hash(JSON.stringify(read(file))),verifiedHash:hash(JSON.stringify(read(file+'.verified.json')))};
-        if(!(b.verifications??[]).some(r=>JSON.stringify(r)===JSON.stringify(fingerprint)))
-          fail('PERSISTENCE','Original complete receipt fingerprint missing or changed');
+        const file=this.snapshot(batchId,i),s=read(file),v=read(file+'.verified.json');
+        if(s.batchId!==batchId)fail('PERSISTENCE','Prior snapshot batch changed');
+        this.verifiedFingerprint(s,v,b,i);
+        if(v.reconciliation?.kind==='REVIEWED_CENTRAL_ARROW_ESCAPING')allowed.add(prefix+i+'.json.actual.json');
       }
       for(const name of fs.readdirSync(this.root))if(name.startsWith(prefix)&&!allowed.has(name))
         fail('PERSISTENCE','Unexpected pending or future prepared evidence exists');
@@ -571,9 +578,7 @@ class Broker {
       for (let index=0; index<b.next; index++) {
         const file=this.snapshot(batchId,index);
         const snapshot=read(file), verified=read(file+'.verified.json');
-        if(preparedRead&&!(b.verifications??[]).some(r=>JSON.stringify(r)===JSON.stringify({index,
-          snapshotHash:hash(JSON.stringify(snapshot)),verifiedHash:hash(JSON.stringify(verified))})))
-          fail('PERSISTENCE','Original complete receipt fingerprint missing or changed');
+        if(preparedRead)this.verifiedFingerprint(snapshot,verified,b,index);
         checkSnapshot(snapshot,index);
         const preimage=pageData(snapshot.page.raw,b.edits[index].pageId);
         const readback=pageData(verified.page.raw,b.edits[index].pageId);
