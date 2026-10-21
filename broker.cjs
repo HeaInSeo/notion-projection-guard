@@ -537,8 +537,19 @@ class Broker {
       b.error.includes('"action":"authorize"')&&b.error.includes(JSON.stringify(batchId))&&b.error.includes(JSON.stringify(b.receipt.ticket));
     const preparedRead=b.haltedFrom==='PREPARED'&&/^(?:FETCH_ERROR|INCOMPLETE_READ):/.test(b.error);
     if(!legacyDC&&!preparedRead)fail('RECONCILE_SCOPE','Only a proven unwritten authorize/read failure can be reconciled');
-    if(preparedRead&&(fs.existsSync(b.receipt.snapshot+'.actual.json')||fs.existsSync(b.receipt.snapshot+'.verified.json')))
-      fail('PERSISTENCE','Contradictory pending write evidence exists');
+    if(preparedRead){
+      if(JSON.stringify(read(this.file))!==JSON.stringify(this.state))fail('PERSISTENCE','Journal changed outside its lock');
+      const prefix=hash(batchId)+'-',allowed=new Set([prefix+b.next+'.json']);
+      for(let i=0;i<b.next;i++){
+        allowed.add(prefix+i+'.json');allowed.add(prefix+i+'.json.verified.json');
+        const file=this.snapshot(batchId,i),fingerprint={index:i,
+          snapshotHash:hash(JSON.stringify(read(file))),verifiedHash:hash(JSON.stringify(read(file+'.verified.json')))};
+        if(!(b.verifications??[]).some(r=>JSON.stringify(r)===JSON.stringify(fingerprint)))
+          fail('PERSISTENCE','Original complete receipt fingerprint missing or changed');
+      }
+      for(const name of fs.readdirSync(this.root))if(name.startsWith(prefix)&&!allowed.has(name))
+        fail('PERSISTENCE','Unexpected pending or future prepared evidence exists');
+    }
     for (const edit of b.edits) {
       validateScope(edit, this.policy);
     }

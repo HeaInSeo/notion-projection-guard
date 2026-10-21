@@ -691,6 +691,17 @@ test('prepared read recovery refuses an already-applied output instead of replay
  const b=f.f.b.state.batches['prepared-read'];f.pages.set(A,page(A,body(newStr),undefined,'2026-10-12T00:01:00Z'));
  await assert.rejects(f.newRunner().resume('prepared-read',b.planHash),/RECONCILE_CHANGED/);assert.equal(f.writes,0);
 });
+for(const kind of ['journal drift','future snapshot','future verification'])test('prepared native-read recovery preserves inconsistent evidence: '+kind,t=>{
+ const f=fixture(t);begin(f.b,[edit(),edit(B)]);prepare(f.b);
+ f.b.handle({action:'halt',batchId:'observation',reason:'FETCH_ERROR: native read failed'});
+ const b=f.b.state.batches.observation;
+ if(kind==='journal drift'){const d=JSON.parse(fs.readFileSync(f.b.file));d.concurrent='preserve';atomic(f.b.file,d);}
+ else atomic(f.b.snapshot('observation',1)+(kind==='future verification'?'.verified.json':''),{orphan:'preserve'});
+ const before=fs.readFileSync(f.b.file,'utf8');
+ rejects('PERSISTENCE',()=>f.b.handle({action:'reconcile_receipts',batchId:'observation',planHash:b.planHash,expectedError:b.error}));
+ assert.equal(fs.readFileSync(f.b.file,'utf8'),before);
+ if(kind!=='journal drift')assert.equal(fs.readFileSync(f.b.snapshot('observation',1)+(kind==='future verification'?'.verified.json':''),'utf8').includes('preserve'),true);
+});
 test('unprepared recovery rejects applied prefix expansion even when the old literal remains',t=>{
  const f=fixture(t),e=edit(A,{newStr:oldStr+' then verified'});begin(f.b,[e]);
  f.b.handle({action:'halt',batchId:'observation',reason:'FETCH_ERROR: native read failed'});
