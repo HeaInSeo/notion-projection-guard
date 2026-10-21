@@ -31,6 +31,7 @@ CODE_PATHS = frozenset((
     "reconcile_w02_prewrite.cjs", "router_stale_prewrite_cases.cjs",
     "transport_preprepare_cases.cjs", "v02_partial_cases.cjs",
 ))
+ADDED_CODE_PATHS = frozenset(("reconcile_claim40_superseded.cjs", "claim40_closure_cases.cjs"))
 # This PR now includes a separately identified post-import P1 correction. These
 # paths are not represented as unchanged bytes; all other imported paths are.
 CORRECTIONS = frozenset(("broker.cjs", "test_guard.cjs", "router_stale_prewrite_cases.cjs",
@@ -39,8 +40,11 @@ FINDING = "https://github.com/HeaInSeo/notion-projection-guard/pull/1#discussion
 # Reviewed operational source updates are separate from the immutable import
 # and correction commit. Never obtain these pins from a mutable manifest.
 SOURCE_UPDATES = {
-    "broker.cjs": "6fdc602fe20bd4145cbbb1a6c54bbe737eda8737",
-    "test_guard.cjs": "120f3e5de5282546787380b962b3a17c2b2640c5",
+    "broker.cjs": "bae9a3f5cd17cdf147ddf30815b359686640247b",
+    "runner.js": "8688328f9c4c2f153565081a784f0a54489ebbec",
+    "test_guard.cjs": "e051bb6c7eae0f439a5ae410ba2ce6cb05f4ea93",
+    "reconcile_claim40_superseded.cjs": "562fa5e9988cfc2f7d73e4c46f035f9e89830678",
+    "claim40_closure_cases.cjs": "8ccaaac125326ebd60d4f92d76c36638e57f3ed3",
     "complete_projection.js": "cef172b96eb58356e65429b92c319791d64adb5d",
     "verify_runtime.cjs": "4880f8e6c57b87153318f852ccacaa4f7004c929",
 }
@@ -123,7 +127,7 @@ def verify(root, anchors=ANCHORS, source_updates=SOURCE_UPDATES):
     require(isinstance(changes, list) and len(changes) == len(CORRECTIONS), "correction path count differs")
     require({entry["path"] for entry in changes} == CORRECTIONS and all(entry.get("finding") == FINDING for entry in changes), "undeclared correction paths")
     changed = set()
-    require(set(source_updates) <= CODE_PATHS and all(
+    require(set(source_updates) <= CODE_PATHS | ADDED_CODE_PATHS and all(
         isinstance(value, str) and re.fullmatch(r"[0-9a-f]{40}", value)
         for value in source_updates.values()), "invalid source update pins")
     for name in sorted(CODE_PATHS):
@@ -143,6 +147,14 @@ def verify(root, anchors=ANCHORS, source_updates=SOURCE_UPDATES):
         else:
             require(actual == original, "undeclared post-import code change: " + name)
         require(git("ls-tree", imported, "--", name).split()[0] == git("ls-tree", "HEAD", "--", name).split()[0], "code mode differs: " + name)
+    for name in sorted(set(source_updates) - CODE_PATHS):
+        file = root / name
+        require(file.is_file() and not file.is_symlink(), "non-regular added code: " + name)
+        data = file.read_bytes()
+        actual = hashlib.sha1(b"blob " + str(len(data)).encode() + b"\0" + data).hexdigest()
+        require(actual == source_updates[name], "pinned added source differs: " + name)
+        require(git("ls-tree", "HEAD", "--", name).split()[0] == b"100644", "added code mode differs: " + name)
+        changed.add(name)
     require(changed == CORRECTIONS | set(source_updates), "declared correction set differs from actual code delta")
     return {"historyPairs": len(entries), "migrationBlobs": len(CODE_PATHS),
             "unchangedCurrentBlobs": len(CODE_PATHS - CORRECTIONS - set(source_updates)),

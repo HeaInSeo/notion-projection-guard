@@ -1,10 +1,10 @@
 {
   "version": 1,
   "repository": "HeaInSeo/notion-projection-guard",
-  "sourceCommit": "d6b7c285cef36affc0dee449233e522e70e7f017",
+  "sourceCommit": "c75750a92dc505b9f605bd63542789fe52717f79",
   "runtimeSha256": {
-    "broker.cjs": "087e8eb716bb2f4086b366e81456dc96aa274d57b919740fade4f7218828a43a",
-    "runner.js": "d72764b5befaa3dc12f681bbaafaa8ea3d9db5f3acd17d43ca05fec342cbb01e"
+    "broker.cjs": "b9ef74b0d5b391a35267699ba14d2cfd3b3983e3c5bca45203be927baaac60f3",
+    "runner.js": "f78bfffaafc2a4445a8dfce8f1479dc84990ac6b91529fee556c0877adf9bb27"
   },
   "policySha256": "804709b778ea5fe82eac705654d06f52af8391aa0504d8e0582f3a87022fdf1b",
   "hostedEntryPoint": {
