@@ -386,6 +386,20 @@ class Broker {
   verifiedExpected(snapshot, verified, batch, index) {
     const audit = verified.reconciliation;
     if (!audit) return snapshot.expected;
+    if(audit.kind==='EXACT_APPLIED_REVISION_READ'){
+      if(!(batch.reconciliations??[]).some(r=>JSON.stringify(r)===JSON.stringify(audit))||
+          audit.batchId!==snapshot.batchId||audit.planHash!==batch.planHash||audit.index!==index||
+          audit.error!=='REVISION_READ_ERROR'||audit.ticket!==snapshot.ticket||
+          audit.snapshotHash!==hash(JSON.stringify(snapshot))||audit.bodyHash!==snapshot.expectedHash||
+          audit.propertiesHash!==snapshot.propertiesHash||audit.revision!==verified.page.revision||
+          audit.protectedContent!=='UNCHANGED'||audit.notionWrites!==0||audit.haltedFrom!=='WRITE_PENDING'||
+          typeof audit.at!=='string'||!Number.isFinite(Date.parse(audit.at))||verified.at!==audit.at||!Array.isArray(audit.prior)||
+          audit.prior.length!==index||audit.prior.some((r,i)=>r.index!==i||
+            r.snapshotHash!==hash(JSON.stringify(read(this.snapshot(snapshot.batchId,i))))||
+            r.verifiedHash!==hash(JSON.stringify(read(this.snapshot(snapshot.batchId,i)+'.verified.json')))))
+        fail('PERSISTENCE','Applied-state verification is not bound to its immutable recovery audit');
+      return snapshot.expected;
+    }
     if (index !== 0 || batch.edits.length !== 6 || audit.kind !== 'REVIEWED_CENTRAL_ARROW_ESCAPING' ||
         !(batch.reconciliations ?? []).some(record => JSON.stringify(record) === JSON.stringify(audit)) ||
         audit.planHash !== batch.planHash || audit.ticket !== snapshot.ticket ||
@@ -401,6 +415,74 @@ class Broker {
         saved.properties !== actual.page.properties || saved.revision !== actual.page.revision)
       fail('PERSISTENCE', 'Reviewed rendering evidence changed');
     return expected;
+  }
+  reconcileAppliedReadback(input) {
+    const {batchId,planHash,expectedError,snapshotHash,apply}=input;
+    const b=this.state.batches[batchId];
+    if(this.state.active!==batchId||!b||b.status!=='HALTED'||b.planHash!==planHash||
+        hash(JSON.stringify(b.edits))!==planHash||b.error!==expectedError||!b.receipt||
+        b.receipt.snapshotHash!==snapshotHash||typeof apply!=='boolean')
+      fail('RECONCILE_IDENTITY','Exact halted plan, error, pending snapshot and explicit apply/check required');
+    if(expectedError!=='REVISION_READ_ERROR')
+      fail('RECONCILE_SCOPE','Only the observed failed revision read admits exact applied-state recovery');
+    if(b.haltedFrom!=='WRITE_PENDING')
+      fail('RECONCILE_SCOPE','Durable pre-halt WRITE_PENDING authorization proof is required');
+    for(const edit of b.edits){validateScope(edit,this.policy);stableNewText(edit);}
+    if(JSON.stringify(read(this.file))!==JSON.stringify(this.state))
+      fail('PERSISTENCE','Canonical journal changed outside its lock');
+    const checkSnapshot=(s,index)=>{
+      if(s.batchId!==batchId||s.index!==index||!s.ticket||
+          JSON.stringify(s.edit)!==JSON.stringify(b.edits[index])||
+          hash(s.page.body)!==s.bodyHash||hash(s.page.properties)!==s.propertiesHash||
+          hash(s.expected)!==s.expectedHash)
+        fail('PERSISTENCE','Canonical prepared snapshot changed');
+      const raw=pageData(s.page.raw,b.edits[index].pageId),planned=plan(s.page,s.edit);
+      if(raw.body!==s.page.body||raw.properties!==s.page.properties||raw.revision!==s.page.revision||
+          planned.expected!==s.expected||planned.beforeHash!==s.beforeHash||planned.afterHash!==s.afterHash)
+        fail('PERSISTENCE','Raw preimage or protected-content plan changed');
+    };
+    const prior=[];
+    for(let index=0;index<b.next;index++){
+      const file=this.snapshot(batchId,index),s=read(file),v=read(file+'.verified.json');
+      checkSnapshot(s,index);
+      const raw=pageData(v.page.raw,b.edits[index].pageId),expected=this.verifiedExpected(s,v,b,index);
+      if(v.bodyHash!==hash(expected)||v.page.body!==expected||v.page.properties!==s.page.properties||
+          raw.body!==v.page.body||raw.properties!==v.page.properties||raw.revision!==v.page.revision)
+        fail('PERSISTENCE','Earlier protected-content verification receipt changed');
+      prior.push({index,snapshotHash:hash(JSON.stringify(s)),verifiedHash:hash(JSON.stringify(v))});
+    }
+    const file=this.snapshot(batchId,b.next),s=read(file);
+    if(b.receipt.snapshot!==file||hash(JSON.stringify(s))!==snapshotHash||s.ticket!==b.receipt.ticket||
+        fs.existsSync(file+'.actual.json'))
+      fail('PERSISTENCE','Pending ticket changed or a contradictory readback exists');
+    checkSnapshot(s,b.next);
+    const page=pageData(input.page,b.edits[b.next].pageId);
+    if(page.body!==s.expected||page.properties!==s.page.properties||
+        Date.parse(page.revision)<=Date.parse(s.page.revision))
+      fail('RECONCILE_CHANGED','Fresh complete page must equal the entire planned output and unchanged properties');
+    const verifiedFile=file+'.verified.json';let verified=fs.existsSync(verifiedFile)?read(verifiedFile):null;
+    const audit={kind:'EXACT_APPLIED_REVISION_READ',batchId,planHash,error:expectedError,index:b.next,
+      ticket:s.ticket,snapshotHash,bodyHash:hash(page.body),propertiesHash:hash(page.properties),
+      revision:page.revision,prior,notionWrites:0,protectedContent:'UNCHANGED',haltedFrom:b.haltedFrom,
+      at:verified?.at??new Date().toISOString(),readDetail:b.readDetail??null};
+    if(verified){
+      const raw=pageData(verified.page.raw,b.edits[b.next].pageId);
+      if(verified.bodyHash!==audit.bodyHash||raw.body!==page.body||raw.properties!==page.properties||
+          raw.revision!==page.revision||verified.page.body!==raw.body||
+          verified.page.properties!==raw.properties||verified.page.revision!==raw.revision||
+          typeof verified.at!=='string'||!Number.isFinite(Date.parse(verified.at))||
+          JSON.stringify(verified.reconciliation)!==JSON.stringify(audit))
+        fail('PERSISTENCE','Existing pending verification evidence differs');
+    }
+    if(!apply)return {status:'HALTED',checkOnly:true,next:b.next,audit};
+    // This acknowledges only a freshly proven full output. It emits no Notion
+    // request and never repeats the uncertain mutation or rewrites prior pages.
+    if(!verified)atomic(verifiedFile,{page,bodyHash:audit.bodyHash,at:audit.at,reconciliation:audit});
+    b.reconciliations=[...(b.reconciliations??[]),audit];
+    b.next++;b.receipt=null;b.status=b.next===b.edits.length?'COMPLETED':'READY';delete b.error;delete b.haltedFrom;delete b.readDetail;
+    if(b.status==='COMPLETED')this.state.active=null;
+    this.save();
+    return {status:b.status,next:b.next,reconciled:true,audit};
   }
   reconcile(input) {
     const { batchId, planHash, expectedError, action } = input;
@@ -541,9 +623,12 @@ class Broker {
     }
     if (action === 'reconcile_autolink') return this.reconcileAutolink(input);
     if (action === 'reconcile_escaped_arrows') return this.reconcileRendering(input, 'arrows');
+    if (action === 'reconcile_applied_readback') return this.reconcileAppliedReadback(input);
     if (['reconcile_verified','reconcile_receipts','reconcile_unwritten'].includes(action)) return this.reconcile(input);
     const b = this.current(batchId), edit = b.edits[b.next];
     if (action === 'halt') {
+      b.haltedFrom=b.status;
+      if(input.readDetail!==undefined)b.readDetail=String(input.readDetail).slice(0,1000);
       b.status = 'HALTED'; b.error = String(input.reason ?? 'Connector or runner failed').slice(0,1000);
       this.save(); return { status: 'HALTED', next: b.next };
     }
