@@ -230,6 +230,24 @@ page. A restarted recovery must recheck all earlier durable receipts from zero.
 Use the same state directory and exact canonical batch; no journal editing or
 new batch ID is a recovery path.
 
+### Applied output after a failed revision read
+
+`reconcile_applied_readback` is a separate, explicitly invoked broker action for
+`REVISION_READ_ERROR`. Supply the original `batchId`, `planHash`, `expectedError`,
+pending receipt's `snapshotHash`, a fresh complete native `page`, and `apply:false`
+for a check before `apply:true`. It requires the entire pending page to equal
+the immutable planned output, unchanged full properties, a newer valid native
+revision, and intact raw preimages and full verification receipts for every
+earlier target. A readback mismatch, an unwritten page, incomplete reads, changed
+worker content, policy revocation or any evidence drift keeps the barrier.
+
+The action makes zero Notion writes. It durably records the exact applied-state
+proof and advances only that pending target; prior pages are never rewritten.
+The unchanged remaining plan then runs through ordinary fresh preflight,
+authorization, one mutation and protected readback. Restart after receipt
+persistence reuses only the identical recovery evidence. Ordinary `resume`
+continues to accept only its original unwritten authorize failure.
+
 ### Explicit recovery of the 2026-10-18 autolink mismatch
 
 Notion rendered one bare `package-cli.sh` in a central observation as

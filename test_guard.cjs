@@ -643,6 +643,89 @@ test('a fake owned heading inside multiline code rejects the whole run before wr
  await assert.rejects(f.runner.run('fake-heading',[edit(),edit(B)]),/AMBIGUOUS_SECTION/);
  assert.equal(f.writes,0);assert.equal(f.f.b.state.active,null);
 });
+
+function appliedReadbackFixture(t,remaining=false) {
+ const C='cccccccccccccccccccccccccccccccc';
+ const f=fixture(t,remaining?{productionPages:[A,B,C]}:{});begin(f.b,[edit(),edit(B),...(remaining?[edit(C)]:[])]);
+ const first=prepare(f.b);authorize(f.b,first);verify(f.b,first);
+ const pending=prepare(f.b,page(B));authorize(f.b,pending,page(B));
+ f.b.handle({action:'halt',batchId:'observation',reason:'REVISION_READ_ERROR'});
+ const b=f.b.state.batches.observation;
+ const input={action:'reconcile_applied_readback',batchId:'observation',planHash:b.planHash,
+  expectedError:b.error,snapshotHash:b.receipt.snapshotHash,apply:false,
+  page:page(B,body(newStr),{title:'Test'},'2026-10-12T00:01:00Z')};
+ return {f,input};
+}
+test('applied revision recovery checks then records full proof without any Notion request',t=>{
+ const {f,input}=appliedReadbackFixture(t),before=fs.readFileSync(f.b.file,'utf8');
+ const prior=fs.readFileSync(f.b.snapshot('observation',0)+'.verified.json','utf8');
+ const checked=f.b.handle(input);
+ assert.equal(checked.status,'HALTED');assert.equal(checked.next,1);assert.equal(checked.audit.notionWrites,0);
+ assert.equal(fs.readFileSync(f.b.file,'utf8'),before);
+ assert.equal(fs.existsSync(f.b.snapshot('observation',1)+'.verified.json'),false);
+ f.restart();const result=f.b.handle({...input,apply:true});
+ assert.equal(result.status,'COMPLETED');assert.equal(result.next,2);assert.equal(result.request,undefined);
+ assert.equal(result.audit.protectedContent,'UNCHANGED');assert.equal(f.b.state.active,null);
+ assert.equal(fs.readFileSync(f.b.snapshot('observation',0)+'.verified.json','utf8'),prior);
+ assert.equal(f.b.state.batches.observation.planHash,input.planHash);
+ f.restart();rejects('RECONCILE_IDENTITY',()=>f.b.handle({...input,apply:true}));
+ assert.equal(f.b.state.batches.observation.next,2);
+});
+for(const [name,change,code] of [
+ ['wrong plan',{planHash:'0'.repeat(64)},'RECONCILE_IDENTITY'],
+ ['wrong snapshot',{snapshotHash:'0'.repeat(64)},'RECONCILE_IDENTITY'],
+ ['missing apply',{apply:undefined},'RECONCILE_IDENTITY'],
+ ['wrong page',{page:page(A,body(newStr))},'WRONG_PAGE'],
+ ['unwritten page',{page:page(B)},'RECONCILE_CHANGED'],
+ ['changed own proof',{page:page(B,body(newStr)+'\nnew real worker CLAIM',undefined,'2026-10-12T00:01:00Z')},'RECONCILE_CHANGED'],
+ ['changed property',{page:page(B,body(newStr),{title:'new genuine worker'},'2026-10-12T00:01:00Z')},'RECONCILE_CHANGED'],
+ ['old revision',{page:page(B,body(newStr))},'RECONCILE_CHANGED'],
+ ['missing revision',{page:page(B,body(newStr),undefined,null)},'INCOMPLETE_READ']
+])test('applied revision recovery keeps HALTED on '+name,t=>{
+ const {f,input}=appliedReadbackFixture(t),before=fs.readFileSync(f.b.file,'utf8');
+ rejects(code,()=>f.b.handle({...input,...change,apply:change.apply===undefined&&name==='missing apply'?undefined:true}));
+ assert.equal(fs.readFileSync(f.b.file,'utf8'),before);assert.equal(f.b.state.active,'observation');
+});
+test('applied recovery rejects other errors and contradictory mismatch evidence',t=>{
+ const {f,input}=appliedReadbackFixture(t);
+ f.b.state.batches.observation.error='READBACK_MISMATCH';f.b.save();
+ rejects('RECONCILE_SCOPE',()=>f.b.handle({...input,expectedError:'READBACK_MISMATCH',apply:true}));
+ f.b.state.batches.observation.error='REVISION_READ_ERROR';f.b.save();
+ atomic(f.b.snapshot('observation',1)+'.actual.json',{page:input.page});
+ rejects('PERSISTENCE',()=>f.b.handle({...input,apply:true}));
+ assert.equal(f.b.state.batches.observation.status,'HALTED');
+});
+for(const name of ['prior receipt','pending snapshot','policy'])test('applied recovery rechecks '+name,t=>{
+ const {f,input}=appliedReadbackFixture(t);
+ if(name==='prior receipt'){
+  const file=f.b.snapshot('observation',0)+'.verified.json',v=JSON.parse(fs.readFileSync(file,'utf8'));
+  v.page.raw.structuredContent.page_last_edited_at='2026-10-13T00:00:00Z';atomic(file,v);
+ }else if(name==='pending snapshot'){
+  const file=f.b.snapshot('observation',1),s=JSON.parse(fs.readFileSync(file,'utf8'));s.afterHash='0'.repeat(64);atomic(file,s);
+ }else {f.p.productionEnabled=false;f.restart();}
+ rejects(name==='policy'?'PRODUCTION_HOLD':'PERSISTENCE',()=>f.b.handle({...input,apply:true}));
+ assert.equal(f.b.state.batches.observation.status,'HALTED');
+});
+test('recovery restarts after receipt persistence without replaying the uncertain write',t=>{
+ const {f,input}=appliedReadbackFixture(t),b=f.b,save=b.save;
+ b.save=()=>{throw new Error('simulated journal persistence failure');};
+ assert.throws(()=>b.handle({...input,apply:true}),/simulated journal/);b.save=save;
+ const receiptFile=b.snapshot('observation',1)+'.verified.json',saved=fs.readFileSync(receiptFile,'utf8');
+ f.restart();assert.equal(f.b.state.batches.observation.status,'HALTED');
+ const result=f.b.handle({...input,apply:true});assert.equal(result.status,'COMPLETED');
+ assert.equal(fs.readFileSync(receiptFile,'utf8'),saved);assert.equal(result.audit.notionWrites,0);
+});
+test('a recovered middle target keeps the ordinary remaining plan and later recovery receipts valid',t=>{
+ const {f,input}=appliedReadbackFixture(t,true),C='cccccccccccccccccccccccccccccccc';
+ const result=f.b.handle({...input,apply:true});assert.equal(result.status,'READY');assert.equal(result.next,2);
+ f.restart();const r=prepare(f.b,page(C));authorize(f.b,r,page(C));
+ f.b.handle({action:'halt',batchId:'observation',reason:'REVISION_READ_ERROR'});
+ const b=f.b.state.batches.observation;
+ const done=f.b.handle({...input,snapshotHash:b.receipt.snapshotHash,
+  page:page(C,body(newStr),{title:'Test'},'2026-10-12T00:01:00Z'),apply:true});
+ assert.equal(done.status,'COMPLETED');assert.equal(done.audit.prior.length,2);
+ assert.equal(f.b.state.batches.observation.planHash,input.planHash);
+});
 for(const [name,prefix,suffix] of [
  ['native close suffix','<details>\ntext\n</details> intro=`starts\n','\n## NEXT\nends`\n'],
  ['native inner span','<details>\nintro=`starts\n</details>\n','\n## NEXT\nends`\n'],
