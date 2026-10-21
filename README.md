@@ -1,5 +1,30 @@
 # Notion projection guard
 
+## Exact NodeKit pointer rendering incident closure
+
+`reconcile_nodekit_pointer_partial.cjs` is restricted to the five-page
+`NODEKIT-CLI-UF-CLAIM-POINTER-20261021T0817Z` incident. It pins the original
+HALTED plan, ticket, both private snapshot files, installed broker/runner/policy,
+and the exact original, planned and serialized central literal hashes. The
+first page's entire protected prefix, suffix and properties must remain equal;
+its fresh full body/properties/revision must equal the saved unexpected readback.
+All five ordered fresh pages are required, and the four unattempted edits must
+still pass the current owned-section planner. Any future prepared/verified
+evidence, runtime drift, concurrent page change or production hold rejects it.
+
+The helper defaults to check-only. After independent review, an explicit `--apply`
+would save the complete original journal and fresh reads privately and close
+only this incident as `RECONCILED_PARTIAL`. It retains next=0, ticket, error and
+the immutable plan; it makes zero Notion writes, acknowledges zero writes and
+advances zero pages. The original misrendered write is not product acceptance
+or a complete projection. The remaining four edits are never replayed. A new
+complete observation must use current authority and the ordinary guarded path,
+preferably plain literals to avoid uncertain serialization. No normal verifier,
+runtime installation, policy or worker evidence changes are part of this helper.
+A crash after the private audit is saved remains blocked for reconciliation;
+the audit must not be removed to retry. Run its synthetic tests with
+`node --test test_nodekit_pointer_partial.cjs`; no private page content is checked in.
+
 ## Source and installed version
 
 The source repository is `HeaInSeo/notion-projection-guard`. Runtime, tests and

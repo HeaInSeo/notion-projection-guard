@@ -31,7 +31,8 @@ CODE_PATHS = frozenset((
     "reconcile_w02_prewrite.cjs", "router_stale_prewrite_cases.cjs",
     "transport_preprepare_cases.cjs", "v02_partial_cases.cjs",
 ))
-ADDED_CODE_PATHS = frozenset(("reconcile_claim40_superseded.cjs", "claim40_closure_cases.cjs"))
+ADDED_CODE_PATHS = frozenset(("reconcile_claim40_superseded.cjs", "claim40_closure_cases.cjs",
+                             "reconcile_nodekit_pointer_partial.cjs", "test_nodekit_pointer_partial.cjs"))
 # This PR now includes a separately identified post-import P1 correction. These
 # paths are not represented as unchanged bytes; all other imported paths are.
 CORRECTIONS = frozenset(("broker.cjs", "test_guard.cjs", "router_stale_prewrite_cases.cjs",
@@ -45,6 +46,8 @@ SOURCE_UPDATES = {
     "test_guard.cjs": "785653b0e41253b8089f11e4407baecd00d08909",
     "reconcile_claim40_superseded.cjs": "562fa5e9988cfc2f7d73e4c46f035f9e89830678",
     "claim40_closure_cases.cjs": "7acc23d8aec0dd5d8864d567ea5cad6862a76816",
+    "reconcile_nodekit_pointer_partial.cjs": "77310ea22bd8ce455fe3f87e828286e21ead6d4f",
+    "test_nodekit_pointer_partial.cjs": "dfe979241098976ceb5a5de854947a050f84e54e",
     "complete_projection.js": "cef172b96eb58356e65429b92c319791d64adb5d",
     "verify_runtime.cjs": "4880f8e6c57b87153318f852ccacaa4f7004c929",
 }
