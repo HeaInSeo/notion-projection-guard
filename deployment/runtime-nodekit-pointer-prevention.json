@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "repository": "HeaInSeo/notion-projection-guard",
+  "sourceCommit": "1f12ce8b9aa96fe8980bb90947dc1ee7f535491b",
+  "runtimeSha256": {
+    "broker.cjs": "1e929736ca81a71090aebfdf9484fe95f6112fd77783326eaedbeeb2b259daf3",
+    "runner.js": "99a77bf6b5fd88e1b6c9492da54157b141534aa7eec22d547b57337285a8f109"
+  },
+  "policySha256": "f8250aed9541dbf1bbff4fc9c69673877a099cc6b9658dfc4d09cad40e78193d",
+  "hostedEntryPoint": {
+    "path": "complete_projection.js",
+    "sha256": "02cc1e5708d8cef131a085c3f301643a33fd0622fd107feabcf99cd8e1951dc4"
+  },
+  "hostedSupervisionGate": {
+    "path": "supervision_gate.js",
+    "sha256": "bd0ce2e63f65f784bc6374b4af31a75c5e5dc54f34bf212ae9e45b20c9330adc"
+  },
+  "closureSource": {
+    "sourceCommit": "fe9cb27bc2091dfd0bfc75132236fc07094a70e7",
+    "path": "reconcile_nodekit_pointer_partial.cjs",
+    "sha256": "8d50a25a187ff12a97ab2a518a8a501253317cae62c7ae87bc4129e1639d1e8f",
+    "adjacentBrokerSha256": "4c639747b1d0b2ad53f0b66950230d34282fe228aa38a9fbf02453afb38561b7",
+    "requiredOrder": "Run exact closure from the full pinned closure tree before replacing the installed broker; then install this prevention source tree."
+  },
+  "policySource": "Existing private approved runtime policy; bytes and permission scope remain unchanged.",
+  "installationStatus": "Candidate only; not deployed or recovered. Independent review/current-head Codex/CI/normal landing, explicit exact legacy closure, private backup/pins/readback and canary required."
+}
