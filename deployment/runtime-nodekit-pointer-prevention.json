@@ -1,7 +1,7 @@
 {
   "version": 1,
   "repository": "HeaInSeo/notion-projection-guard",
-  "sourceCommit": "1f12ce8b9aa96fe8980bb90947dc1ee7f535491b",
+  "sourceCommit": "d77969f2d84776226c62f36c5fbfcf4af98de57f",
   "runtimeSha256": {
     "broker.cjs": "1e929736ca81a71090aebfdf9484fe95f6112fd77783326eaedbeeb2b259daf3",
     "runner.js": "99a77bf6b5fd88e1b6c9492da54157b141534aa7eec22d547b57337285a8f109"
