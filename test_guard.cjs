@@ -9,7 +9,7 @@ require('./claim40_closure_cases.cjs');
 const { Broker, hash, pageData, plan, atomic } = require('./broker.cjs');
 const A='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', B='bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
 const heading='## CURRENT CENTRAL OBSERVATION · test';
-const oldStr='central_status=WAIT', newStr='central_status=VERIFIED';
+const oldStr='central-status=WAIT', newStr='central-status=VERIFIED';
 const history='immutable history 🧾 '.repeat(250);
 function body(status=oldStr) { return heading+'\n'+status+'\n## HISTORICAL WORKER PROOF\n'+history+'\n```json\n{"QUEUE_EVENT_V1":true,"event_id":"real","session_id":"worker","lease_state":"RELEASED"}\n```\n<page url="https://notion.so/cccccccccccccccccccccccccccccccc">Child</page>\n'; }
 function page(pageId=A, content=body(), props={title:'Test'}, revision='2026-10-12T00:00:00Z') {
@@ -33,8 +33,8 @@ const w02Sections = [
   {pageId:'3f586e6dd1d181ebb43dd7de62aa2ca4',heading:'## CURRENT · 마지막 중앙 관측 · QSYNC-20261010T145034Z-v6 · W02.A KEEP_GATED ON W01.3'},
   {pageId:'3f586e6dd1d181cd9f5bdcdab6290de7',heading:'## CURRENT · 마지막 중앙 관측 · QSYNC-20261010T145034Z-v6 · W02.A REVIEW KEEP_GATED'}
 ];
-const ownPreflight = '## OPERATOR PREFLIGHT NOTE (no CLAIM, no lease)\nworker_note=DESIGN_GAP; original evidence preserved\n';
-function w02Body(section, status=oldStr) { return ownPreflight+section.heading+'\n'+status+'\n## 착수·범위·증거\n'+body('historical_status=KEPT'); }
+const ownPreflight = '## OPERATOR PREFLIGHT NOTE (no CLAIM, no lease)\nworker-note=DESIGN_GAP; original evidence preserved\n';
+function w02Body(section, status=oldStr) { return ownPreflight+section.heading+'\n'+status+'\n## 착수·범위·증거\n'+body('historical-status=KEPT'); }
 function w02Edit(section, changes={}) { return {...section,oldStr,newStr,...changes}; }
 for (const section of w02Sections) {
   test('exact W02 central section preserves earlier preflight, later proof and all properties: '+section.pageId,t=>{
@@ -64,7 +64,7 @@ for (const section of w02Sections) {
   test('W02 worker edit and property injection are rejected: '+section.pageId,t=>{
     const {b}=fixture(t,{centralSections:w02Sections});
     rejects('EDIT_SCHEMA',()=>begin(b,[w02Edit(section,{properties:{'세션 ID':'forged'}})]));
-    begin(b,[w02Edit(section,{oldStr:'worker_note=DESIGN_GAP',newStr:'worker_note=READY'})]);
+    begin(b,[w02Edit(section,{oldStr:'worker-note=DESIGN_GAP',newStr:'worker-note=READY'})]);
     rejects('OUTSIDE_SECTION',()=>prepare(b,page(section.pageId,w02Body(section))));
   });
   for (const marker of ['event_id=worker','```json\n{"QUEUE_EVENT_V1":true}\n```','### own evidence','<page url="https://notion.so/'+A+'">Child</page>'])
@@ -209,7 +209,7 @@ test('incomplete/unknown read and wrong page are rejected',t=>{
 });
 test('same observation cannot carry changed edit and duplicate pages are rejected',t=>{
   const {b}=fixture(t);rejects('DUPLICATE_PAGE',()=>begin(b,[edit(),edit()]));begin(b);
-  rejects('BATCH_REUSE',()=>begin(b,[edit(A,{newStr:'central_status=OTHER'})]));
+  rejects('BATCH_REUSE',()=>begin(b,[edit(A,{newStr:'central-status=OTHER'})]));
 });
 test('another process cannot plan around the global barrier',t=>{
   const f=fixture(t);rejects('LOCKED',()=>new Broker(f.root,f.p));
@@ -419,7 +419,7 @@ test('fresh pending-page drift after receipt checks blocks without acknowledging
   assert.equal(b.state.batches.observation.status,'HALTED');assert.equal(b.state.batches.observation.next,1);
 });
 
-function legacyAutolink(b, edits=[edit(A,{newStr:'central_status=package-cli.sh awaiting CI'})], actualBody) {
+function legacyAutolink(b, edits=[edit(A,{newStr:'central-status=package-cli.sh awaiting CI'})], actualBody) {
   // A journal produced before AUTOLINK_RISK existed; upgrade the real persisted
   // schema rather than allowing the new begin() to authorize this legacy text.
   b.state.batches.observation={planHash:hash(JSON.stringify(edits)),edits:structuredClone(edits),
@@ -454,7 +454,7 @@ for (const spelling of ['aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', A.toUpperCase()]
   });
   test('autolink recovery accepts the original admitted UUID spelling: '+spelling,t=>{
     const {b}=fixture(t);const legacy=legacyAutolink(b,[edit(spelling,{
-      newStr:'central_status=package-cli.sh awaiting CI'})]);
+      newStr:'central-status=package-cli.sh awaiting CI'})]);
     const result=b.handle(legacy.input);
     assert.equal(result.status,'COMPLETED');assert.equal(result.reconciliation.notionWrites,0);
     assert.equal(b.state.batches.observation.edits[0].pageId,spelling);
@@ -486,7 +486,7 @@ for(const [name,render] of [
   ['extra change inside intended literal',s=>s.replace('awaiting CI','approved')],
   ['worker proof change',s=>s.replace('"session_id":"worker"','"session_id":"forged"')]
 ])test('reviewed recovery does not admit '+name,t=>{
-  const {b}=fixture(t);const intended=body('central_status=[package-cli.sh](http://package-cli.sh) awaiting CI');
+  const {b}=fixture(t);const intended=body('central-status=[package-cli.sh](http://package-cli.sh) awaiting CI');
   const legacy=legacyAutolink(b,undefined,render(intended));
   rejects('RECONCILE_SCOPE',()=>b.handle(legacy.input));assert.equal(b.state.active,'observation');
 });
@@ -507,20 +507,20 @@ test('snapshot tampering, production hold and multi-page legacy plans cannot be 
   fs.writeFileSync(legacy.receipt.snapshot,JSON.stringify(snap));
   rejects('PERSISTENCE',()=>f.b.handle(legacy.input));
   const other=fixture(t);const multi=legacyAutolink(other.b,
-    [edit(A,{newStr:'central_status=package-cli.sh awaiting CI'}),edit(B)]);
+    [edit(A,{newStr:'central-status=package-cli.sh awaiting CI'}),edit(B)]);
   rejects('RECONCILE_IDENTITY',()=>other.b.handle(multi.input));
 });
 test('hostname-shaped new text rejects before the first fetch and before claiming the durable barrier',async t=>{
   const f=runnerFixture(t);await assert.rejects(f.runner.run('new',[edit(A,{newStr:'tool=package-cli.sh'})]),/AUTOLINK_RISK/);
   assert.equal(f.fetches,0);assert.equal(f.writes,0);assert.equal(f.f.b.state.active,null);
 });
-test('explicit code or Markdown links are admitted, escaped and unclosed markup is not',t=>{
-  for(const s of ['tool=`package-cli.sh`','tool=``package-cli.sh``','tool=[package-cli.sh](http://package-cli.sh)']) {
+test('explicit Markdown links are admitted; serialized or unclosed code is not',t=>{
+  for(const s of ['tool=[package-cli.sh](http://package-cli.sh)']) {
     const {b}=fixture(t);assert.equal(begin(b,[edit(A,{newStr:s})]).status,'READY');
   }
-  for(const s of ['tool=package-cli.sh','tool=`package-cli.sh','tool=\\`package-cli.sh\\`',
+  for(const s of ['tool=`package-cli.sh`','tool=``package-cli.sh``','tool=package-cli.sh','tool=`package-cli.sh','tool=\\`package-cli.sh\\`',
     'tool=\\[package-cli.sh](http://package-cli.sh)','tool=https://example.com/file']) {
-    const {b}=fixture(t);assert.throws(()=>begin(b,[edit(A,{newStr:s})]),e=>['AUTOLINK_RISK','INLINE_CODE_BOUNDARY'].includes(e.code));assert.equal(b.state.active,null);
+    const {b}=fixture(t);assert.throws(()=>begin(b,[edit(A,{newStr:s})]),e=>['AUTOLINK_RISK','INLINE_CODE_BOUNDARY','MARKDOWN_SERIALIZATION_RISK'].includes(e.code));assert.equal(b.state.active,null);
   }
 });
 test('runner explicit autolink reconciliation performs one fresh fetch and zero Notion mutations',async t=>{
@@ -530,7 +530,7 @@ test('runner explicit autolink reconciliation performs one fresh fetch and zero 
   assert.equal(result.status,'COMPLETED');assert.equal(f.fetches,1);assert.equal(f.writes,0);assert.equal(f.closed,true);
 });
 test('legacy READY replay cannot bypass autolink preflight or issue a Notion mutation',async t=>{
-  const f=runnerFixture(t);const edits=[edit(A,{newStr:'central_status=package-cli.sh awaiting CI'})];
+  const f=runnerFixture(t);const edits=[edit(A,{newStr:'central-status=package-cli.sh awaiting CI'})];
   f.f.b.state.batches.observation={planHash:hash(JSON.stringify(edits)),edits,next:0,status:'READY',receipt:null};
   f.f.b.state.active='observation';f.f.b.save();
   await assert.rejects(f.runner.run('observation',edits),/AUTOLINK_RISK/);
@@ -548,7 +548,7 @@ test('completed legacy autolink batch replays as consumed without rejecting or r
   b.handle(legacy.input);assert.equal(begin(b,edits).status,'COMPLETED');assert.equal(b.state.active,null);
 });
 test('READY replay validates remaining pages while preserving a previously completed safe page',t=>{
-  const {b}=fixture(t);const edits=[edit(),edit(B,{newStr:'central_status=package-cli.sh awaiting CI'})];
+  const {b}=fixture(t);const edits=[edit(),edit(B,{newStr:'central-status=package-cli.sh awaiting CI'})];
   b.state.batches.observation={planHash:hash(JSON.stringify(edits)),edits,next:1,status:'READY',receipt:null};
   b.state.active='observation';b.save();
   rejects('AUTOLINK_RISK',()=>begin(b,edits));assert.equal(b.state.batches.observation.next,1);
@@ -556,7 +556,7 @@ test('READY replay validates remaining pages while preserving a previously compl
 
 const arrowIds=[A,B,...['c','d','e','f'].map(c=>c.repeat(32))];
 function legacyArrows(b, render=s=>s.replaceAll(' -> ',' -\\> ')) {
-  const edits=arrowIds.map((p,i)=>edit(p,{newStr:i===0?'central_status=writer -> review -> landing':newStr}));
+  const edits=arrowIds.map((p,i)=>edit(p,{newStr:i===0?'central-status=writer -> review -> landing':newStr}));
   const legacy=legacyAutolink(b,edits,render(body(edits[0].newStr)));
   legacy.input.action='reconcile_escaped_arrows';return {...legacy,edits};
 }
@@ -602,11 +602,11 @@ test('native-read recovery rejects altered historical rendering evidence',t=>{
  const b=f.b.state.batches.observation;rejects('PERSISTENCE',()=>f.b.handle({action:'reconcile_unprepared_read',batchId:'observation',planHash:b.planHash,expectedError:b.error,page:page(B),apply:true}));
  assert.equal(b.status,'HALTED');
 });
-test('plain ASCII arrows reject before fetch or durable admission; code and Unicode arrows remain stable',async t=>{
+test('plain ASCII arrows reject before fetch or durable admission; Unicode arrows remain stable',async t=>{
   const f=runnerFixture(t);
-  await assert.rejects(f.runner.run('arrows',[edit(A,{newStr:'central_status=writer -> review'})]),/MARKDOWN_ESCAPE_RISK/);
+  await assert.rejects(f.runner.run('arrows',[edit(A,{newStr:'central-status=writer -> review'})]),/MARKDOWN_ESCAPE_RISK/);
   assert.equal(f.fetches,0);assert.equal(f.writes,0);assert.equal(f.f.b.state.active,null);
-  for(const s of ['central_status=writer → review','central_status=`writer -> review`']) {
+  for(const s of ['central-status=writer → review']) {
     const {b}=fixture(t);assert.equal(begin(b,[edit(A,{newStr:s})]).status,'READY');
   }
 });
@@ -657,19 +657,19 @@ test('resume identity rejection preserves an already reconciled READY batch for 
   assert.equal((await f.newRunner().run('observation',legacy.edits)).status,'COMPLETED');
   assert.equal(f.writes,5);assert.deepEqual(f.pages.get(A),legacy.p);
 });
-test('inline code masks literal backslashes and shorter backtick runs before rendering preflight',t=>{
+test('inline code and escaped backticks cannot hide a new serialization risk',t=>{
   for(const s of ['path=`C:\\tmp\\package-cli.sh -> next`',
     'path=`C:\\tmp\\` then → next', 'path=``C:\\tmp `inner` -> next``']) {
-    const {b}=fixture(t);assert.equal(begin(b,[edit(A,{newStr:s})]).status,'READY');
+    const {b}=fixture(t);rejects('MARKDOWN_SERIALIZATION_RISK',()=>begin(b,[edit(A,{newStr:s})]));assert.equal(b.state.active,null);
   }
   const {b}=fixture(t);
-  rejects('MARKDOWN_ESCAPE_RISK',()=>begin(b,[edit(A,{newStr:'path=\\`C:\\tmp -> next\\`'})]));
+  rejects('MARKDOWN_SERIALIZATION_RISK',()=>begin(b,[edit(A,{newStr:'path=\\`C:\\tmp -> next\\`'})]));
 });
 test('run identity rejection also preserves a reconciled READY plan for the correct caller',async t=>{
   const f=runnerFixture(t,undefined,{productionPages:arrowIds});const legacy=legacyArrows(f.f.b);
   f.pages.set(A,legacy.p);for(const p of arrowIds.slice(1))f.pages.set(p,page(p));
   f.f.b.handle(legacy.input);
-  const wrong=structuredClone(legacy.edits);wrong[1].newStr='central_status=DIFFERENT';
+  const wrong=structuredClone(legacy.edits);wrong[1].newStr='central-status=DIFFERENT';
   await assert.rejects(f.runner.run('observation',wrong),/BATCH_REUSE/);
   assert.equal(f.f.b.state.batches.observation.status,'READY');assert.equal(f.writes,0);
   assert.equal((await f.newRunner().run('observation',legacy.edits)).status,'COMPLETED');assert.equal(f.writes,5);
@@ -692,9 +692,9 @@ test('a later selection inside an existing span stops all writes during batch pr
   assert.equal(f.writes,0);assert.equal(f.f.b.state.active,null);
 });
 for(const value of ['field=`value`','field=``literal ` tick``','field=\\`escaped tick','path=`C:\\work\\`'])
-  test('complete stable code fields remain supported '+value,t=>{
-    const {b}=fixture(t);begin(b,[edit(A,{newStr:value})]);const r=prepare(b);authorize(b,r);
-    assert.equal(verify(b,r,page(A,body(value))).status,'COMPLETED');
+  test('new code fields reject without claiming a durable barrier '+value,t=>{
+    const {b}=fixture(t);rejects('MARKDOWN_SERIALIZATION_RISK',()=>begin(b,[edit(A,{newStr:value})]));
+    assert.equal(b.state.active,null);assert.deepEqual(b.state.batches,{});
   });
 for(const change of [{oldStr:'status',newStr:'state'},{oldStr:'`'+oldStr,newStr:'`'+newStr}])
   test('prepare independently rejects an edge inside a code span '+JSON.stringify(change),t=>{

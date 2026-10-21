@@ -45,7 +45,7 @@ function fixture(t){
   fs.writeFileSync(path.join(runtime,'policy.json'),JSON.stringify(policy),{mode:0o600});
   const b=new Broker(root,policy);
   t.after(()=>{b.close();fs.rmSync(dir,{recursive:true,force:true});});
-  const edits=IDS.map((pageId,i)=>({pageId,heading:heads[i],oldStr:'central_status=WAIT_'+i,newStr:'central_status=REQUESTED_'+i}));
+  const edits=IDS.map((pageId,i)=>({pageId,heading:heads[i],oldStr:'central-status=WAIT-'+i,newStr:'central-status=REQUESTED-'+i}));
   b.handle({action:'begin',batchId:BATCH,edits});
   const pages=[];
   for(let i=0;i<4;i++){
@@ -55,7 +55,7 @@ function fixture(t){
     pages.push(raw(i,body(i,edits[i].newStr)));
     b.handle({action:'verify',batchId:BATCH,ticket:receipt.ticket,page:pages[i]});
   }
-  pages.push(raw(4,body(4,'central_status=FRESH_EXTRA_CONTEXT')));
+  pages.push(raw(4,body(4,'central-status=FRESH_EXTRA_CONTEXT')));
   assert.throws(()=>b.handle({action:'prepare',batchId:BATCH,page:pages[4]}),e=>e.code==='AMBIGUOUS_LITERAL');
   b.handle({action:'halt',batchId:BATCH,reason:ERROR});
   const f={dir,root,runtime,b,policy,edits,raw:pages};f.helper=loadHelper(f);return f;
@@ -89,7 +89,7 @@ test('explicit obsolete-final closure records four real receipts, zero writes/AC
   assert.equal(fs.statSync(out.auditFile).mode&0o077,0);
   assert.equal(f.b.handle({action:'begin',batchId:BATCH,edits:f.edits}).status,'ABORTED_UNWRITTEN');
   assert.throws(()=>f.b.handle({action:'prepare',batchId:BATCH,page:f.raw[4]}));
-  assert.equal(f.b.handle({action:'begin',batchId:'fresh',edits:[{...f.edits[4],oldStr:'central_status=FRESH_EXTRA_CONTEXT'}]}).status,'READY');
+  assert.equal(f.b.handle({action:'begin',batchId:'fresh',edits:[{...f.edits[4],oldStr:'central-status=FRESH_EXTRA_CONTEXT'}]}).status,'READY');
 });
 test('check-only is read-only and is the exported default',t=>{
   const f=fixture(t),before=fs.readFileSync(f.b.file,'utf8');
@@ -117,8 +117,8 @@ for(const [name,mutate] of [
   ['unordered fresh pages',f=>{[f.raw[0],f.raw[1]]=[f.raw[1],f.raw[0]];}],
   ['unknown fresh body',f=>{f.raw[0]=raw(0,body(0,f.edits[0].newStr)+'\n<unknown/>');}],
   ['changed reviewed Router body',f=>{f.raw[4]=raw(4,body(4,'another concurrent value'));}],
-  ['changed reviewed Router properties',f=>{f.raw[4]=raw(4,body(4,'central_status=FRESH_EXTRA_CONTEXT'),{title:'changed'});}],
-  ['changed reviewed Router revision',f=>{f.raw[4]=raw(4,body(4,'central_status=FRESH_EXTRA_CONTEXT'),{title:'Private test'},'2026-10-20T00:01:00.000Z');}],
+  ['changed reviewed Router properties',f=>{f.raw[4]=raw(4,body(4,'central-status=FRESH_EXTRA_CONTEXT'),{title:'changed'});}],
+  ['changed reviewed Router revision',f=>{f.raw[4]=raw(4,body(4,'central-status=FRESH_EXTRA_CONTEXT'),{title:'Private test'},'2026-10-20T00:01:00.000Z');}],
   ['missing latest successor RELEASE',f=>{f.raw[1]=raw(1,body(1,f.edits[1].newStr).replace(own.event_id,'old-event'));}],
   ['different successor head',f=>{f.raw[1]=raw(1,body(1,f.edits[1].newStr).replace(HEAD,'e'.repeat(40)));}],
   ['different successor role',f=>{f.raw[1]=raw(1,body(1,f.edits[1].newStr).replace('"role":"guardrail"','"role":"operator"'));}],
@@ -126,7 +126,7 @@ for(const [name,mutate] of [
   ['later successor HOLD while old RELEASE remains',f=>{f.raw[1]=raw(1,body(1,f.edits[1].newStr)+'\n## CURRENT OWN EVENT\n```json\nQUEUE_EVENT_V1 '+JSON.stringify({...own,event_id:'later-hold',version:13,kind:'HOLD'})+'\n```');}],
   ['old RELEASE quoted outside worker record',f=>{f.raw[1]=raw(1,heads[1]+'\n'+f.edits[1].newStr+'\n## Quoted history\nQUEUE_EVENT_V1 '+JSON.stringify(own));}],
   ['paired revision changed without a body delta',f=>{f.raw[1]=raw(1,body(1,f.edits[1].newStr),{title:'Private test'},'2026-10-20T00:01:00.000Z');}],
-  ['completed central projection changed',f=>{f.raw[2]=raw(2,body(2,'central_status=other'));}],
+  ['completed central projection changed',f=>{f.raw[2]=raw(2,body(2,'central-status=other'));}],
   ['prepared final-page snapshot',f=>{atomic(f.b.snapshot(BATCH,4),{ticket:'exists'});}],
   ['unexpected old readback mismatch',f=>{atomic(f.b.snapshot(BATCH,0)+'.actual.json',{error:'old mismatch'});}],
   ['missing prior verified receipt',f=>{fs.unlinkSync(f.b.snapshot(BATCH,2)+'.verified.json');}],

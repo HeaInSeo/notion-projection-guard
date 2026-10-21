@@ -108,3 +108,17 @@ runtime 시험은 live lock 옆의 읽기 전용 실행, runtime·manifest·rece
 확인한다. 실제 Notion 원문 대신 합성 입력만 사용한다.
 실제 서버 대조와 로컬 시험 결과는
 [VERIFICATION_20261020_OPERATIONS.md](VERIFICATION_20261020_OPERATIONS.md)에 기록했다.
+
+## Hosted supervision gate verification (PR6 P2)
+
+A release declaring `hostedSupervisionGate` must supply `--source`. The verifier
+checks the repository-specific exact gate path, SHA256, regular source file,
+and final source reread alongside the broker, runner and hosted entry. Stale,
+changed, missing or symlink gate files cannot return MATCH. Provenance also pins
+`supervision_gate.js` independently of the mutable deployment manifest.
+
+Only the four checked-in historical repo/source-commit pairs predating the gate
+descriptor may omit it. Their result explicitly reports `legacyManifest:true`
+and `hostedSupervisionGateChecked:false`; this is not a hosted-gate match. New
+source commits missing the descriptor fail `HOSTED_GATE_REQUIRED`. Declared gate
+with no source fails `SOURCE_REQUIRED` before returning any MATCH result.

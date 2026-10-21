@@ -4,7 +4,7 @@ const fs=require('node:fs'),os=require('node:os'),path=require('node:path');
 const {Broker,pageData}=require('./broker.cjs');
 const id='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 const heading='## CURRENT CENTRAL OBSERVATION · revision regression';
-const edit={pageId:id,heading,oldStr:'status=`BEFORE`',newStr:'status=`AFTER`'};
+const edit={pageId:id,heading,oldStr:'status=`BEFORE`',newStr:'status=AFTER'};
 function page(revision){
   const value={id,text:'<properties>\n{"title":"Test"}\n</properties>\n<content>\n'+heading+'\n'+edit.oldStr+'\n## WORKER HISTORY\npreserved\n</content>'};
   if(revision!==undefined)value.page_last_edited_at=revision;

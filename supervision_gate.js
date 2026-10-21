@@ -11,7 +11,7 @@
     return Number.isFinite(stamp)&&new Date(stamp).toISOString()===canonical;
   };
   const actions=new Set(['PROMOTE','RECIRCULATE','KEEP_GATED','DONE']);
-  const repositories=new Set(['nodekit','sori']); // Same scope as complete_projection.js.
+  const repositories=new Set(['nodekit','sori','bori']); // Same scope as complete_projection.js.
   function eventKey(event) {
     need(repositories.has(event.repository)&&event.source,'known projection repository/source required');
     const s=event.source;
@@ -28,7 +28,7 @@
     return canonical.active!==null||canonical.nonterminal.length>0;
   }
   function carriedRepository(key) {
-    const merged=key.match(/^(nodekit|sori)#([1-9]\d*):([a-f0-9]{40}):([a-f0-9]{40}):MERGED$/);
+    const merged=key.match(/^(nodekit|sori|bori)#([1-9]\d*):([a-f0-9]{40}):([a-f0-9]{40}):MERGED$/);
     if(merged){need(Number.isSafeInteger(Number(merged[2])),'invalid carried PR number');return merged[1];}
     let value;try{value=JSON.parse(key);}catch{need(false,'unknown carried event key');}
     need(Array.isArray(value)&&value.length===5&&value[0]==='RELEASE'&&repositories.has(value[1])&&

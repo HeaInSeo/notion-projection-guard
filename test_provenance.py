@@ -106,6 +106,21 @@ class ProvenanceTests(unittest.TestCase):
         with self.assertRaisesRegex(VerificationError, "pinned added source differs"):
             verify(self.root, self.anchors, pins)
 
+    def test_supervision_gate_has_an_independent_source_pin(self):
+        name = "supervision_gate.js"
+        file = self.root / name
+        file.write_text("reviewed BORI gate source\n")
+        git(self.root, "add", name)
+        git(self.root, "commit", "-qm", "pin hosted supervision gate fixture")
+        pins = {name: git(self.root, "rev-parse", "HEAD:" + name)}
+        self.assertIn(name, verify(self.root, self.anchors, pins)["operationalSourceUpdates"])
+        file.write_text("stale pre-BORI gate\n")
+        # Changing a mutable deployment declaration cannot change this source pin.
+        (self.root / "deployment/runtime-gate.json").write_text(json.dumps({
+            "hostedSupervisionGate": {"path": name, "sha256": hashlib.sha256(file.read_bytes()).hexdigest()}}))
+        with self.assertRaisesRegex(VerificationError, "pinned added source differs"):
+            verify(self.root, self.anchors, pins)
+
     def test_35_duplicate_pairs_fail(self):
         self.change_json(ANCHORS["historyMap"], lambda h: h.update(commits=[h["commits"][0]] * 35))
         self.rejected("duplicate history")

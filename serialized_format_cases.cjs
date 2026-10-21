@@ -44,9 +44,38 @@ test('serialized replacement preserves exact exported heading, history and worke
   const result=plan(pageData(page(),A),edit());
   assert.equal(result.expected,body(newStr));assert.ok(result.expected.endsWith(proof));
 });
-test('underscore heading compatibility also works with the original Markdown literal format',t=>{
-  const b=fixture(t),e=edit({oldStr:'status=`OLD`',newStr:'status=`NEW`'});
+test('underscore heading compatibility removes the original Markdown literal into stable plain text',t=>{
+  const b=fixture(t),e=edit({oldStr:'status=`OLD`',newStr:'status=NEW'});
   assert.equal(preflight(b,e,page(body(e.oldStr))).status,'SAFE_LITERAL');
+});
+for(const replacement of ['state=`ACTIVE`; pair=KEEP_GATED','state=KEEP_GATED',
+  'state=KEEP\\_GATED','state=``ACTIVE``','state=\\`ACTIVE\\`'])
+  test('incident renderer risk rejects before batch admission or page reads: '+replacement,t=>{
+    const b=fixture(t),bad=edit({newStr:replacement});
+    for(const action of ['validate_batch','begin'])
+      reject('MARKDOWN_SERIALIZATION_RISK',()=>b.handle({action,batchId:'format',edits:[bad]}));
+    reject('MARKDOWN_SERIALIZATION_RISK',()=>preflight(b,bad));
+    assert.equal(b.state.active,null);assert.deepEqual(b.state.batches,{});
+    assert.deepEqual(fs.readdirSync(b.root),['broker.lock']);
+  });
+test('a risky later page rejects the entire batch before a safe first page can write',t=>{
+  const b=fixture(t),second='b'.repeat(32);b.policy.productionPages.push(second);
+  reject('MARKDOWN_SERIALIZATION_RISK',()=>b.handle({action:'begin',batchId:'format',
+    edits:[edit(),edit({pageId:second,newStr:'second=`CLAIM`'})]}));
+  assert.equal(b.state.active,null);assert.deepEqual(b.state.batches,{});
+  assert.deepEqual(fs.readdirSync(b.root),['broker.lock']);
+});
+for(const phase of ['READY','PREPARED'])test('persisted '+phase+' plan cannot bypass serialization prewrite guard',t=>{
+  const b=fixture(t),r=prepared(b),batch=b.state.batches.format;
+  // Model an already persisted pre-upgrade plan. Neither gate may authorize
+  // unsafe text even when begin admission happened under an older broker.
+  batch.edits[0].newStr='state=`ACTIVE`; pair=KEEP_GATED';
+  if(phase==='READY'){batch.status='READY';batch.receipt=null;}
+  b.save();const before=fs.readFileSync(b.file,'utf8');
+  reject('MARKDOWN_SERIALIZATION_RISK',()=>phase==='READY'
+    ?b.handle({action:'prepare',batchId:'format',page:page()})
+    :authorize(b,r));
+  assert.equal(fs.readFileSync(b.file,'utf8'),before);
 });
 for(const selection of ['WAIT','state=<code>WAIT</code>','OLD-1</code>; state=<code>WAIT</code>']){
   test('selection must not cut a serialized code field: '+selection,t=>{
@@ -99,7 +128,7 @@ for(const change of ['body','properties','revision'])test('fresh authorization s
   reject('CONCURRENT_CHANGE',()=>authorize(b,r,p));
   assert.equal(b.state.batches.format.status,'PREPARED');
 });
-for(const change of ['heading escape','worker suffix','worker property','code serialization'])
+for(const change of ['heading escape','worker suffix','worker property','code serialization','central wording'])
   test('exact verification still halts on '+change,t=>{
     const b=fixture(t),r=prepared(b);authorize(b,r);
     let content=body(newStr),props={title:'Test','이벤트 ID':'real'};
@@ -107,6 +136,7 @@ for(const change of ['heading escape','worker suffix','worker property','code se
     if(change==='worker suffix')content+='\nnew own release';
     if(change==='worker property')props['이벤트 ID']='new';
     if(change==='code serialization')content=content.replace('<code>literal `tick`</code>','`literal tick`');
+    if(change==='central wording')content=content.replace('state: REQUESTED','state: DONE');
     reject('READBACK_MISMATCH',()=>b.handle({action:'verify',batchId:'format',ticket:r.ticket,page:page(content,props)}));
     assert.equal(b.state.batches.format.status,'HALTED');assert.equal(b.state.batches.format.next,0);
     reject('UNRESOLVED_BATCH',()=>b.handle({action:'begin',batchId:'later',edits:[edit()]}));
@@ -119,9 +149,10 @@ const shared=[
   ['3bf86e6dd1d18110938bc358e17c779e','## CURRENT INCIDENT MAINTENANCE · BODY_RANGE_OVERWRITE-20261011T2334Z · RESTORED_VERIFIED / ADOPTION_PENDING'],
   ['3ed86e6dd1d18118b0b8d98bb91892fb','## CURRENT CENTRAL OBSERVATION · NPR-20261012 · hub'],
   ['3b286e6dd1d1811d9308d9a2b56c9de4','## CURRENT CENTRAL OBSERVATION · NPR-20261012 · dashboard']];
-const native={nodekit:['3f386e6dd1d18110bf66c5204284ed46','3f386e6dd1d181b5b467e20fafa69365'],
+const native={bori:['3f786e6dd1d18184ae63d4829e359c90','3f986e6dd1d1815ea6daf86a6cc02520'],
+  nodekit:['3f386e6dd1d18110bf66c5204284ed46','3f386e6dd1d181b5b467e20fafa69365'],
   sori:['3f586e6dd1d181ebb43dd7de62aa2ca4','3f586e6dd1d181cd9f5bdcdab6290de7']};
-const bodies={nodekit:[['3f086e6dd1d1818e9aecdc093a08cda9','## CURRENT CENTRAL OBSERVATION · NPR-20261012 · nodekit_index']],
+const bodies={bori:[],nodekit:[['3f086e6dd1d1818e9aecdc093a08cda9','## CURRENT CENTRAL OBSERVATION · NPR-20261012 · nodekit_index']],
   sori:[[native.sori[0],'## CURRENT · 마지막 중앙 관측 · QSYNC-20261010T145034Z-v6 · W02.A KEEP_GATED ON W01.3'],
     [native.sori[1],'## CURRENT · 마지막 중앙 관측 · QSYNC-20261010T145034Z-v6 · W02.A REVIEW KEEP_GATED'],
     ['3f586e6dd1d181ddb9f3e7217f64bfcd','## CURRENT CENTRAL OBSERVATION · NPR-20261012 · sori_index']]};
@@ -146,9 +177,9 @@ function projection(repositories=['sori']){
   }};}};
   return {bundle,pages,client:factory(tools,config),get calls(){return calls;},get reads(){return reads;}};
 }
-for(const repos of [['nodekit'],['sori'],['nodekit','sori']])test('plain identity requires full mandatory native and body readback: '+repos,async()=>{
+for(const repos of [['nodekit'],['sori'],['nodekit','sori'],['bori'],['nodekit','sori','bori']])test('plain identity requires full mandatory native and body readback: '+repos,async()=>{
   const f=projection(repos),r=await f.client.run(f.bundle);
-  assert.equal(r.bodyTargets,repos.length===2?9:repos[0]==='sori'?8:6);
+  assert.equal(r.bodyTargets,5+(repos.includes('nodekit')?1:0)+(repos.includes('sori')?3:0));
   assert.equal(r.nativeTargets,repos.length*2);assert.equal(r.protectedContent,'UNCHANGED');assert.equal(f.calls,1);
   for(const p of f.pages.values())assert.equal(p.props['이벤트 ID'],'genuine-release');
 });
@@ -165,6 +196,10 @@ for(const [name,mutate] of [
   ['plain duplicate identity',b=>{b.edits[0].newStr+='; observation-id: STALE';}],
   ['legacy identity in plain native metadata',b=>{b.native[0].properties['큐 정리 근거']='observation_id=`PLAIN-TEST-1`; next';}],
   ['mixed metadata duplicate',b=>{b.native[0].properties['큐 정리 근거']+='; observation_id=`STALE`';}],
+  ['backtick after plain body marker',b=>{b.edits[0].newStr+='; state=`CLAIM`';}],
+  ['underscore after plain body marker',b=>{b.edits[0].newStr+='; state=KEEP_GATED';}],
+  ['backtick after plain native marker',b=>{b.native[0].properties['큐 정리 근거']+='; state=`CLAIM`';}],
+  ['underscore after plain native marker',b=>{b.native[0].properties['큐 정리 근거']+='; state=KEEP_GATED';}],
   ['missing mandatory body',b=>{b.edits.pop();}],
   ['missing mandatory native',b=>{b.native.pop();}]
 ])test('invalid plain manifest rejects before reads or writes: '+name,async()=>{
@@ -181,7 +216,7 @@ function standaloneRuntime(t){
     fs.writeFileSync(path.join(dir,name),bytes);pins[name]=crypto.createHash('sha256').update(bytes).digest('hex');
   }
   const entry='hosted entry';fs.writeFileSync(path.join(dir,'complete_projection.js'),entry);
-  const release={version:1,repository:'HeaInSeo/notion-projection-guard',sourceCommit:'b'.repeat(40),
+  const release={version:1,repository:'HeaInSeo/notion-projection-guard',sourceCommit:'e57f6c5f563533de39338d14f0b2c18d49833598',
     runtimeSha256:{'broker.cjs':pins['broker.cjs'],'runner.js':pins['runner.js']},policySha256:pins['policy.json'],
     hostedEntryPoint:{path:'complete_projection.js',sha256:crypto.createHash('sha256').update(entry).digest('hex')}};
   fs.writeFileSync(path.join(dir,'approved.sha256'),Object.entries(pins).map(([n,h])=>h+'  '+n+'\n').join(''));
@@ -202,5 +237,10 @@ for(const [repository,entryPath] of [['untrusted/other','complete_projection.js'
   ['HeaInSeo/notion-projection-guard','ops/notion-projection-guard/complete_projection.js'],
   ['HeaInSeo/infra-lab','complete_projection.js']])test('runtime source identity and entry path remain bound: '+repository+'/'+entryPath,t=>{
   const f=standaloneRuntime(t);f.release.repository=repository;f.release.hostedEntryPoint.path=entryPath;
+  if(repository==='HeaInSeo/infra-lab'){
+    f.release.sourceCommit='01b8a7897bc8709450f536744577313c805c66ca';
+    const receipt=JSON.parse(fs.readFileSync(f.receiptPath));receipt.sourceCommit=f.release.sourceCommit;
+    fs.writeFileSync(f.receiptPath,JSON.stringify(receipt));
+  }
   assert.throws(()=>verifyRuntime(f),e=>e.code==='RELEASE_SCHEMA');
 });

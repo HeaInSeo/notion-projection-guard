@@ -33,7 +33,7 @@ function fixture(t){
   for(const n of ['broker.cjs','runner.js'])fs.copyFileSync(path.join(__dirname,n),path.join(runtime,n));
   fs.writeFileSync(path.join(runtime,'policy.json'),JSON.stringify(policy),{mode:0o600});
   const b=new Broker(root,policy);t.after(()=>{b.close();fs.rmSync(dir,{recursive:true,force:true});});
-  const edits=IDS.map((pageId,i)=>({pageId,heading:heads[i],oldStr:'central=OLD_'+i,newStr:'central=NEW_'+i}));
+  const edits=IDS.map((pageId,i)=>({pageId,heading:heads[i],oldStr:'central=OLD-'+i,newStr:'central=NEW-'+i}));
   b.handle({action:'begin',batchId:BATCH,edits});
   const before=raw(0,edits[0].oldStr),r=b.handle({action:'prepare',batchId:BATCH,page:before});
   b.handle({action:'authorize',batchId:BATCH,ticket:r.ticket,page:before});
