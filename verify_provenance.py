@@ -39,8 +39,8 @@ FINDING = "https://github.com/HeaInSeo/notion-projection-guard/pull/1#discussion
 # Reviewed operational source updates are separate from the immutable import
 # and correction commit. Never obtain these pins from a mutable manifest.
 SOURCE_UPDATES = {
-    "broker.cjs": "679c8afa9a04e967f49620103a36470a2c5113a1",
-    "test_guard.cjs": "02300e3f633c29317aa86ea434e94d1a82841253",
+    "broker.cjs": "6fdc602fe20bd4145cbbb1a6c54bbe737eda8737",
+    "test_guard.cjs": "120f3e5de5282546787380b962b3a17c2b2640c5",
     "complete_projection.js": "cef172b96eb58356e65429b92c319791d64adb5d",
     "verify_runtime.cjs": "4880f8e6c57b87153318f852ccacaa4f7004c929",
 }
