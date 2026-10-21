@@ -29,6 +29,9 @@ function fixture(t){
  const runtime=path.join(root,'runtime');fs.mkdirSync(runtime);const pins={};
  for(const n of ['broker.cjs','runner.js','policy.json']){fs.writeFileSync(path.join(runtime,n),n);pins[n]=hash(n);}
  let source=fs.readFileSync(path.join(__dirname,'reconcile_claim40_superseded.cjs'),'utf8');
+ // Synthetic scope uses the fixture's checked-out broker. Production retains
+ // the immutable historical module pin for its original one-off incident.
+ source=source.replace(/digest\('hex'\)!=='[a-f0-9]{64}'/,"digest('hex')!=="+JSON.stringify(hash(fs.readFileSync(path.join(__dirname,'broker.cjs'),'utf8'))));
  for(const [key,value] of [['ROOT',root],['RUNTIME',runtime],['REVIEWED',reviewed],['PINS',pins]]){
   const re=new RegExp('^const '+key+'=.*;$','m');assert.equal((source.match(re)||[]).length,1);
   source=source.replace(re,'const '+key+'='+JSON.stringify(value)+';');

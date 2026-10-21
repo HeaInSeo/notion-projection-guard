@@ -240,6 +240,7 @@ function runnerFixture(t, fault, policy={}) {
     },
     async mcp__codex_apps__notion_fetch({id}){
       fetches++;const value=structuredClone(pages.get(id));
+      if((fault==='read-before-prepare'&&fetches===2)||(fault==='read-before-authorize'&&fetches===3))return {isError:true};
       if(fault==='readback' && writes===1)value.structuredContent.text=value.structuredContent.text.replace(history,'');
       if(fault==='revision-read'&&writes===1)value.structuredContent.page_last_edited_at=null;
       if(fault==='fetch-after-write'&&writes===1)throw new Error('transient native fetch failure');
@@ -659,6 +660,36 @@ function appliedReadbackFixture(t,remaining=false) {
   page:page(B,body(newStr),{title:'Test'},'2026-10-12T00:01:00Z')};
  return {f,input};
 }
+test('a genuine failed pre-prepare read restores the same READY plan without acknowledging any write',async t=>{
+ const f=runnerFixture(t,'read-before-prepare');await assert.rejects(f.runner.run('pre-read',[edit()]),/FETCH_ERROR/);
+ const b=f.f.b.state.batches['pre-read'];assert.equal(f.writes,0);assert.equal(b.haltedFrom,'READY');assert.equal(b.receipt,null);
+ const input={action:'reconcile_unprepared_read',batchId:'pre-read',planHash:b.planHash,expectedError:b.error,page:page(),apply:false};
+ const before=fs.readFileSync(f.f.b.file,'utf8');assert.equal(f.f.b.handle(input).checkOnly,true);assert.equal(fs.readFileSync(f.f.b.file,'utf8'),before);
+ const r=f.f.b.handle({...input,apply:true});assert.equal(r.status,'READY');assert.equal(r.audit.pageAdvances,0);assert.equal(f.writes,0);
+ assert.equal((await f.newRunner().run('pre-read',[edit()])).status,'COMPLETED');assert.equal(f.writes,1);
+});
+test('prepared native-read recovery retains its exact original ticket and authorizes only once',async t=>{
+ const f=runnerFixture(t,'read-before-authorize');await assert.rejects(f.runner.run('prepared-read',[edit()]),/FETCH_ERROR/);
+ const b=f.f.b.state.batches['prepared-read'],ticket=b.receipt.ticket;assert.equal(b.haltedFrom,'PREPARED');assert.equal(f.writes,0);
+ const done=await f.newRunner().resume('prepared-read',b.planHash);assert.equal(done.status,'COMPLETED');assert.equal(f.writes,1);
+ const saved=JSON.parse(fs.readFileSync(f.f.b.snapshot('prepared-read',0)));assert.equal(saved.ticket,ticket);
+});
+for(const fault of ['orphan snapshot','applied text','policy','missing phase','wrong error'])test('unprepared read recovery rejects '+fault,async t=>{
+ const f=runnerFixture(t,'read-before-prepare');await assert.rejects(f.runner.run('pre-read',[edit()]));
+ const b=f.f.b.state.batches['pre-read'];let p=page();
+ if(fault==='orphan snapshot')atomic(f.f.b.snapshot('pre-read',0),{orphan:true});
+ if(fault==='applied text')p=page(A,body(newStr));
+ if(fault==='policy')f.f.b.policy.productionEnabled=false;
+ if(fault==='missing phase'){delete b.haltedFrom;f.f.b.save();}
+ if(fault==='wrong error'){b.error='READBACK_MISMATCH';f.f.b.save();}
+ const before=fs.readFileSync(f.f.b.file,'utf8');assert.throws(()=>f.f.b.handle({action:'reconcile_unprepared_read',batchId:'pre-read',planHash:b.planHash,expectedError:b.error,page:p,apply:true}));
+ assert.equal(fs.readFileSync(f.f.b.file,'utf8'),before);assert.equal(f.writes,0);
+});
+test('prepared read recovery refuses an already-applied output instead of replaying it',async t=>{
+ const f=runnerFixture(t,'read-before-authorize');await assert.rejects(f.runner.run('prepared-read',[edit()]));
+ const b=f.f.b.state.batches['prepared-read'];f.pages.set(A,page(A,body(newStr),undefined,'2026-10-12T00:01:00Z'));
+ await assert.rejects(f.newRunner().resume('prepared-read',b.planHash),/RECONCILE_CHANGED/);assert.equal(f.writes,0);
+});
 for(const fault of ['revision-read','fetch-after-write'])test('real runner persists recoverable read classification only after authorized update: '+fault,async t=>{
  const f=runnerFixture(t,fault);
  await assert.rejects(f.runner.run('post-write-read',[edit()]),/REVISION_READ_ERROR/);

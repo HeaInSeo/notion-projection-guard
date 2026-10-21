@@ -484,6 +484,40 @@ class Broker {
     this.save();
     return {status:b.status,next:b.next,reconciled:true,audit};
   }
+  reconcileUnpreparedRead(input) {
+    const {batchId,planHash,expectedError,apply}=input,b=this.state.batches[batchId];
+    if(this.state.active!==batchId||!b||b.status!=='HALTED'||b.planHash!==planHash||
+        hash(JSON.stringify(b.edits))!==planHash||b.error!==expectedError||typeof apply!=='boolean')
+      fail('RECONCILE_IDENTITY','Exact halted batch, plan and error required');
+    if(b.haltedFrom!=='READY'||b.receipt!==null||! /^(?:FETCH_ERROR|INCOMPLETE_READ):/.test(b.error))
+      fail('RECONCILE_SCOPE','Only an unprepared failed native read may restore READY');
+    if(JSON.stringify(read(this.file))!==JSON.stringify(this.state))fail('PERSISTENCE','Journal changed outside its lock');
+    for(const edit of b.edits){validateScope(edit,this.policy);stableNewText(edit);}
+    const prefix=hash(batchId)+'-',prior=[];
+    for(const name of fs.readdirSync(this.root))if(name.startsWith(prefix)){
+      const match=/^(\d+)\.json(?:\.verified\.json)?$/.exec(name.slice(prefix.length));
+      if(!match||Number(match[1])>=b.next)fail('PERSISTENCE','Pending or unexpected prepared evidence exists');
+    }
+    for(let i=0;i<b.next;i++){
+      const file=this.snapshot(batchId,i),s=read(file),v=read(file+'.verified.json');
+      const raw=pageData(s.page.raw,b.edits[i].pageId),after=pageData(v.page.raw,b.edits[i].pageId),p=plan(s.page,s.edit);
+      if(s.batchId!==batchId||s.index!==i||JSON.stringify(s.edit)!==JSON.stringify(b.edits[i])||
+          hash(s.page.body)!==s.bodyHash||hash(s.page.properties)!==s.propertiesHash||hash(s.expected)!==s.expectedHash||
+          p.expected!==s.expected||p.beforeHash!==s.beforeHash||p.afterHash!==s.afterHash||
+          raw.body!==s.page.body||raw.properties!==s.page.properties||raw.revision!==s.page.revision||
+          v.page.body!==this.verifiedExpected(s,v,b,i)||v.bodyHash!==hash(v.page.body)||v.page.properties!==s.page.properties||
+          after.body!==v.page.body||after.properties!==v.page.properties||after.revision!==v.page.revision)
+        fail('PERSISTENCE','Prior protected-content verification changed');
+      prior.push({index:i,snapshotHash:hash(JSON.stringify(s)),verifiedHash:hash(JSON.stringify(v))});
+    }
+    const page=pageData(input.page,b.edits[b.next].pageId),p=plan(page,b.edits[b.next]);
+    const audit={kind:'UNPREPARED_NATIVE_READ',at:new Date().toISOString(),batchId,planHash,error:expectedError,
+      next:b.next,prior,bodyHash:hash(page.body),propertiesHash:hash(page.properties),revision:page.revision,
+      expectedHash:hash(p.expected),notionWrites:0,acknowledgedWrites:0,pageAdvances:0};
+    if(!apply)return {status:'HALTED',checkOnly:true,next:b.next,audit};
+    b.reconciliations=[...(b.reconciliations??[]),audit];b.status='READY';delete b.error;delete b.haltedFrom;
+    this.save();return {status:'READY',next:b.next,audit};
+  }
   reconcile(input) {
     const { batchId, planHash, expectedError, action } = input;
     const b = this.state.batches[batchId];
@@ -493,10 +527,12 @@ class Broker {
       fail('RECONCILE_IDENTITY', 'Exact halted batch, immutable plan and error required');
     // This narrowly admits the observed DC failure while awaiting authorize.
     // A Notion/async/readback failure or an unknown lost write cannot retry.
-    if (!b.error.startsWith('REMOTE_ERROR: Error interacting with process: Invalid regular expression: ') ||
-        !b.error.includes('"action":"authorize"') || !b.error.includes(JSON.stringify(batchId)) ||
-        !b.error.includes(JSON.stringify(b.receipt.ticket)))
-      fail('RECONCILE_SCOPE', 'Only an unwritten DC authorize prompt failure can be reconciled');
+    const legacyDC=b.error.startsWith('REMOTE_ERROR: Error interacting with process: Invalid regular expression: ')&&
+      b.error.includes('"action":"authorize"')&&b.error.includes(JSON.stringify(batchId))&&b.error.includes(JSON.stringify(b.receipt.ticket));
+    const preparedRead=b.haltedFrom==='PREPARED'&&/^(?:FETCH_ERROR|INCOMPLETE_READ):/.test(b.error);
+    if(!legacyDC&&!preparedRead)fail('RECONCILE_SCOPE','Only a proven unwritten authorize/read failure can be reconciled');
+    if(preparedRead&&(fs.existsSync(b.receipt.snapshot+'.actual.json')||fs.existsSync(b.receipt.snapshot+'.verified.json')))
+      fail('PERSISTENCE','Contradictory pending write evidence exists');
     for (const edit of b.edits) {
       validateScope(edit, this.policy);
     }
@@ -577,12 +613,13 @@ class Broker {
     // Persist an audit trail. Do not advance next, invent a verified receipt,
     // remove snapshots, change edits, or accept an already-written output.
     b.reconciliations = [...(b.reconciliations ?? []), {
-      kind:'UNWRITTEN_DC_AUTHORIZATION', at:new Date().toISOString(), index:b.next,
+      kind:preparedRead?'UNWRITTEN_PREPARED_NATIVE_READ':'UNWRITTEN_DC_AUTHORIZATION', at:new Date().toISOString(), index:b.next,
       ticket:input.ticket, planHash, error:expectedError, priorVerified:b.next,
       bodyHash:hash(page.body), propertiesHash:hash(page.properties),
       mode:this.recovery?.mode ?? 'FRESH_PRIOR_PAGES', verifiedReceipts:this.recovery?.receipts ?? []
     }];
     b.status = 'PREPARED';
+    if(preparedRead){delete b.error;delete b.haltedFrom;}
     this.recovery = null;
     this.save();
     return { status:'PREPARED', next:b.next, ticket:input.ticket, protectedContent:'UNCHANGED' };
@@ -624,6 +661,7 @@ class Broker {
     if (action === 'reconcile_autolink') return this.reconcileAutolink(input);
     if (action === 'reconcile_escaped_arrows') return this.reconcileRendering(input, 'arrows');
     if (action === 'reconcile_applied_readback') return this.reconcileAppliedReadback(input);
+    if (action === 'reconcile_unprepared_read') return this.reconcileUnpreparedRead(input);
     if (['reconcile_verified','reconcile_receipts','reconcile_unwritten'].includes(action)) return this.reconcile(input);
     const b = this.current(batchId), edit = b.edits[b.next];
     if (action === 'halt') {
