@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const vm = require('node:vm');
+require('./claim40_closure_cases.cjs');
 const { Broker, hash, pageData, plan, atomic } = require('./broker.cjs');
 const A='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', B='bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
 const heading='## CURRENT CENTRAL OBSERVATION · test';
@@ -725,6 +726,26 @@ test('a recovered middle target keeps the ordinary remaining plan and later reco
   page:page(C,body(newStr),{title:'Test'},'2026-10-12T00:01:00Z'),apply:true});
  assert.equal(done.status,'COMPLETED');assert.equal(done.audit.prior.length,2);
  assert.equal(f.b.state.batches.observation.planHash,input.planHash);
+});
+for(const state of ['PREPARED','legacy missing proof'])test('post-write recovery refuses '+state+' authorization evidence',t=>{
+ const {f,input}=appliedReadbackFixture(t);
+ if(state==='PREPARED')f.b.state.batches.observation.haltedFrom='PREPARED';
+ else delete f.b.state.batches.observation.haltedFrom;
+ f.b.save();const before=fs.readFileSync(f.b.file,'utf8');
+ rejects('RECONCILE_SCOPE',()=>f.b.handle({...input,apply:true}));
+ assert.equal(fs.readFileSync(f.b.file,'utf8'),before);
+});
+for(const stamp of [undefined,'2026-10-13T00:00:00Z'])test('later recovery rejects alteration of a recovered receipt timestamp '+stamp,t=>{
+ const {f,input}=appliedReadbackFixture(t,true),C='cccccccccccccccccccccccccccccccc';
+ f.b.handle({...input,apply:true});
+ const file=f.b.snapshot('observation',1)+'.verified.json',v=JSON.parse(fs.readFileSync(file,'utf8'));
+ if(stamp===undefined)delete v.at;else v.at=stamp;atomic(file,v);
+ const r=prepare(f.b,page(C));authorize(f.b,r,page(C));
+ f.b.handle({action:'halt',batchId:'observation',reason:'REVISION_READ_ERROR'});
+ const b=f.b.state.batches.observation;
+ rejects('PERSISTENCE',()=>f.b.handle({...input,snapshotHash:b.receipt.snapshotHash,
+  page:page(C,body(newStr),{title:'Test'},'2026-10-12T00:01:00Z'),apply:true}));
+ assert.equal(f.b.state.batches.observation.status,'HALTED');
 });
 for(const [name,prefix,suffix] of [
  ['native close suffix','<details>\ntext\n</details> intro=`starts\n','\n## NEXT\nends`\n'],

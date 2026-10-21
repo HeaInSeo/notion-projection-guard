@@ -240,6 +240,8 @@ the immutable planned output, unchanged full properties, a newer valid native
 revision, and intact raw preimages and full verification receipts for every
 earlier target. A readback mismatch, an unwritten page, incomplete reads, changed
 worker content, policy revocation or any evidence drift keeps the barrier.
+The halt must durably record `haltedFrom:WRITE_PENDING`; legacy halts without
+that authorization evidence and failures before authorize remain blocked.
 
 The action makes zero Notion writes. It durably records the exact applied-state
 proof and advances only that pending target; prior pages are never rewritten.
@@ -247,6 +249,19 @@ The unchanged remaining plan then runs through ordinary fresh preflight,
 authorization, one mutation and protected readback. Restart after receipt
 persistence reuses only the identical recovery evidence. Ordinary `resume`
 continues to accept only its original unwritten authorize failure.
+
+The legacy CLAIM40 batch predates durable pre-halt authorization evidence. It
+cannot use the generic post-write recovery. The separately invoked
+`reconcile_claim40_superseded.cjs` is pinned to that exact batch, plan, pending
+snapshot, two original verification receipts, and complete r4 RELEASE41/PASS26
+source revisions. It checks all eight fresh targets: two durably verified
+outputs, one exact observed output with UNKNOWN original authorization, and
+five still-unprepared original literals. It closes only the obsolete CLAIM
+observation as `ABORTED_SUPERSEDED`, preserving next, pending ticket, plan and
+error. It makes zero Notion writes, acknowledges zero writes and advances zero
+pages. A durable full preimage/audit precedes closure; source, policy or evidence
+drift rejects it. A fresh observation of the newer RELEASE/PASS may follow only
+after that reviewed terminal reconciliation. This is not completion of CLAIM40.
 
 ### Explicit recovery of the 2026-10-18 autolink mismatch
 

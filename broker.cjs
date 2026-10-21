@@ -392,7 +392,8 @@ class Broker {
           audit.error!=='REVISION_READ_ERROR'||audit.ticket!==snapshot.ticket||
           audit.snapshotHash!==hash(JSON.stringify(snapshot))||audit.bodyHash!==snapshot.expectedHash||
           audit.propertiesHash!==snapshot.propertiesHash||audit.revision!==verified.page.revision||
-          audit.protectedContent!=='UNCHANGED'||audit.notionWrites!==0||!Array.isArray(audit.prior)||
+          audit.protectedContent!=='UNCHANGED'||audit.notionWrites!==0||audit.haltedFrom!=='WRITE_PENDING'||
+          typeof audit.at!=='string'||!Number.isFinite(Date.parse(audit.at))||verified.at!==audit.at||!Array.isArray(audit.prior)||
           audit.prior.length!==index||audit.prior.some((r,i)=>r.index!==i||
             r.snapshotHash!==hash(JSON.stringify(read(this.snapshot(snapshot.batchId,i))))||
             r.verifiedHash!==hash(JSON.stringify(read(this.snapshot(snapshot.batchId,i)+'.verified.json')))))
@@ -424,6 +425,8 @@ class Broker {
       fail('RECONCILE_IDENTITY','Exact halted plan, error, pending snapshot and explicit apply/check required');
     if(expectedError!=='REVISION_READ_ERROR')
       fail('RECONCILE_SCOPE','Only the observed failed revision read admits exact applied-state recovery');
+    if(b.haltedFrom!=='WRITE_PENDING')
+      fail('RECONCILE_SCOPE','Durable pre-halt WRITE_PENDING authorization proof is required');
     for(const edit of b.edits){validateScope(edit,this.policy);stableNewText(edit);}
     if(JSON.stringify(read(this.file))!==JSON.stringify(this.state))
       fail('PERSISTENCE','Canonical journal changed outside its lock');
@@ -457,24 +460,26 @@ class Broker {
     if(page.body!==s.expected||page.properties!==s.page.properties||
         Date.parse(page.revision)<=Date.parse(s.page.revision))
       fail('RECONCILE_CHANGED','Fresh complete page must equal the entire planned output and unchanged properties');
+    const verifiedFile=file+'.verified.json';let verified=fs.existsSync(verifiedFile)?read(verifiedFile):null;
     const audit={kind:'EXACT_APPLIED_REVISION_READ',batchId,planHash,error:expectedError,index:b.next,
       ticket:s.ticket,snapshotHash,bodyHash:hash(page.body),propertiesHash:hash(page.properties),
-      revision:page.revision,prior,notionWrites:0,protectedContent:'UNCHANGED'};
-    const verifiedFile=file+'.verified.json';let verified;
-    if(fs.existsSync(verifiedFile)){
-      verified=read(verifiedFile);const raw=pageData(verified.page.raw,b.edits[b.next].pageId);
+      revision:page.revision,prior,notionWrites:0,protectedContent:'UNCHANGED',haltedFrom:b.haltedFrom,
+      at:verified?.at??new Date().toISOString()};
+    if(verified){
+      const raw=pageData(verified.page.raw,b.edits[b.next].pageId);
       if(verified.bodyHash!==audit.bodyHash||raw.body!==page.body||raw.properties!==page.properties||
           raw.revision!==page.revision||verified.page.body!==raw.body||
           verified.page.properties!==raw.properties||verified.page.revision!==raw.revision||
+          typeof verified.at!=='string'||!Number.isFinite(Date.parse(verified.at))||
           JSON.stringify(verified.reconciliation)!==JSON.stringify(audit))
         fail('PERSISTENCE','Existing pending verification evidence differs');
     }
     if(!apply)return {status:'HALTED',checkOnly:true,next:b.next,audit};
     // This acknowledges only a freshly proven full output. It emits no Notion
     // request and never repeats the uncertain mutation or rewrites prior pages.
-    if(!verified)atomic(verifiedFile,{page,bodyHash:audit.bodyHash,at:new Date().toISOString(),reconciliation:audit});
+    if(!verified)atomic(verifiedFile,{page,bodyHash:audit.bodyHash,at:audit.at,reconciliation:audit});
     b.reconciliations=[...(b.reconciliations??[]),audit];
-    b.next++;b.receipt=null;b.status=b.next===b.edits.length?'COMPLETED':'READY';delete b.error;
+    b.next++;b.receipt=null;b.status=b.next===b.edits.length?'COMPLETED':'READY';delete b.error;delete b.haltedFrom;
     if(b.status==='COMPLETED')this.state.active=null;
     this.save();
     return {status:b.status,next:b.next,reconciled:true,audit};
@@ -622,6 +627,7 @@ class Broker {
     if (['reconcile_verified','reconcile_receipts','reconcile_unwritten'].includes(action)) return this.reconcile(input);
     const b = this.current(batchId), edit = b.edits[b.next];
     if (action === 'halt') {
+      b.haltedFrom=b.status;
       b.status = 'HALTED'; b.error = String(input.reason ?? 'Connector or runner failed').slice(0,1000);
       this.save(); return { status: 'HALTED', next: b.next };
     }
