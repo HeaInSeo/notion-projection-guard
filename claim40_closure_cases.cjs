@@ -1,6 +1,14 @@
 'use strict';
 const {test}=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),os=require('node:os'),path=require('node:path'),vm=require('node:vm'),{createRequire}=require('node:module');
 const {Broker,hash,pageData}=require('./broker.cjs');
+test('legacy helper rejects an adjacent broker before loading unreviewed module code',t=>{
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'claim40-module-pin-')),sentinel=path.join(root,'executed');
+ t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+ fs.writeFileSync(path.join(root,'broker.cjs'),'require("fs").writeFileSync('+JSON.stringify(sentinel)+',"bad");');
+ const source=fs.readFileSync(path.join(__dirname,'reconcile_claim40_superseded.cjs'),'utf8');
+ assert.throws(()=>vm.runInNewContext(source,{require:createRequire(__filename),module:{exports:{}},process,Buffer,__dirname:root}),/Adjacent reviewed broker module differs/);
+ assert.equal(fs.existsSync(sentinel),false);
+});
 function fixture(t){
  const root=fs.mkdtempSync(path.join(os.tmpdir(),'claim40-closure-'));fs.chmodSync(root,0o700);
  const ids=Array.from({length:8},(_,i)=>String(i+1).repeat(32)),heading='## CURRENT CENTRAL OBSERVATION · test',oldStr='central_status=WAIT',newStr='central_status=CLAIM40';

@@ -242,6 +242,10 @@ earlier target. A readback mismatch, an unwritten page, incomplete reads, change
 worker content, policy revocation or any evidence drift keeps the barrier.
 The halt must durably record `haltedFrom:WRITE_PENDING`; legacy halts without
 that authorization evidence and failures before authorize remain blocked.
+The runner classifies failed native fetches and incomplete revision/page reads
+only after its authorized update as this reason, while retaining the original
+bounded read error in the audit. Mismatches, lost mutation ACKs and broker faults
+retain their distinct causes.
 
 The action makes zero Notion writes. It durably records the exact applied-state
 proof and advances only that pending target; prior pages are never rewritten.

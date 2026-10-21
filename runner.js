@@ -98,6 +98,19 @@
       closed = true;
     }
   }
+  async function verifyAfterWrite(batchId,ticket,pageId) {
+    let page;
+    const readFailure=error=>Object.assign(new Error('REVISION_READ_ERROR'),{readDetail:String(error?.message??error).slice(0,1000)});
+    try{page=await tools.mcp__codex_apps__notion_fetch({id:pageId});}
+    catch(error){throw readFailure(error);}
+    try{return await broker({action:'verify',batchId,ticket,page});}
+    catch(error){
+      // Only failed/incomplete reads after the one authorized update are
+      // classified. A mismatch, lost write ACK or broker fault keeps its cause.
+      if(['INCOMPLETE_READ','FETCH_ERROR'].includes(error.code))throw readFailure(error);
+      throw error;
+    }
+  }
   async function run(batchId, edits) {
     edits=JSON.parse(JSON.stringify(edits));
     const receipts = [];
@@ -121,8 +134,7 @@
           page:await tools.mcp__codex_apps__notion_fetch({ id:edit.pageId }) });
         // The caller never constructs a Notion mutation. Only the broker emits it.
         await update(authorized.request);
-        const verified = await broker({ action:'verify', batchId, ticket:prepared.ticket,
-          page:await tools.mcp__codex_apps__notion_fetch({ id:edit.pageId }) });
+        const verified = await verifyAfterWrite(batchId,prepared.ticket,edit.pageId);
         receipts.push({ pageId:edit.pageId, ...verified, snapshot:prepared.snapshot });
       }
       return { status:'COMPLETED', receipts };
@@ -130,7 +142,7 @@
       // Errors before begin (e.g. PRODUCTION_HOLD) need no journal mutation.
       // Errors after begin keep the global barrier, including ACK loss/crashes.
       if (enteredRun) {
-        try { await broker({ action:'halt', batchId, reason:error.message }); } catch { /* Existing state remains closed. */ }
+        try { await broker({ action:'halt', batchId, reason:error.message,readDetail:error.readDetail }); } catch { /* Existing state remains closed. */ }
       }
       throw error;
     } finally { await close(); }
@@ -158,14 +170,13 @@
         const authorized=await broker({ action:'authorize', batchId, ticket:prepared.ticket,
           page:await tools.mcp__codex_apps__notion_fetch({ id:edit.pageId }) });
         await update(authorized.request);
-        const verified=await broker({ action:'verify', batchId, ticket:prepared.ticket,
-          page:await tools.mcp__codex_apps__notion_fetch({ id:edit.pageId }) });
+        const verified=await verifyAfterWrite(batchId,prepared.ticket,edit.pageId);
         receipts.push({ pageId:edit.pageId, ...verified, snapshot:prepared.snapshot });
       }
       return { status:'COMPLETED', resumed:true, receipts };
     } catch (error) {
       if (enteredRecovery) {
-        try { await broker({ action:'halt', batchId, reason:error.message }); } catch { /* Preserve HALTED. */ }
+        try { await broker({ action:'halt', batchId, reason:error.message,readDetail:error.readDetail }); } catch { /* Preserve HALTED. */ }
       }
       throw error;
     } finally { await close(); }

@@ -3,7 +3,11 @@
 // One reviewed legacy incident. Missing original authorization stays UNKNOWN:
 // close a superseded observation, never acknowledge or replay its pending write.
 const fs=require('node:fs'),path=require('node:path'),readline=require('node:readline');
-const {Broker,hash,pageData,plan,atomic}=require('./broker.cjs');
+const crypto=require('node:crypto');
+const modulePath=path.join(__dirname,'broker.cjs'),moduleStat=fs.lstatSync(modulePath);
+if(!moduleStat.isFile()||moduleStat.isSymbolicLink()||crypto.createHash('sha256').update(fs.readFileSync(modulePath)).digest('hex')!=='b9ef74b0d5b391a35267699ba14d2cfd3b3983e3c5bca45203be927baaac60f3')
+ throw new Error('CLAIM40_CLOSURE: Adjacent reviewed broker module differs');
+const {Broker,hash,pageData,plan,atomic}=require(modulePath);
 const ROOT='/home/heain/.local/state/notion-projection-guard';
 const RUNTIME='/home/heain/.local/share/notion-projection-guard';
 const REVIEWED=Object.freeze({"batchId":"SORI-TRUST-20261021-R4-CLAIM40","planHash":"ed2c198174520ea22891f5460197053c167db70ead786e15eb23c365e6cca6d1","snapshotHash":"d3329cbb752ee49174bab13c23c0e7a471e5e710340b19d99c1076e21e7c81bf","error":"REVISION_READ_ERROR","next":2,"targets":["3f586e6dd1d181ebb43dd7de62aa2ca4","3f586e6dd1d181cd9f5bdcdab6290de7","3f586e6dd1d181ddb9f3e7217f64bfcd","3b286e6dd1d1817aa093fca807659f07","3b286e6dd1d181f2a75cfbd3885071c4","3bf86e6dd1d18110938bc358e17c779e","3ed86e6dd1d18118b0b8d98bb91892fb","3b286e6dd1d1811d9308d9a2b56c9de4"],"sources":[{"id":"3f586e6dd1d1819d823df1102a7fbcf6","bodyHash":"bf730f998b3a3ccec042715db222ee600b6b94417ab6927d53b9cc8926220d76","propertiesHash":"222360085eb22b15c366a5b3412198ead049ca5425ac1b6fdd822530ce56392c","revision":"2026-10-20T23:09:05.998Z"},{"id":"3f586e6dd1d181c89236cd70730bfff6","bodyHash":"9a6783b9961ad1ea01ffefbcb0e5c12991b5e755d0905655e63f5fa4a140be4b","propertiesHash":"1c58b65fd8838c7e319b75f79b9fd808dbf9297056f81f12012a3f33c0c4207e","revision":"2026-10-20T23:43:24.359Z"}],"prior":[{"index":0,"snapshotHash":"e1b8833c7473b4f018ef84975c829bbbe7bcb11f035f668c64cf528890e871e6","verifiedHash":"6565f41ee492f3a060e38e592607eea363940dc1e35f3e50aaaa10849d8478af","verifiedAt":"2026-10-20T23:06:47.054Z"},{"index":1,"snapshotHash":"21c1847718aa2f4d6f23c47e0a0b60a762cfe16a398254654a7399d520cded38","verifiedHash":"4132da45505abe71ae5398c10e3d1bff81aaeabddae1ffcf4ae9d8867d29f992","verifiedAt":"2026-10-20T23:07:11.231Z"}]});

@@ -94,6 +94,18 @@ class ProvenanceTests(unittest.TestCase):
         self.assertEqual(report["migrationBlobs"], 15)
         self.assertEqual(report["postImportChanges"], sorted(CORRECTIONS))
 
+    def test_new_closure_executable_is_pinned_and_tampering_fails(self):
+        name = "reconcile_claim40_superseded.cjs"
+        file = self.root / name
+        file.write_text("reviewed closure source\n")
+        git(self.root, "add", name)
+        git(self.root, "commit", "-qm", "add reviewed closure fixture")
+        pins = {name: git(self.root, "rev-parse", "HEAD:" + name)}
+        self.assertIn(name, verify(self.root, self.anchors, pins)["operationalSourceUpdates"])
+        file.write_text("unreviewed journal writer\n")
+        with self.assertRaisesRegex(VerificationError, "pinned added source differs"):
+            verify(self.root, self.anchors, pins)
+
     def test_35_duplicate_pairs_fail(self):
         self.change_json(ANCHORS["historyMap"], lambda h: h.update(commits=[h["commits"][0]] * 35))
         self.rejected("duplicate history")

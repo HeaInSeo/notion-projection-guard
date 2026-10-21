@@ -464,7 +464,7 @@ class Broker {
     const audit={kind:'EXACT_APPLIED_REVISION_READ',batchId,planHash,error:expectedError,index:b.next,
       ticket:s.ticket,snapshotHash,bodyHash:hash(page.body),propertiesHash:hash(page.properties),
       revision:page.revision,prior,notionWrites:0,protectedContent:'UNCHANGED',haltedFrom:b.haltedFrom,
-      at:verified?.at??new Date().toISOString()};
+      at:verified?.at??new Date().toISOString(),readDetail:b.readDetail??null};
     if(verified){
       const raw=pageData(verified.page.raw,b.edits[b.next].pageId);
       if(verified.bodyHash!==audit.bodyHash||raw.body!==page.body||raw.properties!==page.properties||
@@ -479,7 +479,7 @@ class Broker {
     // request and never repeats the uncertain mutation or rewrites prior pages.
     if(!verified)atomic(verifiedFile,{page,bodyHash:audit.bodyHash,at:audit.at,reconciliation:audit});
     b.reconciliations=[...(b.reconciliations??[]),audit];
-    b.next++;b.receipt=null;b.status=b.next===b.edits.length?'COMPLETED':'READY';delete b.error;delete b.haltedFrom;
+    b.next++;b.receipt=null;b.status=b.next===b.edits.length?'COMPLETED':'READY';delete b.error;delete b.haltedFrom;delete b.readDetail;
     if(b.status==='COMPLETED')this.state.active=null;
     this.save();
     return {status:b.status,next:b.next,reconciled:true,audit};
@@ -628,6 +628,7 @@ class Broker {
     const b = this.current(batchId), edit = b.edits[b.next];
     if (action === 'halt') {
       b.haltedFrom=b.status;
+      if(input.readDetail!==undefined)b.readDetail=String(input.readDetail).slice(0,1000);
       b.status = 'HALTED'; b.error = String(input.reason ?? 'Connector or runner failed').slice(0,1000);
       this.save(); return { status: 'HALTED', next: b.next };
     }

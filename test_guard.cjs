@@ -241,6 +241,8 @@ function runnerFixture(t, fault, policy={}) {
     async mcp__codex_apps__notion_fetch({id}){
       fetches++;const value=structuredClone(pages.get(id));
       if(fault==='readback' && writes===1)value.structuredContent.text=value.structuredContent.text.replace(history,'');
+      if(fault==='revision-read'&&writes===1)value.structuredContent.page_last_edited_at=null;
+      if(fault==='fetch-after-write'&&writes===1)throw new Error('transient native fetch failure');
       return value;
     },
     async mcp__codex_apps__notion_notion_update_page(request){
@@ -657,6 +659,19 @@ function appliedReadbackFixture(t,remaining=false) {
   page:page(B,body(newStr),{title:'Test'},'2026-10-12T00:01:00Z')};
  return {f,input};
 }
+for(const fault of ['revision-read','fetch-after-write'])test('real runner persists recoverable read classification only after authorized update: '+fault,async t=>{
+ const f=runnerFixture(t,fault);
+ await assert.rejects(f.runner.run('post-write-read',[edit()]),/REVISION_READ_ERROR/);
+ const b=f.f.b.state.batches['post-write-read'];
+ assert.equal(f.writes,1);assert.equal(b.status,'HALTED');assert.equal(b.haltedFrom,'WRITE_PENDING');
+ assert.equal(b.error,'REVISION_READ_ERROR');assert.ok(b.readDetail.length>0);
+ const detail=b.readDetail;
+ const result=f.f.b.handle({action:'reconcile_applied_readback',batchId:'post-write-read',planHash:b.planHash,
+  expectedError:b.error,snapshotHash:b.receipt.snapshotHash,apply:true,
+  page:page(A,body(newStr),{title:'Test'},'2026-10-12T00:01:00Z')});
+ assert.equal(result.status,'COMPLETED');assert.equal(f.writes,1);assert.equal(result.audit.readDetail,detail);
+ assert.equal(b.readDetail,undefined);
+});
 test('applied revision recovery checks then records full proof without any Notion request',t=>{
  const {f,input}=appliedReadbackFixture(t),before=fs.readFileSync(f.b.file,'utf8');
  const prior=fs.readFileSync(f.b.snapshot('observation',0)+'.verified.json','utf8');
