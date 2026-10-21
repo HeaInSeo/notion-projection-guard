@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "repository": "HeaInSeo/notion-projection-guard",
+  "sourceCommit": "82d490d5737d0bdef2818ff1734277d4425bad17",
+  "runtimeSha256": {
+    "broker.cjs": "9a3b47cdadc086b99a9523afa8f664917a132a5915d4e7966912a2554f480489",
+    "runner.js": "f78bfffaafc2a4445a8dfce8f1479dc84990ac6b91529fee556c0877adf9bb27"
+  },
+  "policySha256": "804709b778ea5fe82eac705654d06f52af8391aa0504d8e0582f3a87022fdf1b",
+  "hostedEntryPoint": {
+    "path": "complete_projection.js",
+    "sha256": "abe4adb36cce5e0206c86401c3f979eba008a2cda856be355783ded4fd214558"
+  },
+  "policySource": "Existing private approved runtime policy; bytes and permission scope remain unchanged.",
+  "installationStatus": "Candidate manifest only. Install after exact-head review and CI, exclusive broker lock, canonical journal preservation, private backup and readback. This is not an installation receipt."
+}
