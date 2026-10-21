@@ -206,6 +206,42 @@ snapshot files. A pending write can be reconciled read-only against its saved
 expected body; a mismatched/HALTED batch needs a reviewed bounded recovery.
 No automatic HALTED reset or rollback is implemented.
 
+### Native read failure before authorization
+
+The runner retries only a thrown/explicit failed native fetch, at most three
+read-only attempts with bounded backoff. It records page, phase, attempt count
+and the original connector errors in `readDiagnostics` after recovery, or in the
+durable `readDetail` if all attempts fail after begin. A successful but incomplete,
+wrong, concurrent or mismatched page still goes through the unchanged broker
+checks and is never converted into success by the retry loop. Mutation calls,
+unknown acknowledgements and async failures are never retried.
+
+`runner.resumeUnprepared(batchId, expectedPlanHash)` explicitly checks and applies
+the READY recovery below, then continues the original plan through ordinary
+preflight, prepare, authorization, mutation and full verification. It never
+starts a replacement batch. The method rejects a WRITE_PENDING/unknown outcome.
+
+`reconcile_unprepared_read` explicitly checks/applies only a failed native read
+halted from durable `READY`, with no receipt or pending/future snapshot. The
+original plan/error must match, all prior complete receipts must validate, and
+a fresh complete pending page must still admit the original scoped literal.
+It records a zero-write/zero-ack/zero-advance audit and restores only `READY`.
+Ordinary same-batch preflight, prepare, authorization, mutation and verification
+remain mandatory. Incomplete reads, already-applied text, policy changes,
+orphan snapshots, missing phase proof and other errors keep the barrier.
+
+The existing `runner.resume` also admits native `FETCH_ERROR`/`INCOMPLETE_READ`
+failures halted from durable `PREPARED`, retaining the exact original ticket.
+Its pending page must equal the entire saved preimage and revision. An applied
+output is refused and never replayed. The historical single-incident CLAIM40
+helper retains its original module pin; its synthetic tests use fixture pins.
+New verification receipts have full immutable fingerprints. Earlier reviewed
+arrow/applied-readback receipts can use their original bound reconciliation
+audit instead; their complete raw preimages, output, properties, revisions,
+timestamps and rendering evidence are revalidated. Only validated historical
+rendering evidence may remain beside a completed page. Untracked ordinary
+legacy receipts and unexplained orphan files remain blocked.
+
 ### Unwritten authorize transport recovery
 
 JSON-line broker calls disable Desktop Commander prompt matching and match only

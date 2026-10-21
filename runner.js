@@ -60,6 +60,33 @@
     }
     return null;
   }
+  const readDiagnostics=[];
+  async function fetchPage(pageId, phase) {
+    const failures=[];
+    // Only this read-only connector call is retried. Authorization, mutations,
+    // async ACKs and protected-content comparisons never enter this loop.
+    for(let attempt=1;attempt<=3;attempt++) {
+      try {
+        const result=await tools.mcp__codex_apps__notion_fetch({id:pageId});
+        let value=result;
+        for(let depth=0;depth<6;depth++) {
+          if(value?.isError||value?.error)throw new Error(JSON.stringify(value.error??
+            {message:textOf(value).slice(0,240)||'Connector returned an error'}).slice(0,300));
+          if(!value?.structuredContent)break;
+          value=value.structuredContent;
+        }
+        const data=connectorData(result);
+        if(data?.error)throw new Error(JSON.stringify(data.error).slice(0,300));
+        if(failures.length)readDiagnostics.push({pageId,phase,attempts:attempt,failures});
+        return result;
+      } catch(error) {
+        failures.push({attempt,cause:String(error?.message??error).slice(0,300)});
+        if(attempt===3)throw Object.assign(new Error('FETCH_ERROR: native read failed at '+phase),
+          {readDetail:JSON.stringify({pageId,phase,attempts:attempt,failures}).slice(0,1000)});
+        await new Promise(resolve=>setTimeout(resolve,attempt*100));
+      }
+    }
+  }
   function asyncTask(result) {
     const data = connectorData(result);
     return data?.async_task ?? data?.result?.async_task;
@@ -100,8 +127,8 @@
   }
   async function verifyAfterWrite(batchId,ticket,pageId) {
     let page;
-    const readFailure=error=>Object.assign(new Error('REVISION_READ_ERROR'),{readDetail:String(error?.message??error).slice(0,1000)});
-    try{page=await tools.mcp__codex_apps__notion_fetch({id:pageId});}
+    const readFailure=error=>Object.assign(new Error('REVISION_READ_ERROR'),{readDetail:String(error?.readDetail??error?.message??error).slice(0,1000)});
+    try{page=await fetchPage(pageId,'verify');}
     catch(error){throw readFailure(error);}
     try{return await broker({action:'verify',batchId,ticket,page});}
     catch(error){
@@ -122,22 +149,22 @@
       // Inspect all targets before claiming a batch or issuing its first write.
       // Prepare/authorize repeat the same plan against fresh complete reads.
       for(let i=checked.next;i<edits.length;i++)await broker({action:'preflight',batchId,
-        edit:edits[i],page:await tools.mcp__codex_apps__notion_fetch({id:edits[i].pageId})});
+        edit:edits[i],page:await fetchPage(edits[i].pageId,'preflight')});
       const begin = await broker({ action: 'begin', batchId, edits });
       if (begin.status === 'COMPLETED') return { status: 'COMPLETED', replayed: false, alreadyConsumed: true, receipts };
       if (begin.status !== 'READY') throw new Error('UNRESOLVED_BATCH: '+begin.status);
       enteredRun = true;
       for (let index=begin.next; index<edits.length; index++) {
         const edit=edits[index];
-        const prepared = await broker({ action:'prepare', batchId, page:await tools.mcp__codex_apps__notion_fetch({ id:edit.pageId }) });
+        const prepared = await broker({ action:'prepare', batchId, page:await fetchPage(edit.pageId,'prepare') });
         const authorized = await broker({ action:'authorize', batchId, ticket:prepared.ticket,
-          page:await tools.mcp__codex_apps__notion_fetch({ id:edit.pageId }) });
+          page:await fetchPage(edit.pageId,'authorize') });
         // The caller never constructs a Notion mutation. Only the broker emits it.
         await update(authorized.request);
         const verified = await verifyAfterWrite(batchId,prepared.ticket,edit.pageId);
         receipts.push({ pageId:edit.pageId, ...verified, snapshot:prepared.snapshot });
       }
-      return { status:'COMPLETED', receipts };
+      return { status:'COMPLETED', receipts, readDiagnostics };
     } catch (error) {
       // Errors before begin (e.g. PRODUCTION_HOLD) need no journal mutation.
       // Errors after begin keep the global barrier, including ACK loss/crashes.
@@ -161,25 +188,39 @@
       // durable receipts, then leave any subsequent worker records untouched.
       await broker({ action:'reconcile_receipts', ...identity });
       await broker({ action:'reconcile_unwritten', ...identity, ticket:batch.receipt.ticket,
-        page:await tools.mcp__codex_apps__notion_fetch({ id:batch.edits[batch.next].pageId }) });
+        page:await fetchPage(batch.edits[batch.next].pageId,'reconcile-prepared') });
       for (let index=batch.next; index<batch.edits.length; index++) {
         const edit=batch.edits[index];
         // Keep the immutable pending snapshot and ticket on the first page.
         const prepared=index===batch.next ? batch.receipt : await broker({ action:'prepare', batchId,
-          page:await tools.mcp__codex_apps__notion_fetch({ id:edit.pageId }) });
+          page:await fetchPage(edit.pageId,'prepare') });
         const authorized=await broker({ action:'authorize', batchId, ticket:prepared.ticket,
-          page:await tools.mcp__codex_apps__notion_fetch({ id:edit.pageId }) });
+          page:await fetchPage(edit.pageId,'authorize') });
         await update(authorized.request);
         const verified=await verifyAfterWrite(batchId,prepared.ticket,edit.pageId);
         receipts.push({ pageId:edit.pageId, ...verified, snapshot:prepared.snapshot });
       }
-      return { status:'COMPLETED', resumed:true, receipts };
+      return { status:'COMPLETED', resumed:true, receipts, readDiagnostics };
     } catch (error) {
       if (enteredRecovery) {
         try { await broker({ action:'halt', batchId, reason:error.message,readDetail:error.readDetail }); } catch { /* Preserve HALTED. */ }
       }
       throw error;
     } finally { await close(); }
+  }
+  async function resumeUnprepared(batchId, expectedPlanHash) {
+    try {
+      const state=await broker({action:'status'}),batch=state.batches?.[batchId];
+      if(state.active!==batchId||!batch||batch.planHash!==expectedPlanHash||batch.status!=='HALTED'||
+          batch.haltedFrom!=='READY'||batch.receipt!==null)throw new Error('RECONCILE_IDENTITY');
+      const input={action:'reconcile_unprepared_read',batchId,planHash:expectedPlanHash,
+        expectedError:batch.error,page:await fetchPage(batch.edits[batch.next].pageId,'reconcile-ready')};
+      await broker({...input,apply:false});
+      const recovered=await broker({...input,apply:true});
+      // The broker restored only READY. Every remaining page still passes the
+      // ordinary same-batch preflight/authorization/write/full verification.
+      return {...await run(batchId,batch.edits),resumed:true,recoveryAudit:recovered.audit};
+    } finally {await close();}
   }
   async function reconcileAutolink(batchId, expectedPlanHash, snapshotHash, actualHash, actualSnapshotHash) {
     try {
@@ -191,8 +232,8 @@
         throw new Error('RECONCILE_IDENTITY');
       return await broker({ action:'reconcile_autolink', batchId, planHash:expectedPlanHash,
         expectedError:'READBACK_MISMATCH', ticket:batch.receipt.ticket, snapshotHash, actualHash, actualSnapshotHash,
-        page:await tools.mcp__codex_apps__notion_fetch({ id:batch.edits[0].pageId }) });
+        page:await fetchPage(batch.edits[0].pageId,'reconcile-autolink') });
     } finally { await close(); }
   }
-  return { run, resume, reconcileAutolink, broker, close };
+  return { run, resume, resumeUnprepared, reconcileAutolink, broker, close };
 })

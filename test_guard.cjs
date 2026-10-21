@@ -240,6 +240,9 @@ function runnerFixture(t, fault, policy={}) {
     },
     async mcp__codex_apps__notion_fetch({id}){
       fetches++;const value=structuredClone(pages.get(id));
+      if((fault==='read-before-prepare'&&fetches>=2&&fetches<=4)||
+          (fault==='read-before-authorize'&&fetches>=3&&fetches<=5))return {isError:true};
+      if(fault==='read-after-prior'&&fetches>=6&&fetches<=8)return {isError:true};
       if(fault==='readback' && writes===1)value.structuredContent.text=value.structuredContent.text.replace(history,'');
       if(fault==='revision-read'&&writes===1)value.structuredContent.page_last_edited_at=null;
       if(fault==='fetch-after-write'&&writes===1)throw new Error('transient native fetch failure');
@@ -259,6 +262,37 @@ function runnerFixture(t, fault, policy={}) {
 test('real orchestration uses broker requests, fresh pre/post reads and sequential pages',async t=>{
   const f=runnerFixture(t);const r=await f.runner.run('observation',[edit(),edit(B)]);
   assert.equal(r.status,'COMPLETED');assert.equal(f.writes,2);assert.equal(f.fetches,8);assert.equal(f.closed,true);
+});
+for(const [phase,at] of [['preflight',1],['prepare',2],['authorize',3],['verify',4]])
+test('bounded native read retries complete '+phase+' with exactly one mutation',async t=>{
+ const f=runnerFixture(t),fetch=f.tools.mcp__codex_apps__notion_fetch;let calls=0;
+ f.tools.mcp__codex_apps__notion_fetch=async input=>{
+  calls++;if(calls===at||calls===at+1)throw new Error('native transport temporarily unavailable');return fetch(input);
+ };
+ const result=await f.runner.run('observation',[edit()]);
+ assert.equal(result.status,'COMPLETED');assert.equal(calls,6);assert.equal(f.writes,1);
+ assert.equal(result.readDiagnostics.length,1);assert.equal(result.readDiagnostics[0].phase,phase);
+ assert.equal(result.readDiagnostics[0].attempts,3);assert.equal(result.readDiagnostics[0].failures.length,2);
+});
+test('persistent pre-write fetch failure retains native diagnostic and original durable READY proof',async t=>{
+ const f=runnerFixture(t,'read-before-prepare');await assert.rejects(f.runner.run('observation',[edit()]),/FETCH_ERROR/);
+ const b=f.f.b.state.batches.observation,detail=JSON.parse(b.readDetail);
+ assert.equal(b.status,'HALTED');assert.equal(b.haltedFrom,'READY');assert.equal(b.receipt,null);
+ assert.equal(detail.pageId,A);assert.equal(detail.phase,'prepare');assert.equal(detail.attempts,3);assert.equal(f.writes,0);
+});
+test('explicit unprepared runner recovery uses the same batch and one ordinary remaining mutation',async t=>{
+ const f=runnerFixture(t);begin(f.f.b);f.f.b.handle({action:'halt',batchId:'observation',reason:'FETCH_ERROR: native read failed'});
+ const b=f.f.b.state.batches.observation,result=await f.runner.resumeUnprepared('observation',b.planHash);
+ assert.equal(result.status,'COMPLETED');assert.equal(result.resumed,true);assert.equal(f.writes,1);
+ assert.equal(result.recoveryAudit.notionWrites,0);assert.equal(result.recoveryAudit.acknowledgedWrites,0);
+ assert.equal(result.recoveryAudit.pageAdvances,0);assert.deepEqual(Object.keys(f.f.b.state.batches),['observation']);
+});
+test('unprepared runner recovery refuses an applied/unknown or wrong-plan batch without a mutation',async t=>{
+ const f=runnerFixture(t);begin(f.f.b);const r=prepare(f.f.b);authorize(f.f.b,r);
+ f.f.b.handle({action:'halt',batchId:'observation',reason:'FETCH_ERROR: no acknowledgement'});
+ const before=fs.readFileSync(f.f.b.file,'utf8');
+ await assert.rejects(f.runner.resumeUnprepared('observation',f.f.b.state.batches.observation.planHash),/RECONCILE_IDENTITY/);
+ assert.equal(f.writes,0);assert.equal(fs.readFileSync(f.f.b.file,'utf8'),before);
 });
 for(const fault of ['readback','lost-ack','async'])test('connector '+fault+' prevents second Notion mutation',async t=>{
   const f=runnerFixture(t,fault);await assert.rejects(f.runner.run('observation',[edit(),edit(B)]));
@@ -526,6 +560,48 @@ function legacyArrows(b, render=s=>s.replaceAll(' -> ',' -\\> ')) {
   const legacy=legacyAutolink(b,edits,render(body(edits[0].newStr)));
   legacy.input.action='reconcile_escaped_arrows';return {...legacy,edits};
 }
+for(const phase of ['READY','PREPARED'])for(const stamp of [undefined,null,'','not-a-time','2026-02-30T00:00:00Z'])
+test('legacy arrow recovery rejects an invalid shared audit timestamp: '+phase+' '+String(stamp),t=>{
+ const f=fixture(t,{productionPages:arrowIds}),legacy=legacyArrows(f.b);f.b.handle(legacy.input);
+ const b=f.b.state.batches.observation;delete b.verifications;
+ const file=legacy.receipt.snapshot+'.verified.json',v=JSON.parse(fs.readFileSync(file));
+ if(stamp===undefined){delete v.at;delete v.reconciliation.at;}else{v.at=stamp;v.reconciliation.at=stamp;}
+ b.reconciliations[0]=structuredClone(v.reconciliation);atomic(file,v);f.b.save();
+ if(phase==='PREPARED')prepare(f.b,page(B));
+ f.b.handle({action:'halt',batchId:'observation',reason:'FETCH_ERROR: native read failed'});
+ const before=fs.readFileSync(f.b.file,'utf8');
+ rejects('PERSISTENCE',()=>phase==='READY'
+  ?f.b.handle({action:'reconcile_unprepared_read',...repairInput(f.b,'reconcile_unprepared_read'),page:page(B),apply:true})
+  :f.b.handle(repairInput(f.b,'reconcile_receipts')));
+ assert.equal(fs.readFileSync(f.b.file,'utf8'),before);assert.equal(fs.readFileSync(file,'utf8'),JSON.stringify(v));
+});
+test('repeated halt preserves the original durable phase, cause and diagnostic',t=>{
+ const {b}=fixture(t);begin(b);
+ b.handle({action:'halt',batchId:'observation',reason:'FETCH_ERROR: original',readDetail:'original native error'});
+ const before=fs.readFileSync(b.file,'utf8');
+ rejects('HALTED',()=>b.handle({action:'halt',batchId:'observation',reason:'PERSISTENCE: later rejected check',readDetail:'later error'}));
+ assert.equal(fs.readFileSync(b.file,'utf8'),before);
+ assert.equal(b.state.batches.observation.haltedFrom,'READY');
+});
+for(const phase of ['READY','PREPARED'])test('native-read recovery admits and preserves a validated historical arrow receipt: '+phase,t=>{
+ const f=fixture(t,{productionPages:arrowIds}),legacy=legacyArrows(f.b);f.b.handle(legacy.input);
+ delete f.b.state.batches.observation.verifications;f.b.save(); // Historical source predates fingerprints.
+ const actualFile=f.b.snapshot('observation',0)+'.actual.json',actual=fs.readFileSync(actualFile,'utf8');
+ const pending=phase==='PREPARED'?prepare(f.b,page(B)):null;
+ f.b.handle({action:'halt',batchId:'observation',reason:'FETCH_ERROR: native read failed'});
+ const b=f.b.state.batches.observation,identity={batchId:'observation',planHash:b.planHash,expectedError:b.error};
+ if(phase==='READY')assert.equal(f.b.handle({action:'reconcile_unprepared_read',...identity,page:page(B),apply:true}).status,'READY');
+ else {f.b.handle({action:'reconcile_receipts',...identity});assert.equal(f.b.handle({action:'reconcile_unwritten',...identity,ticket:pending.ticket,page:page(B)}).status,'PREPARED');}
+ assert.equal(b.next,1);assert.equal(fs.readFileSync(actualFile,'utf8'),actual);
+});
+test('native-read recovery rejects altered historical rendering evidence',t=>{
+ const f=fixture(t,{productionPages:arrowIds}),legacy=legacyArrows(f.b);f.b.handle(legacy.input);
+ delete f.b.state.batches.observation.verifications;f.b.save();
+ const file=f.b.snapshot('observation',0)+'.actual.json',d=JSON.parse(fs.readFileSync(file));d.page.body+='tampered';atomic(file,d);
+ f.b.handle({action:'halt',batchId:'observation',reason:'FETCH_ERROR: native read failed'});
+ const b=f.b.state.batches.observation;rejects('PERSISTENCE',()=>f.b.handle({action:'reconcile_unprepared_read',batchId:'observation',planHash:b.planHash,expectedError:b.error,page:page(B),apply:true}));
+ assert.equal(b.status,'HALTED');
+});
 test('plain ASCII arrows reject before fetch or durable admission; code and Unicode arrows remain stable',async t=>{
   const f=runnerFixture(t);
   await assert.rejects(f.runner.run('arrows',[edit(A,{newStr:'central_status=writer -> review'})]),/MARKDOWN_ESCAPE_RISK/);
@@ -659,6 +735,76 @@ function appliedReadbackFixture(t,remaining=false) {
   page:page(B,body(newStr),{title:'Test'},'2026-10-12T00:01:00Z')};
  return {f,input};
 }
+test('a genuine failed pre-prepare read restores the same READY plan without acknowledging any write',async t=>{
+ const f=runnerFixture(t,'read-before-prepare');await assert.rejects(f.runner.run('pre-read',[edit()]),/FETCH_ERROR/);
+ const b=f.f.b.state.batches['pre-read'];assert.equal(f.writes,0);assert.equal(b.haltedFrom,'READY');assert.equal(b.receipt,null);
+ const input={action:'reconcile_unprepared_read',batchId:'pre-read',planHash:b.planHash,expectedError:b.error,page:page(),apply:false};
+ const before=fs.readFileSync(f.f.b.file,'utf8');assert.equal(f.f.b.handle(input).checkOnly,true);assert.equal(fs.readFileSync(f.f.b.file,'utf8'),before);
+ const r=f.f.b.handle({...input,apply:true});assert.equal(r.status,'READY');assert.equal(r.audit.pageAdvances,0);assert.equal(f.writes,0);
+ assert.equal((await f.newRunner().run('pre-read',[edit()])).status,'COMPLETED');assert.equal(f.writes,1);
+});
+for(const phase of ['READY','PREPARED'])test('native-read recovery preserves a fully audited historical applied-readback receipt: '+phase,t=>{
+ const f=fixture(t);begin(f.b,[edit(),edit(B)]);const r=prepare(f.b);authorize(f.b,r);
+ f.b.handle({action:'halt',batchId:'observation',reason:'REVISION_READ_ERROR'});let b=f.b.state.batches.observation;
+ f.b.handle({action:'reconcile_applied_readback',batchId:'observation',planHash:b.planHash,expectedError:b.error,
+  snapshotHash:b.receipt.snapshotHash,page:page(A,body(newStr),undefined,'2026-10-12T00:01:00Z'),apply:true});
+ delete b.verifications;f.b.save(); // Historical source has the immutable recovery audit instead.
+ const pending=phase==='PREPARED'?prepare(f.b,page(B)):null;
+ f.b.handle({action:'halt',batchId:'observation',reason:'FETCH_ERROR: native read failed'});
+ const identity={batchId:'observation',planHash:b.planHash,expectedError:b.error};
+ if(phase==='READY')assert.equal(f.b.handle({action:'reconcile_unprepared_read',...identity,page:page(B),apply:true}).status,'READY');
+ else {f.b.handle({action:'reconcile_receipts',...identity});assert.equal(f.b.handle({action:'reconcile_unwritten',...identity,ticket:pending.ticket,page:page(B)}).status,'PREPARED');}
+ assert.equal(b.next,1);
+});
+test('prepared native-read recovery retains its exact original ticket and authorizes only once',async t=>{
+ const f=runnerFixture(t,'read-before-authorize');await assert.rejects(f.runner.run('prepared-read',[edit()]),/FETCH_ERROR/);
+ const b=f.f.b.state.batches['prepared-read'],ticket=b.receipt.ticket;assert.equal(b.haltedFrom,'PREPARED');assert.equal(f.writes,0);
+ const done=await f.newRunner().resume('prepared-read',b.planHash);assert.equal(done.status,'COMPLETED');assert.equal(f.writes,1);
+ const saved=JSON.parse(fs.readFileSync(f.f.b.snapshot('prepared-read',0)));assert.equal(saved.ticket,ticket);
+});
+for(const fault of ['orphan snapshot','applied text','policy','missing phase','wrong error'])test('unprepared read recovery rejects '+fault,async t=>{
+ const f=runnerFixture(t,'read-before-prepare');await assert.rejects(f.runner.run('pre-read',[edit()]));
+ const b=f.f.b.state.batches['pre-read'];let p=page();
+ if(fault==='orphan snapshot')atomic(f.f.b.snapshot('pre-read',0),{orphan:true});
+ if(fault==='applied text')p=page(A,body(newStr));
+ if(fault==='policy')f.f.b.policy.productionEnabled=false;
+ if(fault==='missing phase'){delete b.haltedFrom;f.f.b.save();}
+ if(fault==='wrong error'){b.error='READBACK_MISMATCH';f.f.b.save();}
+ const before=fs.readFileSync(f.f.b.file,'utf8');assert.throws(()=>f.f.b.handle({action:'reconcile_unprepared_read',batchId:'pre-read',planHash:b.planHash,expectedError:b.error,page:p,apply:true}));
+ assert.equal(fs.readFileSync(f.f.b.file,'utf8'),before);assert.equal(f.writes,0);
+});
+test('prepared read recovery refuses an already-applied output instead of replaying it',async t=>{
+ const f=runnerFixture(t,'read-before-authorize');await assert.rejects(f.runner.run('prepared-read',[edit()]));
+ const b=f.f.b.state.batches['prepared-read'];f.pages.set(A,page(A,body(newStr),undefined,'2026-10-12T00:01:00Z'));
+ await assert.rejects(f.newRunner().resume('prepared-read',b.planHash),/RECONCILE_CHANGED/);assert.equal(f.writes,0);
+});
+for(const kind of ['journal drift','future snapshot','future verification'])test('prepared native-read recovery preserves inconsistent evidence: '+kind,t=>{
+ const f=fixture(t);begin(f.b,[edit(),edit(B)]);prepare(f.b);
+ f.b.handle({action:'halt',batchId:'observation',reason:'FETCH_ERROR: native read failed'});
+ const b=f.b.state.batches.observation;
+ if(kind==='journal drift'){const d=JSON.parse(fs.readFileSync(f.b.file));d.concurrent='preserve';atomic(f.b.file,d);}
+ else atomic(f.b.snapshot('observation',1)+(kind==='future verification'?'.verified.json':''),{orphan:'preserve'});
+ const before=fs.readFileSync(f.b.file,'utf8');
+ rejects('PERSISTENCE',()=>f.b.handle({action:'reconcile_receipts',batchId:'observation',planHash:b.planHash,expectedError:b.error}));
+ assert.equal(fs.readFileSync(f.b.file,'utf8'),before);
+ if(kind!=='journal drift')assert.equal(fs.readFileSync(f.b.snapshot('observation',1)+(kind==='future verification'?'.verified.json':''),'utf8').includes('preserve'),true);
+});
+test('unprepared recovery rejects applied prefix expansion even when the old literal remains',t=>{
+ const f=fixture(t),e=edit(A,{newStr:oldStr+' then verified'});begin(f.b,[e]);
+ f.b.handle({action:'halt',batchId:'observation',reason:'FETCH_ERROR: native read failed'});
+ const b=f.b.state.batches.observation;
+ rejects('RECONCILE_CHANGED',()=>f.b.handle({action:'reconcile_unprepared_read',batchId:'observation',planHash:b.planHash,
+  expectedError:b.error,page:page(A,body(e.newStr)),apply:true}));
+ assert.equal(b.status,'HALTED');
+});
+for(const tamper of [false,true])test('unprepared recovery preserves original full prior-receipt fingerprint: '+tamper,async t=>{
+ const f=runnerFixture(t,'read-after-prior'),edits=[edit(),edit(B)];await assert.rejects(f.runner.run('prior-read',edits),/FETCH_ERROR/);
+ const b=f.f.b.state.batches['prior-read'];assert.equal(b.next,1);assert.equal(f.writes,1);
+ if(tamper){const file=f.f.b.snapshot('prior-read',0)+'.verified.json',v=JSON.parse(fs.readFileSync(file));delete v.at;atomic(file,v);}
+ const input={action:'reconcile_unprepared_read',batchId:'prior-read',planHash:b.planHash,expectedError:b.error,page:page(B),apply:true};
+ if(tamper){rejects('PERSISTENCE',()=>f.f.b.handle(input));assert.equal(f.writes,1);}
+ else {assert.equal(f.f.b.handle(input).status,'READY');assert.equal((await f.newRunner().run('prior-read',edits)).status,'COMPLETED');assert.equal(f.writes,2);}
+});
 for(const fault of ['revision-read','fetch-after-write'])test('real runner persists recoverable read classification only after authorized update: '+fault,async t=>{
  const f=runnerFixture(t,fault);
  await assert.rejects(f.runner.run('post-write-read',[edit()]),/REVISION_READ_ERROR/);
