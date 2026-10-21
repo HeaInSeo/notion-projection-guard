@@ -41,14 +41,17 @@ FINDING = "https://github.com/HeaInSeo/notion-projection-guard/pull/1#discussion
 # Reviewed operational source updates are separate from the immutable import
 # and correction commit. Never obtain these pins from a mutable manifest.
 SOURCE_UPDATES = {
-    "broker.cjs": "20ffe1249ef6c4adb22978022f68fa9596315b0f",
+    "complete_projection_cases.cjs": "f032dd8fb38436cd7fa68f3de2cd3db4ec1ed38c",
+    "transport_preprepare_cases.cjs": "4f1737873592c57e07f1dd1a676587319ae1182b",
+    "router_stale_prewrite_cases.cjs": "6914f417d20f590c12c7ffaf1b2df122cefc5dd5",
+    "broker.cjs": "6b6552799df09eac6e7e68a1d430c8837457d48d",
     "runner.js": "0fd2266614e117e0a208e3c3be93caca2d89fb1e",
-    "test_guard.cjs": "785653b0e41253b8089f11e4407baecd00d08909",
+    "test_guard.cjs": "5b046029b102fc61453083099710f3f608d7949b",
     "reconcile_claim40_superseded.cjs": "562fa5e9988cfc2f7d73e4c46f035f9e89830678",
-    "claim40_closure_cases.cjs": "7acc23d8aec0dd5d8864d567ea5cad6862a76816",
+    "claim40_closure_cases.cjs": "c7b5973e74bd3a75b46cacc770e984bf0c1ae5ce",
     "reconcile_nodekit_pointer_partial.cjs": "77310ea22bd8ce455fe3f87e828286e21ead6d4f",
-    "test_nodekit_pointer_partial.cjs": "dfe979241098976ceb5a5de854947a050f84e54e",
-    "complete_projection.js": "cef172b96eb58356e65429b92c319791d64adb5d",
+    "test_nodekit_pointer_partial.cjs": "b9bd718a5f2c919ed1ba3813284abb9b639e4233",
+    "complete_projection.js": "751688e9628fcc996c26587a7fbb9673fef9fe82",
     "verify_runtime.cjs": "4880f8e6c57b87153318f852ccacaa4f7004c929",
 }
 

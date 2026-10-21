@@ -11,7 +11,7 @@ test('legacy helper rejects an adjacent broker before loading unreviewed module 
 });
 function fixture(t){
  const root=fs.mkdtempSync(path.join(os.tmpdir(),'claim40-closure-'));fs.chmodSync(root,0o700);
- const ids=Array.from({length:8},(_,i)=>String(i+1).repeat(32)),heading='## CURRENT CENTRAL OBSERVATION · test',oldStr='central_status=WAIT',newStr='central_status=CLAIM40';
+ const ids=Array.from({length:8},(_,i)=>String(i+1).repeat(32)),heading='## CURRENT CENTRAL OBSERVATION · test',oldStr='central-status=WAIT',newStr='central-status=CLAIM40';
  const page=(id,value,rev='2026-10-20T23:00:00Z')=>({structuredContent:{id,page_last_edited_at:rev,text:'<properties>\n{"title":"immutable"}\n</properties>\n<content>\n'+heading+'\n'+value+'\n## WORKER\nreal own evidence\n</content>'}});
  const policy={productionEnabled:true,productionPages:ids,canaryPages:[],headingPrefixes:['## CURRENT CENTRAL OBSERVATION']};
  const b=new Broker(root,policy),batchId='SORI-TRUST-20261021-R4-CLAIM40',edits=ids.map(pageId=>({pageId,heading,oldStr,newStr}));
@@ -56,7 +56,7 @@ for(const kind of ['prior time','pending body','source body','source props','lat
  if(kind==='pending body')input.targets[2].structuredContent.text=input.targets[2].structuredContent.text.replace('real own evidence','real own evidence plus worker change');
  if(kind==='source body')input.sources[0].structuredContent.text=input.sources[0].structuredContent.text.replace('real own evidence','real own evidence plus later CLAIM');
  if(kind==='source props')input.sources[1].structuredContent.text=input.sources[1].structuredContent.text.replace('immutable','new worker');
- if(kind==='later output')input.targets[3].structuredContent.text=input.targets[3].structuredContent.text.replace('central_status=WAIT','central_status=CLAIM40');
+ if(kind==='later output')input.targets[3].structuredContent.text=input.targets[3].structuredContent.text.replace('central-status=WAIT','central-status=CLAIM40');
  if(kind==='missing target')input.targets.pop();
  if(kind==='policy')b.policy.productionEnabled=false;
  if(kind==='journal drift'){const d=JSON.parse(fs.readFileSync(b.file));d.extra='outside lock';fs.writeFileSync(b.file,JSON.stringify(d));}

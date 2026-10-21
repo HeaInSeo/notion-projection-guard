@@ -19,11 +19,14 @@ the immutable plan; it makes zero Notion writes, acknowledges zero writes and
 advances zero pages. The original misrendered write is not product acceptance
 or a complete projection. The remaining four edits are never replayed. A new
 complete observation must use current authority and the ordinary guarded path,
-preferably plain literals to avoid uncertain serialization. No normal verifier,
+using the required plain observation marker and the prewrite serialization checks below. No normal verifier,
 runtime installation, policy or worker evidence changes are part of this helper.
 A crash after the private audit is saved remains blocked for reconciliation;
 the audit must not be removed to retry. Run its synthetic tests with
 `node --test test_nodekit_pointer_partial.cjs`; no private page content is checked in.
+
+See [the reviewed two-stage recovery procedure](VERIFICATION_20261021_NODEKIT_POINTER.md)
+for immutable source pins, closure-before-upgrade ordering and deployment limits.
 
 ## Source and installed version
 
@@ -31,7 +34,7 @@ The source repository is `HeaInSeo/notion-projection-guard`. Runtime, tests and
 incident helpers preserve the immutable import; later operational updates have
 explicit code pins in the provenance verifier. See [MIGRATION.md](MIGRATION.md)
 for the 35-commit history map, legacy installation provenance and source cutover.
-Run `node --test test_guard.cjs test_runtime.cjs test_revision.cjs supervision_gate_cases.cjs serialized_format_cases.cjs`
+Run `node --test test_guard.cjs test_runtime.cjs test_revision.cjs supervision_gate_cases.cjs serialized_format_cases.cjs test_nodekit_pointer_partial.cjs`
 on Node 22 or 24.
 
 [OPERATIONS.md](OPERATIONS.md) records the public/private storage boundary,
@@ -41,7 +44,7 @@ The recorded installed broker/runner come from full commit
 [the runtime manifest](deployment/runtime-01b8a789.json). A later documentation or
 verification-tool commit does not change that approved installed source version.
 
-## Complete NodeKit/Sori observations
+## Complete repository observations
 
 `complete_projection.js` is the Code Mode entry point for these observations.
 It requires a fixed manifest: both native central metadata records, the repo
@@ -54,10 +57,11 @@ Evaluate the file as a function expression and call
 `createCompleteProjection(tools, {createRunner, runnerConfig}).run(bundle)`.
 `createRunner` and `runnerConfig` remain the separately approved pinned runner
 and canonical broker command. The bundle contains `observationId` (ASCII letters,
-digits, underscore and hyphen), `repositories` (`nodekit` and/or `sori`), ordinary
-`edits`, and `native: [{pageId, properties}]`. Each new body literal and each native
-`큐 정리 근거` use the identical `observation_id=` field with a backtick
-quoted ID by default. The optional plain observation marker is described below;
+digits and hyphen), explicit `observationMarkerStyle: 'plain-v1'`,
+`repositories` (`nodekit`, `sori` and/or `bori`), ordinary `edits`, and
+`native: [{pageId, properties}]`. Each new body literal and native `큐 정리 근거`
+uses the identical plain prefix `observation-id: ID;`. Markdown markers are no
+longer admitted for new projections;
 native expectations include 작업 상태, 다음 담당자, 큐 구획,
 차단 대상, 재개 지시 and 큐 정리 근거; only central metadata keys are accepted.
 
@@ -77,7 +81,10 @@ be recorded in the actual supervisor prompt and verified on real observations.
 ## Successor and concurrency accounting
 
 Use one repository per ordinary observation: NodeKit needs body6/native2 and
-Sori body8/native2, including every shared projection. A busy unrelated worker
+Sori body8/native2; BORI uses only the five existing shared bodies plus its
+exact O6 writer/pair native records (body5/native2). No BORI source body is
+authorized for mutation, and broker policy scope is unchanged. Every profile
+includes all shared projections. A busy unrelated worker
 does not defer these decisions. The canonical broker's global pending barrier
 continues to apply. Combined observations remain supported for an actually
 inseparable event, not as the default waiting policy.
@@ -85,7 +92,7 @@ inseparable event, not as the default waiting policy.
 Evaluate `supervision_gate.js` as a function expression and call the returned
 `assess(snapshot)` before ending supervision. Its version-1 input contains a fresh
 UTC `observedAt`, `canonical: {active, nonterminal}`, `previousPending`, and
-`events`. Event and carried pending repositories must be `nodekit` or `sori`,
+`events`. Event and carried pending repositories must be `nodekit`, `sori` or `bori`,
 matching the complete projection manifest. Each event binds `repository` to a source (actual `MERGED` PR with full
 head/merge SHAs and timestamp, or an own `RELEASE` identity), canonical
 `expectedSuccessors`, complete projection certificate/source key and one
@@ -334,8 +341,8 @@ Notion rendered one bare `package-cli.sh` in a central observation as
 `[package-cli.sh](http://package-cli.sh)`. The ordinary exact verifier correctly
 halted. It continues to reject normalization; no general readback cleanup is
 introduced. New batches reject unmarked hostname-shaped filenames and URLs
-before claiming the journal or fetching Notion. Use inline code or an explicit
-Markdown link so the planned representation is stable.
+before claiming the journal or fetching Notion. Use an explicit Markdown link;
+new inline-code literals are now rejected by the serialization-risk gate.
 Replayed legacy READY batches validate every remaining edit as well. The same
 check runs in prepare and authorize, so a saved PREPARED ticket cannot bypass it.
 
@@ -362,7 +369,8 @@ canonical state, protected-content verification and durable ACK.
 
 A later six-page central batch halted on its first page: the connector returned
 the two plain ` -> ` sequences as ` -\> `. New writes reject plain ASCII arrows
-outside inline code/links (`MARKDOWN_ESCAPE_RISK`); use `→` or inline code.
+outside explicit links (`MARKDOWN_ESCAPE_RISK`); use `→`. New inline code is
+rejected separately rather than used as a formatting workaround.
 The ordinary verifier still requires exact equality.
 
 The separately invoked broker action `reconcile_escaped_arrows` requires that
@@ -521,12 +529,19 @@ event syntax remain forbidden. Canonical and escaped aliases together are
 ambiguous. No body bytes, offsets, revision tokens, properties, protected hashes
 or post-write comparisons are normalized.
 
-For a new complete observation, `observationMarkerStyle: 'plain-v1'` opts into the
-plain prefix `observation-id: ID;` in both body literals and native metadata.
-Its ID uses letters, digits and hyphens only. The default Markdown marker remains
-supported. Mixed styles or duplicate identities are rejected. The
-same mandatory original, paired, index and five shared body targets, native
-metadata checks and exact full readbacks remain required. Use plain text in
-the new observation when exact Markdown export would otherwise be uncertain;
-this mode does not predict or forgive rendering changes.
+For a new complete observation, explicit `observationMarkerStyle: 'plain-v1'`
+is required. It selects the plain prefix `observation-id: ID;` in body literals
+and native observation metadata; IDs use letters, digits and hyphens only.
+The complete new body literal and native observation reason reject backticks
+and underscores, including escaped forms. The broker repeats this check at
+batch admission, preflight, prepare and authorize, so direct calls and persisted
+pre-upgrade READY/PREPARED plans cannot bypass it. Old exported literals keep
+their exact representation. Missing style, Markdown markers, mixed styles and
+duplicate identities reject before reads or writes.
+
+This specifically prevents the two observed transformations (backticks to code
+tags, and underscore escaping). It is not a general guarantee that arbitrary
+Markdown round-trips unchanged. Explicit links retain the existing admission
+rules; every unexpected rendering/content/property difference still halts exact
+verification. No normalization or looser protected comparison is introduced.
 The helper defaults to check-only and cannot be called automatically by run/resume.

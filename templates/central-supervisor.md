@@ -22,14 +22,18 @@
 3. 같은 고정 커밋의 `runner.js`와 `complete_projection.js`를 해시로 확인하고
    기존 authenticated connector와 승인 broker command를 사용한다. 토큰을 추출하지 않는다.
 4. 저장소마다 complete entry를 따로 실행한다. NodeKit은 `repositories:['nodekit']`
-   (body 6/native 2), Sori는 `repositories:['sori']`(body 8/native 2)다. 각 실행은
+   (body 6/native 2), Sori는 `repositories:['sori']`(body 8/native 2), BORI는
+   `repositories:['bori']`(shared body 5/native 원본2)다. 각 실행은
    해당 고정 manifest 전체와 shared projections를 포함한다. 독립 사건을 body9/native4
    결합 관측으로 묶어 다른 저장소의 worker 변경을 기다리지 않는다. canonical
    pending/HALTED 장벽은 저장소 분리로 우회할 수 없다. native property는 허용된
    중앙 속성만 기존 보존 절차로 갱신하고 worker 증빙은 보존한다.
 5. 본문은 fresh full read의 정확한 중앙 heading 아래 유일한 한 줄 literal만
    사용한다. old/new 각각 1024자 이하이며 필드·코드 경계를 자르지 않는다.
-   runner의 전체 대상 preflight와 매 페이지 prepare/authorize/전체 readback을 따른다.
+   새 bundle은 `observationMarkerStyle:'plain-v1'`와 `observation-id: ID;`를
+   명시하고 새 body 문구와 native 큐 정리 근거에 backtick/underscore를 넣지 않는다.
+   oldStr는 fetch된 export 그대로 사용한다. runner의 전체 대상 preflight와
+   매 페이지 prepare/authorize/전체 readback을 따른다.
 6. 사전검사 거부는 실제 미기록·0 writes를 확인한 뒤 계획을 보정한다. 미확정 batch를
    새 ID/state나 raw write로 우회하지 않는다. 복구 helper를 자동 호출하지 않는다.
 7. 전체 body·property 보존을 검증한 complete entry의 `COMPLETE`만 현재 동기화

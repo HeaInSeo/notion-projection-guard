@@ -103,6 +103,36 @@ test('DONE rejects another source, task or pre-source completion timestamp',()=>
 test('DONE accepts a current structured task/input-bound accepted release',()=>{
  const s=fixture();completion(s);assert.equal(gate.assess(s).status,'COMPLETE');
 });
+function boriFixture(kind){
+ const s=fixture(),e=s.events[0],id='GR-BORI-O6-REAL-WORLD-CONFORMANCE-20261012';
+ e.repository='bori';e.source=kind==='MERGED'?{...e.source,pr:47}:
+  {kind:'RELEASE',taskId:'OP-BORI-O6-REAL-WORLD-CONFORMANCE-20261012',eventId:'own-o6-release',head:'c'.repeat(40),at:e.source.at};
+ const key=gate.eventKey(e),next=e.successors[0];e.expectedSuccessors=[id];e.successors=[next];
+ e.projection={status:'COMPLETE',sourceKey:key,certificate:'body5-native2-full-readback'};
+ next.id=id;next.sourceKey=key;next.handoff.ownReceipt.taskId=id;next.handoff.ownReceipt.inputKey=key;
+ return s;
+}
+for(const kind of ['MERGED','RELEASE']){
+ test('BORI '+kind+' requires actual task/input-bound intake and preserves pending age',()=>{
+  const s=boriFixture(kind),e=s.events[0],own=e.successors[0].handoff.ownReceipt;
+  delete e.successors[0].handoff.ownReceipt;
+  const first=gate.assess(s);assert.equal(first.status,'PENDING');
+  assert(first.issues.some(x=>x.code==='AWAIT_OWN_RECEIPT'));
+  s.previousPending=first.pending;s.events=[];
+  const carried=gate.assess(s);assert.equal(carried.pending[0].sourceAt,e.source.at);
+  assert.equal(carried.pending[0].firstSeenAt,e.source.at);
+  assert.equal(carried.pending[0].key,gate.eventKey(e));
+  e.successors[0].handoff.ownReceipt=own;s.events=[e];s.previousPending=carried.pending;
+  assert.equal(gate.assess(s).status,'COMPLETE');
+ });
+ test('BORI '+kind+' cannot borrow another task/input or pre-request receipt',()=>{
+  for(const field of ['taskId','inputKey','at']){
+   const s=boriFixture(kind),own=s.events[0].successors[0].handoff.ownReceipt;
+   own[field]=field==='at'?'2026-10-20T06:00:00Z':'other-input-or-task';
+   assert.equal(gate.assess(s).status,'PENDING');
+  }
+ });
+}
 test('repository typos and unsupported projection scopes fail before accounting',()=>{
  for(const repository of ['nodekti','nodevault','NodeKit','constructor','__proto__']){
   const s=fixture();s.events[0].repository=repository;

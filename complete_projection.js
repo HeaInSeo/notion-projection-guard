@@ -9,6 +9,7 @@
     ['3ed86e6dd1d18118b0b8d98bb91892fb','## CURRENT CENTRAL OBSERVATION · NPR-20261012 · hub'],
     ['3b286e6dd1d1811d9308d9a2b56c9de4','## CURRENT CENTRAL OBSERVATION · NPR-20261012 · dashboard']];
   const repos={
+    bori:{native:['3f786e6dd1d18184ae63d4829e359c90','3f986e6dd1d1815ea6daf86a6cc02520'],bodies:[]},
     nodekit:{native:['3f386e6dd1d18110bf66c5204284ed46','3f386e6dd1d181b5b467e20fafa69365'],
       bodies:[['3f086e6dd1d1818e9aecdc093a08cda9','## CURRENT CENTRAL OBSERVATION · NPR-20261012 · nodekit_index']]},
     sori:{native:['3f586e6dd1d181ebb43dd7de62aa2ca4','3f586e6dd1d181cd9f5bdcdab6290de7'],
@@ -49,21 +50,21 @@
       new Set(bundle.edits.map(e=>e.pageId)).size===bodies.length,'Every mandatory body target required exactly once');
     must(Array.isArray(bundle.native)&&bundle.native.length===native.length&&
       new Set(bundle.native.map(n=>n.pageId)).size===native.length,'Every native metadata target required exactly once');
-    const marker='observation_id=`'+bundle.observationId+'`';
-    const style=bundle.observationMarkerStyle??'markdown-v1';
-    must(['markdown-v1','plain-v1'].includes(style),'Known observation marker style required');
-    must(style!=='plain-v1'||/^[A-Za-z0-9-]+$/.test(bundle.observationId),'Plain identity must avoid Markdown escapes');
-    const observationMarker=style==='plain-v1'?'observation-id: '+bundle.observationId:marker;
+    must(bundle.observationMarkerStyle==='plain-v1','New projections require explicit plain-v1 observation markers');
+    must(/^[A-Za-z0-9-]+$/.test(bundle.observationId),'Plain identity must avoid Markdown escapes');
+    const observationMarker='observation-id: '+bundle.observationId;
     const edits=bodies.map(([id,heading])=>{
       const e=bundle.edits.find(e=>e.pageId===id);
       must(e&&e.heading===heading&&typeof e.oldStr==='string'&&e.oldStr.length>0&&e.oldStr!==e.newStr&&
         identity(e.newStr,observationMarker),'Wrong target/heading or missing unique shared observation ID');
+      must(!/[`_]/.test(e.newStr),'New body literal risks Notion Markdown serialization');
       return e;
     });
     for(const id of native){
       const n=bundle.native.find(n=>n.pageId===id),p=n?.properties;
       must(p&&requiredProps.every(k=>Object.hasOwn(p,k))&&Object.keys(p).every(k=>centralProps.has(k))&&
         identity(p['큐 정리 근거'],observationMarker),'Native central metadata manifest with unique identity required');
+      must(!/[`_]/.test(p['큐 정리 근거']),'New native observation text risks Notion Markdown serialization');
     }
     return {edits,native,ids:[...new Set([...native,...bodies.map(([id])=>id)])]};
   }

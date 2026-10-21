@@ -159,10 +159,16 @@ function bareAutolinks(text) {
 }
 function stableNewText(edit) {
   inlineSpans(edit.oldStr);inlineSpans(edit.newStr);
+  // Notion exports newly written inline code as <code> and escapes literal
+  // underscores. The removal side must keep accepting those exact exported
+  // bytes, but a new central literal must not create another unacknowledgeable
+  // write. Reject before begin/prepare/authorize; never normalize readbacks.
+  if (/[`_]/.test(edit.newStr))
+    fail('MARKDOWN_SERIALIZATION_RISK', 'New central text must avoid backticks and underscores; use plain hyphenated labels');
   if (bareAutolinks(edit.newStr).length)
-    fail('AUTOLINK_RISK', 'Wrap hostname-shaped filenames and URLs in inline code or an explicit Markdown link');
+    fail('AUTOLINK_RISK', 'Use an explicit Markdown link for hostname-shaped filenames and URLs');
   if (plainMarkup(edit.newStr).includes('->'))
-    fail('MARKDOWN_ESCAPE_RISK', 'Use a Unicode arrow or inline code instead of a plain ASCII arrow');
+    fail('MARKDOWN_ESCAPE_RISK', 'Use a Unicode arrow instead of a plain ASCII arrow');
 }
 function scanInline(text,open=null) {
   // Escapes outside spans are Markdown escapes; inside, backslashes are literal.
