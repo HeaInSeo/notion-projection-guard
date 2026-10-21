@@ -208,6 +208,19 @@ No automatic HALTED reset or rollback is implemented.
 
 ### Native read failure before authorization
 
+The runner retries only a thrown/explicit failed native fetch, at most three
+read-only attempts with bounded backoff. It records page, phase, attempt count
+and the original connector errors in `readDiagnostics` after recovery, or in the
+durable `readDetail` if all attempts fail after begin. A successful but incomplete,
+wrong, concurrent or mismatched page still goes through the unchanged broker
+checks and is never converted into success by the retry loop. Mutation calls,
+unknown acknowledgements and async failures are never retried.
+
+`runner.resumeUnprepared(batchId, expectedPlanHash)` explicitly checks and applies
+the READY recovery below, then continues the original plan through ordinary
+preflight, prepare, authorization, mutation and full verification. It never
+starts a replacement batch. The method rejects a WRITE_PENDING/unknown outcome.
+
 `reconcile_unprepared_read` explicitly checks/applies only a failed native read
 halted from durable `READY`, with no receipt or pending/future snapshot. The
 original plan/error must match, all prior complete receipts must validate, and

@@ -12,6 +12,12 @@ class GuardError extends Error {
 function fail(code, message) { throw new GuardError(code, message); }
 const hash = value => crypto.createHash('sha256').update(value, 'utf8').digest('hex');
 const clone = value => JSON.parse(JSON.stringify(value));
+function validUtcTimestamp(value) {
+  if(typeof value!=='string'||!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/.test(value))return false;
+  const stamp=Date.parse(value);
+  return Number.isFinite(stamp)&&new Date(stamp).toISOString()===
+    value.replace(/(?:\.(\d{1,3}))?Z$/,(_,fraction)=>'.'+(fraction??'').padEnd(3,'0')+'Z');
+}
 function id(value) {
   if (typeof value !== 'string' || !/^[a-f0-9]{32}$/i.test(value.replaceAll('-', '')))
     fail('PAGE_ID', 'A native page UUID is required');
@@ -395,7 +401,7 @@ class Broker {
           audit.snapshotHash!==hash(JSON.stringify(snapshot))||audit.bodyHash!==snapshot.expectedHash||
           audit.propertiesHash!==snapshot.propertiesHash||audit.revision!==verified.page.revision||
           audit.protectedContent!=='UNCHANGED'||audit.notionWrites!==0||audit.haltedFrom!=='WRITE_PENDING'||
-          typeof audit.at!=='string'||!Number.isFinite(Date.parse(audit.at))||verified.at!==audit.at||!Array.isArray(audit.prior)||
+          !validUtcTimestamp(audit.at)||verified.at!==audit.at||!Array.isArray(audit.prior)||
           audit.prior.length!==index||audit.prior.some((r,i)=>r.index!==i||
             r.snapshotHash!==hash(JSON.stringify(read(this.snapshot(snapshot.batchId,i))))||
             r.verifiedHash!==hash(JSON.stringify(read(this.snapshot(snapshot.batchId,i)+'.verified.json')))))
@@ -406,7 +412,7 @@ class Broker {
         !(batch.reconciliations ?? []).some(record => JSON.stringify(record) === JSON.stringify(audit)) ||
         audit.planHash !== batch.planHash || audit.ticket !== snapshot.ticket ||
         audit.snapshotHash !== hash(JSON.stringify(snapshot)) || audit.plannedExpectedHash !== snapshot.expectedHash ||
-        audit.protectedContent !== 'UNCHANGED' || audit.notionWrites !== 0 || verified.at !== audit.at)
+        audit.protectedContent !== 'UNCHANGED' || audit.notionWrites !== 0 || !validUtcTimestamp(audit.at) || verified.at !== audit.at)
       fail('PERSISTENCE', 'Reviewed rendering receipt is not bound to the original audit');
     const actual = read(this.snapshot(snapshot.batchId, index) + '.actual.json');
     const saved = pageData(actual.page.raw, snapshot.edit.pageId);
