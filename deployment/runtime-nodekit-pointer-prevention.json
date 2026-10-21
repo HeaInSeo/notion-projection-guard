@@ -6,7 +6,7 @@
     "broker.cjs": "1e929736ca81a71090aebfdf9484fe95f6112fd77783326eaedbeeb2b259daf3",
     "runner.js": "99a77bf6b5fd88e1b6c9492da54157b141534aa7eec22d547b57337285a8f109"
   },
-  "policySha256": "f8250aed9541dbf1bbff4fc9c69673877a099cc6b9658dfc4d09cad40e78193d",
+  "policySha256": "804709b778ea5fe82eac705654d06f52af8391aa0504d8e0582f3a87022fdf1b",
   "hostedEntryPoint": {
     "path": "complete_projection.js",
     "sha256": "02cc1e5708d8cef131a085c3f301643a33fd0622fd107feabcf99cd8e1951dc4"
