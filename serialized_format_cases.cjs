@@ -216,7 +216,7 @@ function standaloneRuntime(t){
     fs.writeFileSync(path.join(dir,name),bytes);pins[name]=crypto.createHash('sha256').update(bytes).digest('hex');
   }
   const entry='hosted entry';fs.writeFileSync(path.join(dir,'complete_projection.js'),entry);
-  const release={version:1,repository:'HeaInSeo/notion-projection-guard',sourceCommit:'b'.repeat(40),
+  const release={version:1,repository:'HeaInSeo/notion-projection-guard',sourceCommit:'e57f6c5f563533de39338d14f0b2c18d49833598',
     runtimeSha256:{'broker.cjs':pins['broker.cjs'],'runner.js':pins['runner.js']},policySha256:pins['policy.json'],
     hostedEntryPoint:{path:'complete_projection.js',sha256:crypto.createHash('sha256').update(entry).digest('hex')}};
   fs.writeFileSync(path.join(dir,'approved.sha256'),Object.entries(pins).map(([n,h])=>h+'  '+n+'\n').join(''));
@@ -237,5 +237,10 @@ for(const [repository,entryPath] of [['untrusted/other','complete_projection.js'
   ['HeaInSeo/notion-projection-guard','ops/notion-projection-guard/complete_projection.js'],
   ['HeaInSeo/infra-lab','complete_projection.js']])test('runtime source identity and entry path remain bound: '+repository+'/'+entryPath,t=>{
   const f=standaloneRuntime(t);f.release.repository=repository;f.release.hostedEntryPoint.path=entryPath;
+  if(repository==='HeaInSeo/infra-lab'){
+    f.release.sourceCommit='01b8a7897bc8709450f536744577313c805c66ca';
+    const receipt=JSON.parse(fs.readFileSync(f.receiptPath));receipt.sourceCommit=f.release.sourceCommit;
+    fs.writeFileSync(f.receiptPath,JSON.stringify(receipt));
+  }
   assert.throws(()=>verifyRuntime(f),e=>e.code==='RELEASE_SCHEMA');
 });

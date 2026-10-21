@@ -32,7 +32,8 @@ CODE_PATHS = frozenset((
     "transport_preprepare_cases.cjs", "v02_partial_cases.cjs",
 ))
 ADDED_CODE_PATHS = frozenset(("reconcile_claim40_superseded.cjs", "claim40_closure_cases.cjs",
-                             "reconcile_nodekit_pointer_partial.cjs", "test_nodekit_pointer_partial.cjs"))
+                             "reconcile_nodekit_pointer_partial.cjs", "test_nodekit_pointer_partial.cjs",
+                             "supervision_gate.js"))
 # This PR now includes a separately identified post-import P1 correction. These
 # paths are not represented as unchanged bytes; all other imported paths are.
 CORRECTIONS = frozenset(("broker.cjs", "test_guard.cjs", "router_stale_prewrite_cases.cjs",
@@ -41,6 +42,8 @@ FINDING = "https://github.com/HeaInSeo/notion-projection-guard/pull/1#discussion
 # Reviewed operational source updates are separate from the immutable import
 # and correction commit. Never obtain these pins from a mutable manifest.
 SOURCE_UPDATES = {
+    "test_runtime.cjs": "a256321fa40ab30078d67aef17e120848eac9936",
+    "supervision_gate.js": "da8014c8e4718016e1cb6689ced28a8bafc89791",
     "complete_projection_cases.cjs": "f032dd8fb38436cd7fa68f3de2cd3db4ec1ed38c",
     "transport_preprepare_cases.cjs": "4f1737873592c57e07f1dd1a676587319ae1182b",
     "router_stale_prewrite_cases.cjs": "6914f417d20f590c12c7ffaf1b2df122cefc5dd5",
@@ -52,7 +55,7 @@ SOURCE_UPDATES = {
     "reconcile_nodekit_pointer_partial.cjs": "77310ea22bd8ce455fe3f87e828286e21ead6d4f",
     "test_nodekit_pointer_partial.cjs": "b9bd718a5f2c919ed1ba3813284abb9b639e4233",
     "complete_projection.js": "751688e9628fcc996c26587a7fbb9673fef9fe82",
-    "verify_runtime.cjs": "4880f8e6c57b87153318f852ccacaa4f7004c929",
+    "verify_runtime.cjs": "fd7c6fe55acddca806b6a6afa8e9576d8b254e0b",
 }
 
 

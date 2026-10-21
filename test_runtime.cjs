@@ -21,7 +21,7 @@ function fixture(t) {
     if (name !== 'policy.json') fs.writeFileSync(path.join(sourceDir, name), bytes);
   }
   fs.writeFileSync(path.join(sourceDir, 'complete_projection.js'), 'hosted entry');
-  const release = { version: 1, repository: 'HeaInSeo/infra-lab', sourceCommit: 'a'.repeat(40),
+  const release = { version: 1, repository: 'HeaInSeo/infra-lab', sourceCommit: '01b8a7897bc8709450f536744577313c805c66ca',
     runtimeSha256: { 'broker.cjs': pins['broker.cjs'], 'runner.js': pins['runner.js'] },
     policySha256: pins['policy.json'], hostedEntryPoint: {
       path: 'ops/notion-projection-guard/complete_projection.js', sha256: hash('hosted entry') } };
@@ -78,4 +78,66 @@ test('CLI rejects duplicate flags and absent files with nonzero exit, without le
     '--runtime', f.runtimeDir, '--receipt', f.receiptPath], { encoding: 'utf8' });
   assert.equal(missing.status, 1);
   assert.deepEqual(JSON.parse(missing.stdout), { status: 'MISMATCH', code: 'ENOENT' });
+});
+function gatedFixture(t) {
+  const f = fixture(t);
+  f.release.repository = 'HeaInSeo/notion-projection-guard';
+  f.release.sourceCommit = 'c'.repeat(40);
+  f.release.hostedEntryPoint.path = 'complete_projection.js';
+  f.release.hostedSupervisionGate = {path:'supervision_gate.js',sha256:hash('reviewed pure supervision gate')};
+  fs.writeFileSync(path.join(f.sourceDir,'supervision_gate.js'),'reviewed pure supervision gate');
+  const receipt = JSON.parse(fs.readFileSync(f.receiptPath));receipt.sourceCommit=f.release.sourceCommit;
+  fs.writeFileSync(f.receiptPath,JSON.stringify(receipt));
+  return f;
+}
+test('declared hosted gate is read and covered in the verification result',t=>{
+  const r=verifyRuntime(gatedFixture(t));
+  assert.equal(r.status,'MATCH');assert.equal(r.hostedSupervisionGateChecked,true);
+  assert.equal(r.legacyManifest,false);
+});
+for(const kind of ['stale','tampered','missing','symlink'])
+  test('declared hosted gate rejects '+kind+' source independently of runtime hashes',t=>{
+    const f=gatedFixture(t),file=path.join(f.sourceDir,'supervision_gate.js');
+    if(kind==='missing'||kind==='symlink')fs.unlinkSync(file);
+    if(kind==='symlink')fs.symlinkSync(path.join(f.sourceDir,'complete_projection.js'),file);
+    if(kind==='stale')fs.writeFileSync(file,"const repositories = new Set(['nodekit','sori']);");
+    if(kind==='tampered')fs.appendFileSync(file,' changed');
+    assert.throws(()=>verifyRuntime(f),{code:kind==='missing'?'ENOENT':kind==='symlink'?'REGULAR_FILE_REQUIRED':'SOURCE_HASH_MISMATCH'});
+  });
+test('declared hosted gate cannot yield MATCH without a source directory',t=>{
+  const f=gatedFixture(t);delete f.sourceDir;
+  assert.throws(()=>verifyRuntime(f),{code:'SOURCE_REQUIRED'});
+});
+test('CLI refuses a declared gate without --source instead of returning MATCH',t=>{
+  const f=gatedFixture(t),releasePath=path.join(f.runtimeDir,'release.json');
+  fs.writeFileSync(releasePath,JSON.stringify(f.release));
+  const r=spawnSync(process.execPath,[path.join(__dirname,'verify_runtime.cjs'),'--release',releasePath,
+    '--runtime',f.runtimeDir,'--receipt',f.receiptPath],{encoding:'utf8'});
+  assert.equal(r.status,1);assert.deepEqual(JSON.parse(r.stdout),{status:'MISMATCH',code:'SOURCE_REQUIRED'});
+});
+for(const descriptor of [null,{}, {path:'other.js',sha256:'a'.repeat(64)},
+  {path:'../supervision_gate.js',sha256:'a'.repeat(64)},
+  {path:'supervision_gate.js',sha256:'not-a-hash'}])
+  test('declared gate schema rejects '+JSON.stringify(descriptor),t=>{
+    const f=gatedFixture(t);f.release.hostedSupervisionGate=descriptor;
+    assert.throws(()=>verifyRuntime(f),{code:'RELEASE_SCHEMA'});
+  });
+test('removing a declared gate from a new source is not a legacy manifest',t=>{
+  const f=gatedFixture(t);delete f.release.hostedSupervisionGate;
+  assert.throws(()=>verifyRuntime(f),{code:'HOSTED_GATE_REQUIRED'});
+});
+test('reviewed legacy source reports its hosted gate as not covered',t=>{
+  const f=fixture(t),r=verifyRuntime(f);
+  assert.equal(r.status,'MATCH');assert.equal(r.legacyManifest,true);
+  assert.equal(r.hostedSupervisionGateChecked,false);
+});
+test('hosted gate changed after its hash read cannot pass final readback',t=>{
+  const f=gatedFixture(t),gate=path.join(f.sourceDir,'supervision_gate.js');
+  const manifest=path.join(f.runtimeDir,'approved.sha256'),read=fs.readFileSync;let reads=0;
+  fs.readFileSync=function(file,...args){
+    if(file===manifest&&++reads===2)fs.writeFileSync(gate,'changed after initial source check');
+    return read.call(this,file,...args);
+  };
+  try{assert.throws(()=>verifyRuntime(f),{code:'CHANGED_DURING_READ'});}
+  finally{fs.readFileSync=read;}
 });

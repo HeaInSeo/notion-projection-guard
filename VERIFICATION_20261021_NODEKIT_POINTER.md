@@ -100,8 +100,27 @@ Synthetic cases contain no private page content. The actual incident pins are
 compared with the preserved private manifest separately. Neither local tests nor
 a candidate manifest implies deployment, worker intake or product acceptance.
 
-Local verification on Node 24.19.0: 488/488 tests PASS; provenance unit
-regressions 16/16 PASS; immutable history gate 35/35 pairs PASS. The 12 new
+Local verification on Node 24.19.0 after the verifier correction: 503/503
+tests PASS; provenance unit regressions 17/17 PASS; immutable history gate 35/35 pairs PASS. The 12 new
 serialization-prevention cases fail against the pre-fix 7eb4ee6 broker/entry
 (0 PASS, 12 FAIL) and pass with the new source. Node 22 and GitHub CI results
 remain separate checks before landing.
+
+## Same-PR Codex correction: r4335927794
+
+The previous candidate declared a supervision-gate hash, but neither the runtime
+verifier nor source-provenance gate checked that file. A stale pre-BORI gate
+could therefore falsely pass verification. The corrected verifier requires its
+exact repository-specific descriptor and source bytes, fails without `--source`,
+rechecks source files at the end, and reports coverage explicitly for the four
+historical descriptor-free release commits. New descriptor-free sources fail.
+The source provenance checker independently pins the gate blob, so changing a
+mutable deployment hash cannot bless changed gate code.
+
+The 15 new verifier regressions fail against old head 46ba962 (7 existing PASS,
+15 FAIL) and pass with the correction. A real temporary checkout of 46ba962
+passes its old provenance checker after replacing the gate with the pre-BORI
+7eb4ee6 version; the new independent gate pin rejects that same stale source.
+Use the new candidate source commit for the whole prevention tree, including
+`verify_runtime.cjs`; do not reuse the earlier 1f12ce8 verifier checkout. The
+incident-closure precursor fe9cb27 and original incident evidence are unchanged.
