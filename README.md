@@ -1,5 +1,71 @@
 # Notion projection guard
 
+## Unwritten PREPARED MCP initialization recovery
+
+The explicit same-batch recovery accepts the exact recorded
+`McpServerError: MCP server is not initialized; send initialize and notifications/initialized before operational requests`
+remote failure only when the durable halted phase is `PREPARED`. It reuses the
+prepared native-read recovery's immutable plan, original ticket/snapshot, prior
+full receipt fingerprints, journal equality and orphan-evidence checks. The
+pending fresh full body, properties and revision must equal the saved preimage.
+Recovery restores only `PREPARED`; it does not acknowledge a write, advance an
+index or send a Notion request. `WRITE_PENDING`, uncertain/async outcomes,
+missing phase and similar error strings remain blocked. The audit retains the
+original error as an MCP initialization failure, without inventing an action or
+HTTP status. Ordinary authorize, one generated mutation and full verify still
+follow recovery.
+
+`reconcile_bori_prepared_mcp.cjs` is a separately reviewed helper for the exact
+`BORI-AUTH15-DRIFT-REPAIR-20261022` incident while that batch prevents a normal
+runtime upgrade. It checks the installed broker/runner/policy and approved
+manifest hashes and the exact original private installation receipt **before
+loading the installed legacy Broker**. The adjacent new broker is never imported
+or installed. The receipt's source and reviewed release, unchanged policy/service
+flags and after-hashes must match the fixed reviewed values. The helper pins the
+entire original journal, five-edit
+plan, next=4, PREPARED halt, error, ticket and snapshot. It requires five fresh
+complete native reads in original edit order: the first four must equal their
+full verified bodies, properties and revisions; the last must equal its full
+saved preimage and revision. Any runtime, policy, journal, evidence or page drift
+rejects recovery. Fixtures contain only synthetic page data.
+
+Run the helper from its reviewed immutable source tree with `--check-only`
+(also the default), passing the ordered array of full native fetch responses as
+one private JSON line on stdin. After independent review and normal landing,
+explicit `--apply` saves the complete original journal and fresh reads privately
+before restoring `PREPARED`. It preserves active, next=4, all edits, the original
+receipt and four verified receipts. It makes zero Notion writes, ACKs and page
+advances and does not replace any runtime, policy or manifest file. An existing
+audit, including one left by a failed restoration, blocks replay and requires
+separate reconciliation. Normal and rejected-input CLI exits close the broker lock.
+
+Finish only the last target through the unchanged installed broker's ordinary
+authorize → generated mutation → full verify path, with fresh reads and a
+`finally` close. `continue_bori_prepared_mcp.js` records this one-incident Code
+Mode continuation using only the pinned old runner's public `broker` and `close`
+APIs. Its native fetch, ACK/async and full-verification functions are copied
+verbatim from that source and checked by regression tests. It requires the exact
+helper restoration and same original ticket immediately beforehand; it does not
+query full status, edit a plan, reset a halt or retry a mutation/unknown outcome.
+Failure preserves the ordinary pending/HALTED barrier and closes the broker.
+Then validate the complete projection. A newer runtime may be
+installed only after canonical active is null, following
+[OPERATIONS.md](OPERATIONS.md); this helper does not relax that installation
+barrier or authorize a new batch.
+
+## Bounded recovery status
+
+`broker({action:'status', batchId})` returns the actual active ID and only the
+selected batch's plan, edits, index, status, receipt, error and halted phase.
+Unrelated batches and historical audits/receipt arrays are excluded. Invalid or
+nonexistent selected IDs fail closed; choosing a different existing batch preserves
+the real
+active ID so ordinary recovery identity checks still reject it. All three runner
+recovery entry points use this form and retain their existing `finally` close.
+Unscoped `status` keeps its historical full-journal behavior and may exceed a
+connector's response limit. Direct `runner.broker` callers must explicitly close
+the broker in `finally`, including when inspecting bounded status.
+
 ## Exact NodeKit pointer rendering incident closure
 
 `reconcile_nodekit_pointer_partial.cjs` is restricted to the five-page
