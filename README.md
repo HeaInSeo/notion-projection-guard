@@ -38,6 +38,9 @@ receipt and four verified receipts. It makes zero Notion writes, ACKs and page
 advances and does not replace any runtime, policy or manifest file. An existing
 audit, including one left by a failed restoration, blocks replay and requires
 separate reconciliation. Normal and rejected-input CLI exits close the broker lock.
+EOF before evidence produces an explicit failure and nonzero exit. Additional
+lines already buffered with the evidence are rejected before application. One
+complete evidence line receives a result without waiting for stdin to close.
 
 Finish only the last target through the unchanged installed broker's ordinary
 authorize → generated mutation → full verify path, with fresh reads and a

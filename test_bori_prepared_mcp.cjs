@@ -147,14 +147,53 @@ test('incident helper cannot be replayed and never accepts a string apply select
   const f=fixture(t);unchanged(f,()=>f.helper.apply(f.b,f.raw,'false'));
   f.helper.apply(f.b,f.raw,false);unchanged(f,()=>f.helper.apply(f.b,f.raw,false));
 });
-for(const input of ['fresh','invalid'])test('incident helper CLI closes its lock after '+input+' check-only input',t=>{
-  const f=fixture(t),before=fs.readFileSync(f.b.file,'utf8'),source=load(f).source;
-  const entry=path.join(f.dir,'synthetic-helper.cjs');fs.writeFileSync(entry,source);f.b.close();
-  const result=require('node:child_process').spawnSync(process.execPath,[entry],{
-    input:input==='fresh'?JSON.stringify(f.raw)+'\n':'invalid-json\n',encoding:'utf8',timeout:10000});
-  assert.equal(result.status,input==='fresh'?0:1);assert.equal(fs.existsSync(f.b.lock),false);
-  assert.equal(fs.readFileSync(f.b.file,'utf8'),before);
-  if(input==='fresh')assert.match(result.stdout,/"checkOnly":true/);
+for(const [name,render,args,status] of [
+ ['empty EOF',()=>'',[],1],
+ ['empty check-only EOF',()=>'',['--check-only'],1],
+ ['empty apply EOF',()=>'',['--apply'],1],
+ ['blank line',()=>'\n',['--apply'],1],
+ ['invalid JSON',()=>'invalid-json\n',['--apply'],1],
+ ['single JSON line',raw=>JSON.stringify(raw)+'\n',[],0],
+ ['single JSON at EOF without newline',raw=>JSON.stringify(raw),[],0],
+ ['extra JSON line',raw=>JSON.stringify(raw)+'\n'+JSON.stringify(raw)+'\n',['--apply'],1],
+ ['extra invalid line',raw=>JSON.stringify(raw)+'\ninvalid-json\n',['--apply'],1],
+ ['extra blank line',raw=>JSON.stringify(raw)+'\n\n',['--apply'],1],
+ ['single apply JSON line',raw=>JSON.stringify(raw)+'\n',['--apply'],0],
+ ['single apply JSON at EOF without newline',raw=>JSON.stringify(raw),['--apply'],0]
+])test('incident helper CLI handles '+name+' without an unvalidated success or leaked lock',t=>{
+ const f=fixture(t),before=fs.readFileSync(f.b.file,'utf8'),files=inventory(f.root),runtime=inventory(f.runtime),source=load(f).source;
+ const entry=path.join(f.dir,'synthetic-helper.cjs');fs.writeFileSync(entry,source);f.b.close();delete files['broker.lock'];
+ const result=require('node:child_process').spawnSync(process.execPath,[entry,...args],{
+  input:render(f.raw),encoding:'utf8',timeout:10000});
+ assert.equal(result.status,status,result.stdout+result.stderr);assert.equal(fs.existsSync(f.b.lock),false);
+ const messages=result.stdout.trim().split('\n').filter(line=>line.startsWith('NPG-BM1 ')).map(line=>JSON.parse(line.slice(8)));
+ const terminal=messages.filter(value=>Object.hasOwn(value,'ok'));assert.equal(terminal.length,1);
+ assert.equal(terminal[0].ok,status===0);assert.deepEqual(inventory(f.runtime),runtime);
+ if(status===0&&args.includes('--apply')){
+  const after=JSON.parse(fs.readFileSync(f.b.file));assert.equal(after.batches[BATCH].status,'PREPARED');assert.equal(after.batches[BATCH].next,4);
+  assert.equal(after.batches[BATCH].reconciliations.length,1);assert.equal(terminal[0].next,4);
+ }else{
+  assert.equal(fs.readFileSync(f.b.file,'utf8'),before);assert.deepEqual(inventory(f.root),files);
+  assert.equal(JSON.parse(before).batches[BATCH].status,'HALTED');
+  if(status===0)assert.equal(terminal[0].checkOnly,true);
+  else assert.equal(typeof terminal[0].error,'string');
+ }
+});
+test('incident helper replies to one interactive evidence line while stdin remains open',async t=>{
+ const f=fixture(t),before=fs.readFileSync(f.b.file,'utf8'),source=load(f).source;
+ const entry=path.join(f.dir,'synthetic-helper.cjs');fs.writeFileSync(entry,source);f.b.close();
+ const child=require('node:child_process').spawn(process.execPath,[entry]),chunks=[];let sent=false;
+ const status=await new Promise((resolve,reject)=>{
+  const timer=setTimeout(()=>{child.kill();reject(Error('Evidence line incorrectly waited for EOF'));},5000);
+  child.on('error',error=>{clearTimeout(timer);reject(error);});
+  child.on('close',code=>{clearTimeout(timer);resolve(code);});
+  child.stdout.on('data',chunk=>{
+   chunks.push(chunk.toString());
+   if(!sent&&chunks.join('').includes('"ready":true')){sent=true;child.stdin.write(JSON.stringify(f.raw)+'\n');}
+  });
+ });
+ assert.equal(sent,true);assert.equal(status,0);assert.match(chunks.join(''),/"ok":true,"checkOnly":true/);
+ assert.equal(fs.existsSync(f.b.lock),false);assert.equal(fs.readFileSync(f.b.file,'utf8'),before);
 });
 
 const legacyRunnerSource=require('node:child_process').execFileSync('git',

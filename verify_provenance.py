@@ -45,8 +45,8 @@ FINDING = "https://github.com/HeaInSeo/notion-projection-guard/pull/1#discussion
 # and correction commit. Never obtain these pins from a mutable manifest.
 SOURCE_UPDATES = {
     "continue_bori_prepared_mcp.js": "1a6ac3bea2746361548975202ca08a981d7166db",
-    "test_bori_prepared_mcp.cjs": "017d64fffb90b00b913a59156e192fb9dd17c279",
-    "reconcile_bori_prepared_mcp.cjs": "e52099c203866e3f9feeef76b0a27a5332f3c5c5",
+    "test_bori_prepared_mcp.cjs": "766e5d18504b3c9a86acd7f859536590a4d02f89",
+    "reconcile_bori_prepared_mcp.cjs": "eee378701a3863cc2d1c612d29f847bc2b62b46d",
     "test_runtime.cjs": "a256321fa40ab30078d67aef17e120848eac9936",
     "supervision_gate.js": "da8014c8e4718016e1cb6689ced28a8bafc89791",
     "complete_projection_cases.cjs": "f032dd8fb38436cd7fa68f3de2cd3db4ec1ed38c",

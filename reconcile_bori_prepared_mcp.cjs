@@ -110,11 +110,27 @@ if(require.main===module){
     must(args.length<=1&&args.every(a=>['--check-only','--apply'].includes(a)),'Choose check-only or explicit apply');
     pins();broker=new Broker(ROOT,JSON.parse(bytes(path.join(RUNTIME,'policy.json'))));
     const rl=readline.createInterface({input:process.stdin,crlfDelay:Infinity});
+    let received=false,rejected=false,replied=false;
+    function reply(value,status){
+      if(replied)return;replied=true;
+      process.stdout.write('NPG-BM1 '+JSON.stringify(value)+'\n',()=>process.exit(status));
+    }
     process.stdout.write('NPG-BM1 {"ready":true}\n');
-    rl.once('line',line=>{
-      try{const result=apply(broker,JSON.parse(line),!args.includes('--apply'));process.stdout.write('NPG-BM1 '+JSON.stringify({ok:true,...result})+'\n',()=>process.exit(0));}
-      catch(e){process.stdout.write('NPG-BM1 '+JSON.stringify({ok:false,error:e.message})+'\n',()=>process.exit(1));}
-    });rl.on('close',close);
+    rl.on('line',line=>{
+      if(replied)return;
+      if(received){rejected=true;reply({ok:false,error:'BORI_PREPARED_MCP: Exactly one evidence JSON line required'},1);return;}
+      received=true;
+      // Let readline report any additional lines already in this input chunk
+      // before inspecting/applying the first. Interactive callers need no EOF.
+      setImmediate(()=>{
+        if(rejected)return;
+        try{const result=apply(broker,JSON.parse(line),!args.includes('--apply'));reply({ok:true,...result},0);}
+        catch(e){reply({ok:false,error:e.message},1);}
+      });
+    });
+    rl.on('close',()=>{
+      if(!received)reply({ok:false,error:'BORI_PREPARED_MCP: Evidence input required before EOF'},1);
+    });
   }catch(e){process.stdout.write('NPG-BM1 '+JSON.stringify({ok:false,error:e.message})+'\n');process.exitCode=1;}
 }
 module.exports={inspect,apply};
