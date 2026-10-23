@@ -6,6 +6,8 @@
 (function createExactBoriPendingContinuation(tools,config){
 'use strict';
 const identity={"batchId":"BORI-AUTH15-DRIFT-REPAIR-20261022","planHash":"a5bab1162d1a8127a11e0bd8f447fe7b3852ede2e41189653674b9f91986c8ac","ticket":"29ab3ddd-dfa0-4b38-888e-b715d24a85f5","pageId":"3b286e6dd1d1811d9308d9a2b56c9de4","next":5};
+const pageIds=['3b286e6dd1d1817aa093fca807659f07','3b286e6dd1d181f2a75cfbd3885071c4',
+  '3bf86e6dd1d18110938bc358e17c779e','3ed86e6dd1d18118b0b8d98bb91892fb',identity.pageId];
 const runner=config.createRunner(tools,config.runnerConfig);
 const broker=request=>runner.broker(request);
 function textOf(result){return (result?.content??[]).filter(x=>x.type==='text').map(x=>x.text).join('\n');}
@@ -94,7 +96,19 @@ async function run(){
   let enteredAttempt=false,updateInvocations=0;
   try{
     enteredAttempt=true;
-    const authorized=await broker({action:'authorize',batchId:identity.batchId,ticket:identity.ticket,
+    const pages=[];
+    for(const pageId of pageIds)pages.push(await fetchPage(pageId,'restored-proof'));
+    const proof={batchId:identity.batchId,planHash:identity.planHash,ticket:identity.ticket,
+      restoration:config.restoration,pages};
+    // The original broker rejects this action. Only the exact incident helper's
+    // locked bridge can verify it and recheck the same receipt during authorize.
+    const restored=await broker({action:'verify_restored_prepared',...proof});
+    if(restored.status!=='PREPARED'||restored.batchId!==identity.batchId||
+       restored.planHash!==identity.planHash||restored.ticket!==identity.ticket||restored.next!==4||
+       restored.restoration?.journalHash!==config.restoration?.journalHash||
+       restored.restoration?.auditHash!==config.restoration?.auditHash)
+      throw new Error('EXACT_RESTORATION_VERIFICATION_MISMATCH');
+    const authorized=await broker({action:'authorize',...proof,
       page:await fetchPage(identity.pageId,'authorize')});
     if(authorized.status!=='WRITE_PENDING'||authorized.ticket!==identity.ticket||
        !authorized.request||authorized.request.page_id!==identity.pageId)

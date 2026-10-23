@@ -53,7 +53,9 @@ function fixture(t){
   b.state.batches.unrelated={status:'COMPLETED',proof:'preserved unrelated private history'};b.save();
   const f={dir,root,runtime,policy,b,raw,pins,edits,installation,installationHash:hash(fs.readFileSync(installation)),
     receipt:b.state.batches[BATCH].receipt,journalHash:hash(fs.readFileSync(b.file))};
-  f.helper=load(f).helper;return f;
+  f.helper=load(f).helper;const apply=f.helper.apply;
+  f.helper.apply=(...args)=>{const out=apply(...args);if(out.restoration)f.restoration=out.restoration;return out;};
+  return f;
 }
 function inventory(dir){
   return Object.fromEntries(fs.readdirSync(dir).sort().map(n=>{
@@ -208,12 +210,14 @@ test('incident continuation keeps native reads, ACK/async and verification bodie
 });
 function continuation(f,fault){
   const identity={batchId:BATCH,planHash:f.b.state.batches[BATCH].planHash,ticket:f.receipt.ticket,pageId:ids[4],next:5};
-  const source=fs.readFileSync(path.join(__dirname,'continue_bori_prepared_mcp.js'),'utf8')
-    .replace(/^const identity=[^\n]+;/m,'const identity='+JSON.stringify(identity)+';');
+  const source=(f.unfencedSource??fs.readFileSync(path.join(__dirname,'continue_bori_prepared_mcp.js'),'utf8'))
+    .replace(/^const identity=[^\n]+;/m,'const identity='+JSON.stringify(identity)+';')
+    .replace(/^const pageIds=\[[\s\S]*?\];\n/m,'const pageIds='+JSON.stringify(ids)+';\n');
   let updates=0,fetches=0,closes=0,asyncReads=0,raw=structuredClone(f.raw[4]);const calls=[];
   const tools={
     async mcp__codex_apps__notion_fetch({id}){
-      assert.equal(id,ids[4]);fetches++;
+      const index=ids.indexOf(id);assert.ok(index>=0);fetches++;
+      if(index<4)return structuredClone(f.raw[index]);
       if(fault==='postwrite-fetch'&&updates)throw Error('synthetic native read lost');
       return structuredClone(raw);
     },
@@ -240,24 +244,27 @@ function continuation(f,fault){
     async broker(request){
       calls.push(request.action);assert.notEqual(request.action,'status');
       if(request.action==='authorize'){
-        const authorized=f.b.handle(request);
+        if(f.beforeAuthorize)f.beforeAuthorize();
+        const authorized=f.legacyBridge?f.b.handle(request):f.helper.handleContinuation(f.b,request);
         if(fault==='authorize-lost-response')throw Error('BROKER_RESPONSE_UNKNOWN');
         if(fault==='wrong-authorization')authorized.request.page_id=ids[0];
         return authorized;
       }
-      return f.b.handle(request);
+      const result=f.legacyBridge?f.b.handle(request):f.helper.handleContinuation(f.b,request);
+      if(fault==='wrong-restoration-proof'&&request.action==='verify_restored_prepared')result.planHash='wrong';
+      return result;
     },
     async close(){closes++;f.b.close();}
   };
   const factory=vm.runInNewContext(source,{setTimeout:fn=>fn()});
-  const api=factory(tools,{createRunner:()=>runner,runnerConfig:{}});
+  const api=factory(tools,{createRunner:()=>runner,runnerConfig:{},restoration:f.restoration});
   return {api,calls,get updates(){return updates;},get fetches(){return fetches;},get closes(){return closes;},get asyncReads(){return asyncReads;}};
 }
 for(const fault of [undefined,'async-success'])test('incident continuation performs exactly one ordinary pending mutation and closes: '+String(fault),async t=>{
   const f=fixture(t);f.helper.apply(f.b,f.raw,false);const c=continuation(f,fault),out=await c.api.run();
-  assert.equal(out.status,'COMPLETED');assert.equal(out.updateInvocations,1);assert.equal(c.updates,1);assert.equal(c.fetches,2);
+  assert.equal(out.status,'COMPLETED');assert.equal(out.updateInvocations,1);assert.equal(c.updates,1);assert.equal(c.fetches,7);
   assert.equal(c.closes,1);assert.equal(fs.existsSync(f.b.lock),false);assert.equal(f.b.state.active,null);
-  assert.deepEqual(c.calls,['authorize','verify']);assert.equal(f.b.state.batches[BATCH].next,5);
+  assert.deepEqual(c.calls,['verify_restored_prepared','authorize','verify']);assert.equal(f.b.state.batches[BATCH].next,5);
   if(fault)assert.equal(c.asyncReads,3);
 });
 for(const [fault,message,updates,phase] of [
@@ -280,4 +287,79 @@ for(const [fault,message,updates,phase] of [
  assert.equal(c.calls.filter(a=>a==='authorize').length,1);
  assert.equal(c.calls.filter(a=>a==='verify').length,fault==='readback-mismatch'?1:0);
  assert.ok(c.calls.includes('halt'));if(fault==='async-pending')assert.equal(c.asyncReads,20);
+});
+
+
+test('restored inspection accepts only the exact returned helper receipt without modifying evidence',t=>{
+ const f=fixture(t),out=f.helper.apply(f.b,f.raw,false),before=inventory(f.root);
+ const checked=f.helper.inspectRestored(f.b,f.raw,out.restoration);
+ assert.equal(checked.planHash,f.b.state.batches[BATCH].planHash);assert.equal(checked.ticket,f.receipt.ticket);
+ assert.deepEqual(inventory(f.root),before);
+});
+for(const [name,change] of [
+ ['plan hash',f=>{f.b.state.batches[BATCH].planHash='0'.repeat(64);f.b.save();}],
+ ['earlier edit with pending edit preserved',f=>{f.b.state.batches[BATCH].edits[0].newStr='status=OTHER';f.b.save();}],
+ ['prior journal fingerprint',f=>{f.b.state.batches[BATCH].verifications[0].verifiedHash='0'.repeat(64);f.b.save();}],
+ ['unrelated journal evidence',f=>{f.b.state.batches.unrelated.proof='changed';f.b.save();}],
+ ['in-memory plan only',f=>{f.b.state.batches[BATCH].planHash='0'.repeat(64);}],
+ ['prior receipt file',f=>{const p=f.b.snapshot(BATCH,0)+'.verified.json',v=JSON.parse(fs.readFileSync(p));v.at='changed';atomic(p,v);}],
+ ['prior snapshot file',f=>{const p=f.b.snapshot(BATCH,1),v=JSON.parse(fs.readFileSync(p));v.ticket='changed';atomic(p,v);}],
+ ['saved audit file',f=>{const p=path.join(f.root,hash(BATCH)+'.prepared-mcp-initialization-recovery.json');fs.appendFileSync(p,' ');}],
+ ['missing saved audit',f=>fs.unlinkSync(path.join(f.root,hash(BATCH)+'.prepared-mcp-initialization-recovery.json'))],
+ ['fresh prior page',f=>{f.raw[0]=page(0,'status=AFTER\nchanged protected proof');}],
+ ['missing helper receipt',f=>{f.restoration=undefined;}],
+ ['wrong helper receipt',f=>{f.restoration={...f.restoration,journalHash:'0'.repeat(64)};}]
+])test('restored inspection rejects '+name+' before any authorization',t=>{
+ const f=fixture(t);f.helper.apply(f.b,f.raw,false);change(f);
+ unchanged(f,()=>f.helper.inspectRestored(f.b,f.raw,f.restoration));
+});
+for(const [name,change] of [
+ ['plan',f=>{f.b.state.batches[BATCH].planHash='0'.repeat(64);f.b.save();}],
+ ['earlier edit',f=>{f.b.state.batches[BATCH].edits[0].oldStr='changed';f.b.save();}],
+ ['prior receipt',f=>{const p=f.b.snapshot(BATCH,2)+'.verified.json',v=JSON.parse(fs.readFileSync(p));v.at='changed';atomic(p,v);}],
+ ['restoration audit',f=>fs.appendFileSync(path.join(f.root,hash(BATCH)+'.prepared-mcp-initialization-recovery.json'),' ')]
+])test('continuation rechecks '+name+' under the same lock immediately before authorize',async t=>{
+ const f=fixture(t);f.helper.apply(f.b,f.raw,false);f.beforeAuthorize=()=>change(f);const c=continuation(f);
+ await assert.rejects(c.api.run());assert.equal(c.updates,0);assert.equal(c.closes,1);
+ assert.deepEqual(c.calls,['verify_restored_prepared','authorize','halt']);
+ assert.equal(f.b.state.batches[BATCH].status,'HALTED');assert.equal(f.b.state.batches[BATCH].next,4);
+ assert.equal(fs.existsSync(f.b.lock),false);
+});
+for(const mode of ['legacy bridge','missing receipt','wrong verified identity'])
+test('continuation refuses '+mode+' before authorize',async t=>{
+ const f=fixture(t);f.helper.apply(f.b,f.raw,false);
+ if(mode==='legacy bridge')f.legacyBridge=true;
+ if(mode==='missing receipt')f.restoration=undefined;
+ const c=continuation(f,mode==='wrong verified identity'?'wrong-restoration-proof':undefined);
+ await assert.rejects(c.api.run());assert.equal(c.updates,0);assert.equal(c.closes,1);
+ assert.equal(c.calls.includes('authorize'),false);assert.equal(f.b.state.batches[BATCH].status,'HALTED');
+});
+test('locked continuation CLI uses ordinary authorize and verify with bounded responses and closes',t=>{
+ const f=fixture(t);f.helper.apply(f.b,f.raw,false);const source=load(f).source;
+ const entry=path.join(f.dir,'synthetic-bridge.cjs');fs.writeFileSync(entry,source);f.b.close();
+ const proof={batchId:BATCH,planHash:f.b.state.batches[BATCH].planHash,ticket:f.receipt.ticket,
+  restoration:f.restoration,pages:f.raw};
+ const requests=[{action:'verify_restored_prepared',...proof},
+  {action:'authorize',...proof,page:f.raw[4]},
+  {action:'verify',batchId:BATCH,ticket:f.receipt.ticket,page:page(4,'status=AFTER')},
+  {action:'close'}].map((r,i)=>({...r,requestId:'test-'+i}));
+ const out=require('node:child_process').spawnSync(process.execPath,[entry,'--serve-continuation'],{
+  input:requests.map(r=>JSON.stringify(r)).join('\n')+'\n',encoding:'utf8',timeout:10000});
+ assert.equal(out.status,0,out.stdout+out.stderr);
+ const replies=out.stdout.split('\n').filter(l=>l.startsWith('NPG/1 ')).map(l=>JSON.parse(l.slice(6)));
+ assert.equal(replies.length,5);assert.ok(replies.slice(1).every(r=>r.ok),out.stdout);
+ assert.equal(replies[2].result.status,'WRITE_PENDING');assert.equal(replies[3].result.status,'COMPLETED');
+ assert.equal(fs.existsSync(f.b.lock),false);assert.equal(JSON.parse(fs.readFileSync(f.b.file)).active,null);
+});
+
+
+test('old continuation reproduces changed-plan mutation that the restored fence must reject',async t=>{
+ const f=fixture(t);f.helper.apply(f.b,f.raw,false);f.legacyBridge=true;
+ f.unfencedSource=require('node:child_process').execFileSync('git',
+  ['show','b0d9e491391979db87f98cb992e46a5a13fb6489:continue_bori_prepared_mcp.js'],{cwd:__dirname,encoding:'utf8'});
+ const originalPlan=f.b.state.batches[BATCH].planHash;
+ f.beforeAuthorize=()=>{f.b.state.batches[BATCH].planHash='0'.repeat(64);f.b.save();};
+ const c=continuation(f),out=await c.api.run();
+ assert.equal(out.status,'COMPLETED');assert.equal(c.updates,1);assert.equal(out.planHash,originalPlan);
+ assert.notEqual(out.planHash,f.b.state.batches[BATCH].planHash);
 });

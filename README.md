@@ -42,19 +42,29 @@ EOF before evidence produces an explicit failure and nonzero exit. Additional
 lines already buffered with the evidence are rejected before application. One
 complete evidence line receives a result without waiting for stdin to close.
 
-Finish only the last target through the unchanged installed broker's ordinary
-authorize → generated mutation → full verify path, with fresh reads and a
-`finally` close. `continue_bori_prepared_mcp.js` records this one-incident Code
-Mode continuation using only the pinned old runner's public `broker` and `close`
-APIs. Its native fetch, ACK/async and full-verification functions are copied
-verbatim from that source and checked by regression tests. It requires the exact
-helper restoration and same original ticket immediately beforehand; it does not
-query full status, edit a plan, reset a halt or retry a mutation/unknown outcome.
-Failure preserves the ordinary pending/HALTED barrier and closes the broker.
-Then validate the complete projection. A newer runtime may be
-installed only after canonical active is null, following
-[OPERATIONS.md](OPERATIONS.md); this helper does not relax that installation
-barrier or authorize a new batch.
+The explicit apply result includes `restoration.journalHash` and
+`restoration.auditHash`. Preserve that exact receipt and pass it as
+`config.restoration` to `continue_bori_prepared_mcp.js`. Configure its unchanged
+pinned runner to start this same reviewed incident helper with
+`--serve-continuation`. The bridge loads the pinned installed legacy Broker; it
+does not replace runtime files or permit a new batch.
+
+The continuation fresh-reads all five pages and requires an explicit restored-proof
+handshake before authorizing. The legacy broker alone rejects that handshake.
+The bridge rechecks the returned journal/audit hashes, original immutable journal,
+full restored plan, ticket, all four prior receipt fingerprints and the five full
+page proofs under its broker lock. It repeats those checks synchronously
+immediately before calling the legacy broker's ordinary authorize. Changes in the
+gap between helper restoration, handshake and authorization therefore fail before
+any Notion mutation. The final pending read must also match the verified preimage.
+
+Only the last target then follows ordinary authorize → one generated mutation →
+ACK/async handling → full verify → finally close. Native fetch, ACK/async and
+full-verification functions remain verbatim from the pinned runner and are checked
+by regressions. No mutation, ACK or page advance is replayed. Any failure retains
+the ordinary pending/HALTED barrier and closes the broker. After completion,
+validate the complete projection. A newer runtime may be installed only after
+canonical active is null, following [OPERATIONS.md](OPERATIONS.md).
 
 ## Bounded recovery status
 

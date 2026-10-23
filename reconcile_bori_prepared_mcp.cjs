@@ -56,6 +56,9 @@ function inspect(broker,raw){
   // begin() reuses this immutable HALTED batch while rechecking current scope.
   const admission=broker.handle({action:'begin',batchId:BATCH,edits:b.edits});
   must(admission.reused===true&&admission.status==='HALTED'&&admission.next===4,'Existing production policy admission changed');
+  return inspectPages(broker,b,raw);
+}
+function inspectPages(broker,b,raw){
   must(Array.isArray(raw)&&raw.length===5,'Five complete fresh reads in original edit order required');
   const pages=raw.map((p,i)=>pageData(p,b.edits[i].pageId)),prefix=hash(BATCH)+'-',allowed=new Set([prefix+'4.json']),receipts=[];
   for(let i=0;i<5;i++){
@@ -99,16 +102,86 @@ function apply(broker,raw,checkOnly=true){
   pins();must(bytes(broker.file,true)===journalBefore,'Canonical journal changed before restoration');
   atomic(broker.file,expected);const after=read(broker.file);
   must(JSON.stringify(after)===JSON.stringify(expected),'Restored journal readback differs');broker.state=after;
-  return {checkOnly:false,status:'PREPARED',next:4,ticket:TICKET,audit,auditFile:AUDIT};
+  return {checkOnly:false,status:'PREPARED',next:4,ticket:TICKET,audit,auditFile:AUDIT,
+    restoration:{journalHash:hash(bytes(broker.file,true)),auditHash:hash(bytes(AUDIT,true))}};
 }
+
+function inspectRestored(broker,raw,restoration){
+  pins();
+  must(broker instanceof Broker&&broker.root===ROOT,'Canonical installed broker required');
+  must(read(broker.lock).pid===process.pid,'Current process must own the canonical broker lock');
+  must(restoration&&Object.keys(restoration).sort().join(',')==='auditHash,journalHash'&&
+    Object.values(restoration).every(v=>typeof v==='string'&&/^[a-f0-9]{64}$/.test(v)),
+    'Exact helper restoration receipt required');
+  const journal=bytes(broker.file,true),auditBytes=bytes(AUDIT,true),saved=JSON.parse(auditBytes);
+  must(hash(journal)===restoration.journalHash&&hash(auditBytes)===restoration.auditHash,
+    'Restored canonical journal or recovery audit changed');
+  must(saved&&hash(JSON.stringify(saved.journalBefore))===JOURNAL&&
+    saved.audit?.journalBeforeHash===JOURNAL,'Original recovery audit journal changed');
+  const expected=JSON.parse(JSON.stringify(saved.journalBefore)),b=expected.batches[BATCH];
+  must(expected.active===BATCH&&b.status==='HALTED'&&b.haltedFrom==='PREPARED'&&b.error===ERROR&&
+    b.next===4&&b.planHash===PLAN&&hash(JSON.stringify(b.edits))===PLAN&&
+    b.receipt.ticket===TICKET&&b.receipt.snapshotHash===SNAPSHOT,'Original recovery identity changed');
+  b.status='PREPARED';delete b.error;delete b.haltedFrom;
+  b.reconciliations=[...(b.reconciliations??[]),saved.audit];
+  must(journal===JSON.stringify(expected)&&JSON.stringify(broker.state)===journal,
+    'Exact restored plan, in-memory state or prior journal evidence changed');
+  const admission=broker.handle({action:'begin',batchId:BATCH,edits:b.edits});
+  must(admission.reused===true&&admission.status==='PREPARED'&&admission.next===4,
+    'Restored production policy admission changed');
+  const actual=inspectPages(broker,b,raw);
+  actual.at=saved.audit.at;actual.journalBeforeHash=JOURNAL;
+  must(JSON.stringify(actual)===JSON.stringify(saved.audit),'Restored full page or prior receipt proof changed');
+  must(bytes(broker.file,true)===journal&&bytes(AUDIT,true)===auditBytes,
+    'Restored evidence changed during verification');
+  return {status:'PREPARED',batchId:BATCH,planHash:PLAN,ticket:TICKET,next:4,restoration};
+}
+function handleContinuation(broker,input){
+  must(input&&typeof input==='object','Continuation request required');
+  if(input.action==='close')return broker.handle({action:'close'});
+  must(input.batchId===BATCH,'Exact continuation batch required');
+  if(input.action==='verify_restored_prepared'||input.action==='authorize'){
+    must(input.planHash===PLAN&&input.ticket===TICKET,'Exact continuation plan and ticket required');
+    const verified=inspectRestored(broker,input.pages,input.restoration);
+    if(input.action==='verify_restored_prepared')return verified;
+    const pending=pageData(input.page,broker.state.batches[BATCH].edits[4].pageId);
+    const observed=pageData(input.pages[4],broker.state.batches[BATCH].edits[4].pageId);
+    must(pending.body===observed.body&&pending.properties===observed.properties&&
+      pending.revision===observed.revision,'Pending authorization read differs from restored proof');
+    // Synchronous revalidation and legacy authorization share this broker lock.
+    return broker.handle({action:'authorize',batchId:BATCH,ticket:TICKET,page:input.page});
+  }
+  must(['verify','halt'].includes(input.action),'Only the exact pending continuation is supported');
+  if(input.action==='verify')must(input.ticket===TICKET,'Exact verification ticket required');
+  return broker.handle(input);
+}
+function serveContinuation(broker,close){
+  const rl=readline.createInterface({input:process.stdin,crlfDelay:Infinity});
+  process.stdout.write('NPG/1 '+JSON.stringify({ready:true})+'\n');
+  rl.on('line',line=>{
+    let input;
+    try{
+      input=JSON.parse(line);must(typeof input.requestId==='string'&&input.requestId.length>0,'Request ID required');
+      const result=handleContinuation(broker,input);
+      process.stdout.write('NPG/1 '+JSON.stringify({requestId:input.requestId,ok:true,result})+'\n');
+      if(input.action==='close'){close();rl.close();process.stdin.pause();}
+    }catch(error){process.stdout.write('NPG/1 '+JSON.stringify({requestId:input?.requestId,ok:false,
+      code:error.code??'EXACT_RESTORATION',error:error.message})+'\n');}
+  });
+  rl.on('close',close);
+}
+
 if(require.main===module){
   let broker,closed=false;
   function close(){if(broker&&!closed){closed=true;broker.close();}}
   process.on('exit',close);for(const signal of ['SIGINT','SIGTERM','SIGHUP'])process.on(signal,()=>process.exit(1));
   try{
     const args=process.argv.slice(2);
-    must(args.length<=1&&args.every(a=>['--check-only','--apply'].includes(a)),'Choose check-only or explicit apply');
+    const serving=args.length===1&&args[0]==='--serve-continuation';
+    must(serving||(args.length<=1&&args.every(a=>['--check-only','--apply'].includes(a))),
+      'Choose check-only, explicit apply or exact continuation');
     pins();broker=new Broker(ROOT,JSON.parse(bytes(path.join(RUNTIME,'policy.json'))));
+    if(serving){serveContinuation(broker,close);}else{
     const rl=readline.createInterface({input:process.stdin,crlfDelay:Infinity});
     let received=false,rejected=false,replied=false;
     function reply(value,status){
@@ -131,6 +204,7 @@ if(require.main===module){
     rl.on('close',()=>{
       if(!received)reply({ok:false,error:'BORI_PREPARED_MCP: Evidence input required before EOF'},1);
     });
+    }
   }catch(e){process.stdout.write('NPG-BM1 '+JSON.stringify({ok:false,error:e.message})+'\n');process.exitCode=1;}
 }
-module.exports={inspect,apply};
+module.exports={inspect,apply,inspectRestored,handleContinuation};
