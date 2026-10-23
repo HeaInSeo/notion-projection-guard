@@ -252,6 +252,7 @@ function continuation(f,fault){
       }
       const result=f.legacyBridge?f.b.handle(request):f.helper.handleContinuation(f.b,request);
       if(fault==='wrong-restoration-proof'&&request.action==='verify_restored_prepared')result.planHash='wrong';
+      if(request.action==='verify_restored_prepared'&&f.afterRestoredProof)f.afterRestoredProof();
       return result;
     },
     async close(){closes++;f.b.close();}
@@ -262,7 +263,7 @@ function continuation(f,fault){
 }
 for(const fault of [undefined,'async-success'])test('incident continuation performs exactly one ordinary pending mutation and closes: '+String(fault),async t=>{
   const f=fixture(t);f.helper.apply(f.b,f.raw,false);const c=continuation(f,fault),out=await c.api.run();
-  assert.equal(out.status,'COMPLETED');assert.equal(out.updateInvocations,1);assert.equal(c.updates,1);assert.equal(c.fetches,7);
+  assert.equal(out.status,'COMPLETED');assert.equal(out.updateInvocations,1);assert.equal(c.updates,1);assert.equal(c.fetches,11);
   assert.equal(c.closes,1);assert.equal(fs.existsSync(f.b.lock),false);assert.equal(f.b.state.active,null);
   assert.deepEqual(c.calls,['verify_restored_prepared','authorize','verify']);assert.equal(f.b.state.batches[BATCH].next,5);
   if(fault)assert.equal(c.asyncReads,3);
@@ -362,4 +363,23 @@ test('old continuation reproduces changed-plan mutation that the restored fence 
  const c=continuation(f),out=await c.api.run();
  assert.equal(out.status,'COMPLETED');assert.equal(c.updates,1);assert.equal(out.planHash,originalPlan);
  assert.notEqual(out.planHash,f.b.state.batches[BATCH].planHash);
+});
+
+
+for(const [name,change] of [
+ ['prior protected body',f=>{f.raw[0]=page(0,'status=AFTER\nchanged protected proof');}],
+ ['prior properties',f=>{f.raw[1]=page(1,'status=AFTER',{title:'changed'});}],
+ ['prior revision',f=>{f.raw[2]=page(2,'status=AFTER',undefined,'2026-10-22T01:01:00Z');}]
+])test('authorization fresh-reads every page after handshake and refuses changed '+name,async t=>{
+ const f=fixture(t);f.helper.apply(f.b,f.raw,false);f.afterRestoredProof=()=>change(f);const c=continuation(f);
+ await assert.rejects(c.api.run());assert.equal(c.updates,0);assert.equal(c.closes,1);
+ assert.deepEqual(c.calls,['verify_restored_prepared','authorize','halt']);assert.equal(c.fetches,10);
+ assert.equal(f.b.state.batches[BATCH].status,'HALTED');assert.equal(f.b.state.batches[BATCH].next,4);
+});
+test('old locked continuation reproduces stale prior-page acceptance after handshake',async t=>{
+ const f=fixture(t);f.helper.apply(f.b,f.raw,false);
+ f.unfencedSource=require('node:child_process').execFileSync('git',
+  ['show','6c2501e275af98b0336f120ca603b345946c9cf8:continue_bori_prepared_mcp.js'],{cwd:__dirname,encoding:'utf8'});
+ f.afterRestoredProof=()=>{f.raw[0]=page(0,'status=AFTER\nchanged protected proof');};
+ const c=continuation(f),out=await c.api.run();assert.equal(out.status,'COMPLETED');assert.equal(c.updates,1);
 });

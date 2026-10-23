@@ -49,8 +49,9 @@ pinned runner to start this same reviewed incident helper with
 `--serve-continuation`. The bridge loads the pinned installed legacy Broker; it
 does not replace runtime files or permit a new batch.
 
-The continuation fresh-reads all five pages and requires an explicit restored-proof
-handshake before authorizing. The legacy broker alone rejects that handshake.
+The continuation fresh-reads all five pages for an explicit restored-proof
+handshake and then fresh-reads every page again for authorization. It does not
+reuse prior-page responses from the handshake. The legacy broker alone rejects that handshake.
 The bridge rechecks the returned journal/audit hashes, original immutable journal,
 full restored plan, ticket, all four prior receipt fingerprints and the five full
 page proofs under its broker lock. It repeats those checks synchronously

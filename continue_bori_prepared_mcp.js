@@ -108,8 +108,10 @@ async function run(){
        restored.restoration?.journalHash!==config.restoration?.journalHash||
        restored.restoration?.auditHash!==config.restoration?.auditHash)
       throw new Error('EXACT_RESTORATION_VERIFICATION_MISMATCH');
-    const authorized=await broker({action:'authorize',...proof,
-      page:await fetchPage(identity.pageId,'authorize')});
+    const authorizationPages=[];
+    for(const pageId of pageIds)authorizationPages.push(await fetchPage(pageId,'authorize-proof'));
+    const authorized=await broker({action:'authorize',...proof,pages:authorizationPages,
+      page:authorizationPages[authorizationPages.length-1]});
     if(authorized.status!=='WRITE_PENDING'||authorized.ticket!==identity.ticket||
        !authorized.request||authorized.request.page_id!==identity.pageId)
       throw new Error('EXACT_PENDING_AUTHORIZATION_MISMATCH');
