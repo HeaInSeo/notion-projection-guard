@@ -33,6 +33,8 @@ CODE_PATHS = frozenset((
 ))
 ADDED_CODE_PATHS = frozenset(("reconcile_claim40_superseded.cjs", "claim40_closure_cases.cjs",
                              "reconcile_nodekit_pointer_partial.cjs", "test_nodekit_pointer_partial.cjs",
+                             "reconcile_bori_prepared_mcp.cjs", "test_bori_prepared_mcp.cjs",
+                             "continue_bori_prepared_mcp.js",
                              "supervision_gate.js"))
 # This PR now includes a separately identified post-import P1 correction. These
 # paths are not represented as unchanged bytes; all other imported paths are.
@@ -42,14 +44,17 @@ FINDING = "https://github.com/HeaInSeo/notion-projection-guard/pull/1#discussion
 # Reviewed operational source updates are separate from the immutable import
 # and correction commit. Never obtain these pins from a mutable manifest.
 SOURCE_UPDATES = {
+    "continue_bori_prepared_mcp.js": "537f58e7574f5c62511a2d866b2d2c862eba7cbb",
+    "test_bori_prepared_mcp.cjs": "efd1e293977e68b19e64e3060faa9e0aac891288",
+    "reconcile_bori_prepared_mcp.cjs": "584e852f060a3f12c240de0e509cbde29c9739bb",
     "test_runtime.cjs": "a256321fa40ab30078d67aef17e120848eac9936",
     "supervision_gate.js": "da8014c8e4718016e1cb6689ced28a8bafc89791",
     "complete_projection_cases.cjs": "f032dd8fb38436cd7fa68f3de2cd3db4ec1ed38c",
     "transport_preprepare_cases.cjs": "4f1737873592c57e07f1dd1a676587319ae1182b",
     "router_stale_prewrite_cases.cjs": "6914f417d20f590c12c7ffaf1b2df122cefc5dd5",
-    "broker.cjs": "6b6552799df09eac6e7e68a1d430c8837457d48d",
-    "runner.js": "0fd2266614e117e0a208e3c3be93caca2d89fb1e",
-    "test_guard.cjs": "5b046029b102fc61453083099710f3f608d7949b",
+    "broker.cjs": "ade8f165874a713c4f700cec24901a838ce02555",
+    "runner.js": "fbe13fa868ff9586650641a6beeda6df66e39842",
+    "test_guard.cjs": "bb6bc3b6af85701eea27cad1bf7fd6409582a749",
     "reconcile_claim40_superseded.cjs": "562fa5e9988cfc2f7d73e4c46f035f9e89830678",
     "claim40_closure_cases.cjs": "c7b5973e74bd3a75b46cacc770e984bf0c1ae5ce",
     "reconcile_nodekit_pointer_partial.cjs": "77310ea22bd8ce455fe3f87e828286e21ead6d4f",

@@ -178,7 +178,7 @@
     const receipts = [];
     let enteredRecovery = false;
     try {
-      const state = await broker({ action:'status' });
+      const state = await broker({ action:'status', batchId:batchId??null });
       const batch = state.batches?.[batchId];
       if (state.active !== batchId || !batch || batch.planHash !== expectedPlanHash ||
           batch.status !== 'HALTED' || !batch.receipt) throw new Error('RECONCILE_IDENTITY');
@@ -210,7 +210,7 @@
   }
   async function resumeUnprepared(batchId, expectedPlanHash) {
     try {
-      const state=await broker({action:'status'}),batch=state.batches?.[batchId];
+      const state=await broker({action:'status',batchId:batchId??null}),batch=state.batches?.[batchId];
       if(state.active!==batchId||!batch||batch.planHash!==expectedPlanHash||batch.status!=='HALTED'||
           batch.haltedFrom!=='READY'||batch.receipt!==null)throw new Error('RECONCILE_IDENTITY');
       const input={action:'reconcile_unprepared_read',batchId,planHash:expectedPlanHash,
@@ -224,7 +224,7 @@
   }
   async function reconcileAutolink(batchId, expectedPlanHash, snapshotHash, actualHash, actualSnapshotHash) {
     try {
-      const state = await broker({ action:'status' });
+      const state = await broker({ action:'status', batchId:batchId??null });
       const batch = state.batches?.[batchId];
       if (state.active !== batchId || !batch || batch.planHash !== expectedPlanHash ||
           batch.status !== 'HALTED' || batch.error !== 'READBACK_MISMATCH' ||

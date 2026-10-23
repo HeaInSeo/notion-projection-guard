@@ -6,11 +6,26 @@ const os = require('node:os');
 const path = require('node:path');
 const vm = require('node:vm');
 require('./claim40_closure_cases.cjs');
+require('./test_bori_prepared_mcp.cjs');
 const { Broker, hash, pageData, plan, atomic } = require('./broker.cjs');
 const A='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', B='bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
 const heading='## CURRENT CENTRAL OBSERVATION · test';
 const oldStr='central-status=WAIT', newStr='central-status=VERIFIED';
 const history='immutable history 🧾 '.repeat(250);
+const mcpInitializationError='REMOTE_ERROR: McpServerError: MCP server is not initialized; send initialize and notifications/initialized before operational requests';
+function preparedMcpIncident(t) {
+  const ids=[A,B,...['c','d','e'].map(x=>x.repeat(32))],f=fixture(t,{productionPages:ids});
+  begin(f.b,ids.map(id=>edit(id)));
+  const pages=ids.map(id=>page(id));
+  for(let i=0;i<4;i++){
+    const r=prepare(f.b,pages[i]);authorize(f.b,r,pages[i]);
+    pages[i]=page(ids[i],body(newStr));verify(f.b,r,pages[i]);
+  }
+  const receipt=prepare(f.b,pages[4]);
+  f.b.handle({action:'halt',batchId:'observation',reason:mcpInitializationError});
+  const b=f.b.state.batches.observation;
+  return {...f,pages,receipt,identity:{batchId:'observation',planHash:b.planHash,expectedError:b.error}};
+}
 function body(status=oldStr) { return heading+'\n'+status+'\n## HISTORICAL WORKER PROOF\n'+history+'\n```json\n{"QUEUE_EVENT_V1":true,"event_id":"real","session_id":"worker","lease_state":"RELEASED"}\n```\n<page url="https://notion.so/cccccccccccccccccccccccccccccccc">Child</page>\n'; }
 function page(pageId=A, content=body(), props={title:'Test'}, revision='2026-10-12T00:00:00Z') {
   return { structuredContent:{ id:pageId, text:'Fetch at dynamic time\n<page>\n<properties>\n'+JSON.stringify(props)+'\n</properties>\n<content>\n'+content+'\n</content>\n</page>', page_last_edited_at:revision } };
@@ -259,6 +274,13 @@ function runnerFixture(t, fault, policy={}) {
   };
   return {runner:createRunner(tools,{deviceId:'known',command:'known'}),newRunner:()=>createRunner(tools,{deviceId:'known',command:'known'}),get writes(){return writes;},get fetches(){return fetches;},get closed(){return closed;},pages,f,tools};
 }
+function requireScopedRecoveryStatus(f,batchId) {
+  const interact=f.tools.mcp__codex_apps__remote_desktop_commander_interact_with_process;
+  f.tools.mcp__codex_apps__remote_desktop_commander_interact_with_process=async input=>{
+    const request=JSON.parse(input.input);if(request.action==='status')assert.equal(request.batchId,batchId);
+    return interact(input);
+  };
+}
 test('real orchestration uses broker requests, fresh pre/post reads and sequential pages',async t=>{
   const f=runnerFixture(t);const r=await f.runner.run('observation',[edit(),edit(B)]);
   assert.equal(r.status,'COMPLETED');assert.equal(f.writes,2);assert.equal(f.fetches,8);assert.equal(f.closed,true);
@@ -282,6 +304,7 @@ test('persistent pre-write fetch failure retains native diagnostic and original 
 });
 test('explicit unprepared runner recovery uses the same batch and one ordinary remaining mutation',async t=>{
  const f=runnerFixture(t);begin(f.f.b);f.f.b.handle({action:'halt',batchId:'observation',reason:'FETCH_ERROR: native read failed'});
+ requireScopedRecoveryStatus(f,'observation');
  const b=f.f.b.state.batches.observation,result=await f.runner.resumeUnprepared('observation',b.planHash);
  assert.equal(result.status,'COMPLETED');assert.equal(result.resumed,true);assert.equal(f.writes,1);
  assert.equal(result.recoveryAudit.notionWrites,0);assert.equal(result.recoveryAudit.acknowledgedWrites,0);
@@ -525,6 +548,7 @@ test('explicit Markdown links are admitted; serialized or unclosed code is not',
 });
 test('runner explicit autolink reconciliation performs one fresh fetch and zero Notion mutations',async t=>{
   const f=runnerFixture(t);const legacy=legacyAutolink(f.f.b);f.pages.set(A,legacy.p);
+  requireScopedRecoveryStatus(f,'observation');
   const i=legacy.input;
   const result=await f.runner.reconcileAutolink(i.batchId,i.planHash,i.snapshotHash,i.actualHash,i.actualSnapshotHash);
   assert.equal(result.status,'COMPLETED');assert.equal(f.fetches,1);assert.equal(f.writes,0);assert.equal(f.closed,true);
@@ -917,4 +941,126 @@ for(const [name,prefix,suffix] of [
  const f=runnerFixture(t);f.pages.set(B,page(B,prefix+heading+'\n'+oldStr+suffix));
  await assert.rejects(f.runner.run('structural-boundary',[edit(),edit(B)]),/STRUCTURE|AMBIGUOUS_SECTION|UNBOUNDED_SECTION/);
  assert.equal(f.writes,0);assert.equal(f.f.b.state.active,null);
+});
+
+
+test('exact MCP initialization failure restores only PREPARED with the original four receipts and ticket',t=>{
+ const f=preparedMcpIncident(t),before=structuredClone(f.b.state),files=new Map();
+ for(const n of fs.readdirSync(f.root))if(n.startsWith(hash('observation')+'-'))files.set(n,fs.readFileSync(path.join(f.root,n),'utf8'));
+ assert.equal(f.b.handle({action:'reconcile_receipts',...f.identity}).priorVerified,4);
+ const out=f.b.handle({action:'reconcile_unwritten',...f.identity,ticket:f.receipt.ticket,page:f.pages[4]});
+ assert.equal(out.status,'PREPARED');assert.equal(out.next,4);assert.equal(out.ticket,f.receipt.ticket);
+ const b=f.b.state.batches.observation,original=before.batches.observation;
+ for(const k of ['next','receipt','planHash','edits','verifications'])assert.deepEqual(b[k],original[k]);
+ assert.equal(b.reconciliations.at(-1).kind,'UNWRITTEN_PREPARED_MCP_INITIALIZATION');
+ assert.equal(b.reconciliations.at(-1).error,mcpInitializationError);
+ assert.equal(b.reconciliations.at(-1).priorVerified,4);assert.equal(f.b.state.active,'observation');
+ for(const [n,bytes] of files)assert.equal(fs.readFileSync(path.join(f.root,n),'utf8'),bytes);
+ rejects('PAGE_BARRIER',()=>verify(f.b,f.receipt,f.pages[4]));
+ assert.equal(authorize(f.b,f.receipt,f.pages[4]).status,'WRITE_PENDING');
+ rejects('PAGE_BARRIER',()=>authorize(f.b,f.receipt,f.pages[4]));
+});
+for(const [name,mutate] of [
+ ['pending body',f=>{f.pages[4]=page('e'.repeat(32),body()+'changed');}],
+ ['pending properties',f=>{f.pages[4]=page('e'.repeat(32),body(),{title:'changed'});}],
+ ['pending revision',f=>{f.pages[4]=page('e'.repeat(32),body(),undefined,'2026-10-12T00:01:00Z');}],
+ ['pending applied output',f=>{f.pages[4]=page('e'.repeat(32),body(newStr));}],
+ ['missing receipt',f=>{f.b.state.batches.observation.receipt=null;f.b.save();}],
+ ['changed ticket',f=>{f.b.state.batches.observation.receipt.ticket='other';f.b.save();}],
+ ['missing snapshot',f=>fs.unlinkSync(f.receipt.snapshot)],
+ ['changed snapshot hash',f=>{f.b.state.batches.observation.receipt.snapshotHash='wrong';f.b.save();}],
+ ['changed snapshot',f=>{const x=JSON.parse(fs.readFileSync(f.receipt.snapshot));x.expected+='changed';atomic(f.receipt.snapshot,x);}],
+ ['changed plan',f=>{f.b.state.batches.observation.edits[4].newStr='central-status=OTHER';f.b.save();}],
+ ['missing prior receipt',f=>fs.unlinkSync(f.b.snapshot('observation',2)+'.verified.json')],
+ ['changed prior full receipt',f=>{const p=f.b.snapshot('observation',1)+'.verified.json',v=JSON.parse(fs.readFileSync(p));v.page.body+='changed';atomic(p,v);}],
+ ['changed prior fingerprint',f=>{f.b.state.batches.observation.verifications[1].verifiedHash='wrong';f.b.save();}],
+ ['pending write receipt',f=>atomic(f.receipt.snapshot+'.verified.json',{})],
+ ['pending actual receipt',f=>atomic(f.receipt.snapshot+'.actual.json',{})],
+ ['future snapshot',f=>atomic(f.b.snapshot('observation',5),{})],
+ ['journal changed outside lock',f=>{const j=structuredClone(f.b.state);j.version=99;atomic(f.b.file,j);}]
+])test('MCP initialization recovery refuses '+name+' without changing canonical evidence',t=>{
+ const f=preparedMcpIncident(t);mutate(f);
+ const before=fs.readFileSync(f.b.file,'utf8');
+ assert.throws(()=>{
+  f.b.handle({action:'reconcile_receipts',...f.identity});
+  f.b.handle({action:'reconcile_unwritten',...f.identity,ticket:f.receipt.ticket,page:f.pages[4]});
+ });
+ assert.equal(fs.readFileSync(f.b.file,'utf8'),before);
+});
+for(const [phase,error] of [
+ ...['WRITE_PENDING','WRITE_UNCERTAIN','READY',null].map(p=>[p,mcpInitializationError]),
+ ['PREPARED',mcpInitializationError+'; retry'],
+ ['PREPARED',mcpInitializationError.replace('McpServerError','Error')],
+ ['PREPARED',mcpInitializationError.replace('operational requests','request')],
+ ['PREPARED','REMOTE_ERROR: Notion async outcome unknown'],
+ ['PREPARED','REMOTE_ERROR: HTTP 409 MCP server is not initialized']
+])test('MCP initialization admission refuses phase/error '+JSON.stringify([phase,error]),t=>{
+ const f=preparedMcpIncident(t),b=f.b.state.batches.observation;
+ if(phase===null)delete b.haltedFrom;else b.haltedFrom=phase;
+ b.error=error;f.b.save();const before=fs.readFileSync(f.b.file,'utf8');
+ rejects('RECONCILE_SCOPE',()=>f.b.handle({action:'reconcile_receipts',...f.identity,expectedError:error}));
+ assert.equal(fs.readFileSync(f.b.file,'utf8'),before);
+});
+test('batch-scoped status is read-only and independent of a multi-megabyte unrelated journal',t=>{
+ const f=preparedMcpIncident(t);
+ for(let i=0;i<200;i++)f.b.state.batches['old-'+i]={status:'COMPLETED',historical:'unrelated-history-'.repeat(1000)};
+ f.b.state.batches.observation.reconciliations=[{historical:'large-selected-history-'.repeat(100000)}];
+ f.b.save();const before=fs.readFileSync(f.b.file,'utf8'),full=f.b.handle({action:'status'});
+ assert.ok(JSON.stringify(full).length>1024*1024);
+ const scoped=f.b.handle({action:'status',batchId:'observation'});
+ assert.deepEqual(Object.keys(scoped.batches),['observation']);assert.equal(scoped.active,'observation');
+ for(const k of ['planHash','edits','next','status','receipt','error','haltedFrom'])
+  assert.deepEqual(scoped.batches.observation[k],full.batches.observation[k]);
+ assert.equal(Object.hasOwn(scoped.batches.observation,'reconciliations'),false);
+ assert.equal(Object.hasOwn(scoped.batches.observation,'verifications'),false);
+ assert.ok(JSON.stringify(scoped).length<15000);assert.equal(fs.readFileSync(f.b.file,'utf8'),before);
+ scoped.batches.observation.edits[0].newStr='changed returned clone';
+ assert.notEqual(f.b.state.batches.observation.edits[0].newStr,'changed returned clone');
+});
+for(const batchId of [null,'','../other','__proto__','constructor',{},'missing'])test('batch-scoped status refuses invalid or absent ID '+JSON.stringify(batchId),t=>{
+ const {b}=fixture(t);begin(b);const before=fs.readFileSync(b.file,'utf8');
+ assert.throws(()=>b.handle({action:'status',batchId}),e=>['BATCH_ID','BATCH'].includes(e.code));
+ assert.equal(fs.readFileSync(b.file,'utf8'),before);
+});
+test('batch-scoped status preserves the true active ID for a different selected batch',t=>{
+ const {b}=fixture(t);begin(b);b.state.batches.other={status:'COMPLETED'};b.save();
+ const scoped=b.handle({action:'status',batchId:'other'});
+ assert.equal(scoped.active,'observation');assert.deepEqual(Object.keys(scoped.batches),['other']);
+});
+test('real runner resumes an exact PREPARED MCP failure with bounded status and always closes',async t=>{
+ const f=runnerFixture(t);begin(f.f.b);const receipt=prepare(f.f.b);
+ f.f.b.handle({action:'halt',batchId:'observation',reason:mcpInitializationError});
+ for(let i=0;i<200;i++)f.f.b.state.batches['old-'+i]={status:'COMPLETED',history:'unrelated-history-'.repeat(1000)};
+ f.f.b.save();const interact=f.tools.mcp__codex_apps__remote_desktop_commander_interact_with_process,requests=[];
+ f.tools.mcp__codex_apps__remote_desktop_commander_interact_with_process=async input=>{
+  const r=JSON.parse(input.input);requests.push(r);
+  if(r.action==='status')assert.equal(r.batchId,'observation');
+  const out=await interact(input);
+  if(r.action==='status')assert.ok(JSON.stringify(out).length<15000);
+  return out;
+ };
+ const result=await f.runner.resume('observation',f.f.b.state.batches.observation.planHash);
+ assert.equal(result.status,'COMPLETED');assert.equal(f.writes,1);assert.equal(f.closed,true);
+ assert.equal(requests.filter(r=>r.action==='authorize').length,1);
+ assert.equal(requests.filter(r=>r.action==='close').length,1);
+ assert.equal(JSON.parse(fs.readFileSync(receipt.snapshot)).ticket,receipt.ticket);
+});
+test('runner bounded recovery identity failure closes without mutating the true active batch',async t=>{
+ const f=runnerFixture(t);begin(f.f.b);prepare(f.f.b);
+ f.f.b.handle({action:'halt',batchId:'observation',reason:mcpInitializationError});
+ f.f.b.state.batches.other=structuredClone(f.f.b.state.batches.observation);f.f.b.save();
+ const before=fs.readFileSync(f.f.b.file,'utf8');
+ await assert.rejects(f.runner.resume('other',f.f.b.state.batches.other.planHash),/RECONCILE_IDENTITY/);
+ assert.equal(f.writes,0);assert.equal(f.closed,true);assert.equal(fs.readFileSync(f.f.b.file,'utf8'),before);
+});
+for(const method of ['resume','resumeUnprepared','reconcileAutolink'])test('missing '+method+' batch ID cannot serialize into legacy unscoped status',async t=>{
+ const f=runnerFixture(t);begin(f.f.b);const before=fs.readFileSync(f.f.b.file,'utf8');
+ const interact=f.tools.mcp__codex_apps__remote_desktop_commander_interact_with_process;
+ f.tools.mcp__codex_apps__remote_desktop_commander_interact_with_process=async input=>{
+  const request=JSON.parse(input.input);
+  if(request.action==='status'){assert.equal(Object.hasOwn(request,'batchId'),true);assert.equal(request.batchId,null);}
+  return interact(input);
+ };
+ await assert.rejects(f.runner[method](undefined,'unknown-plan'),e=>e.code==='BATCH_ID');
+ assert.equal(f.closed,true);assert.equal(f.writes,0);assert.equal(fs.readFileSync(f.f.b.file,'utf8'),before);
 });

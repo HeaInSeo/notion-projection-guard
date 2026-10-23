@@ -550,13 +550,14 @@ class Broker {
         b.planHash !== planHash || hash(JSON.stringify(b.edits)) !== planHash ||
         b.error !== expectedError || !b.receipt)
       fail('RECONCILE_IDENTITY', 'Exact halted batch, immutable plan and error required');
-    // This narrowly admits the observed DC failure while awaiting authorize.
-    // A Notion/async/readback failure or an unknown lost write cannot retry.
     const legacyDC=b.error.startsWith('REMOTE_ERROR: Error interacting with process: Invalid regular expression: ')&&
       b.error.includes('"action":"authorize"')&&b.error.includes(JSON.stringify(batchId))&&b.error.includes(JSON.stringify(b.receipt.ticket));
     const preparedRead=b.haltedFrom==='PREPARED'&&/^(?:FETCH_ERROR|INCOMPLETE_READ):/.test(b.error);
-    if(!legacyDC&&!preparedRead)fail('RECONCILE_SCOPE','Only a proven unwritten authorize/read failure can be reconciled');
-    if(preparedRead){
+    const preparedMcp=b.haltedFrom==='PREPARED'&&b.error===
+      'REMOTE_ERROR: McpServerError: MCP server is not initialized; send initialize and notifications/initialized before operational requests';
+    const preparedUnwritten=preparedRead||preparedMcp;
+    if(!legacyDC&&!preparedUnwritten)fail('RECONCILE_SCOPE','Only a proven unwritten authorize/read failure can be reconciled');
+    if(preparedUnwritten){
       if(JSON.stringify(read(this.file))!==JSON.stringify(this.state))fail('PERSISTENCE','Journal changed outside its lock');
       const prefix=hash(batchId)+'-',allowed=new Set([prefix+b.next+'.json']);
       for(let i=0;i<b.next;i++){
@@ -590,7 +591,7 @@ class Broker {
       for (let index=0; index<b.next; index++) {
         const file=this.snapshot(batchId,index);
         const snapshot=read(file), verified=read(file+'.verified.json');
-        if(preparedRead)this.verifiedFingerprint(snapshot,verified,b,index);
+        if(preparedUnwritten)this.verifiedFingerprint(snapshot,verified,b,index);
         checkSnapshot(snapshot,index);
         const preimage=pageData(snapshot.page.raw,b.edits[index].pageId);
         const readback=pageData(verified.page.raw,b.edits[index].pageId);
@@ -650,23 +651,31 @@ class Broker {
     // Persist an audit trail. Do not advance next, invent a verified receipt,
     // remove snapshots, change edits, or accept an already-written output.
     b.reconciliations = [...(b.reconciliations ?? []), {
-      kind:preparedRead?'UNWRITTEN_PREPARED_NATIVE_READ':'UNWRITTEN_DC_AUTHORIZATION', at:new Date().toISOString(), index:b.next,
+      kind:preparedMcp?'UNWRITTEN_PREPARED_MCP_INITIALIZATION':preparedRead?'UNWRITTEN_PREPARED_NATIVE_READ':'UNWRITTEN_DC_AUTHORIZATION', at:new Date().toISOString(), index:b.next,
       ticket:input.ticket, planHash, error:expectedError, priorVerified:b.next,
       bodyHash:hash(page.body), propertiesHash:hash(page.properties),
       mode:this.recovery?.mode ?? 'FRESH_PRIOR_PAGES', verifiedReceipts:this.recovery?.receipts ?? []
     }];
     b.status = 'PREPARED';
-    if(preparedRead){delete b.error;delete b.haltedFrom;}
+    if(preparedUnwritten){delete b.error;delete b.haltedFrom;}
     this.recovery = null;
     this.save();
     return { status:'PREPARED', next:b.next, ticket:input.ticket, protectedContent:'UNCHANGED' };
   }
   handle(input) {
     const { action, batchId } = input;
-    if (action === 'status') return clone(this.state);
+    if (action === 'status' && !Object.hasOwn(input, 'batchId')) return clone(this.state);
     if (action === 'close') return { status: 'CLOSED' };
     if (typeof batchId !== 'string' || !/^[a-zA-Z0-9_.:-]{1,150}$/.test(batchId) ||
         ['__proto__', 'prototype', 'constructor'].includes(batchId)) fail('BATCH_ID', 'Stable safe observation ID required');
+    if (action === 'status') {
+      if (!Object.hasOwn(this.state.batches, batchId)) fail('BATCH', 'Selected batch does not exist');
+      const selected=this.state.batches[batchId],batch={};
+      for(const field of ['planHash','edits','next','status','receipt','error','haltedFrom'])
+        if(Object.hasOwn(selected,field))batch[field]=selected[field];
+      return { version:this.state.version, active:this.state.active,
+        batches:{ [batchId]:clone(batch) } };
+    }
     if (action === 'begin' || action === 'validate_batch') {
       const edits = input.edits;
       if (!Array.isArray(edits) || !edits.length || edits.length > 30) fail('EDIT_SCHEMA', '1–30 page edits required');
