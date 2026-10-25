@@ -59,3 +59,39 @@
 
 실제 적용 후에는 전체 private prompt를 readback해 기존 규칙 보존을 확인한다.
 예약 실행 채택은 그 회차의 실제 guarded receipt로 확인한다.
+
+## 장기 RUNNING 검토의 별도 timeout 계약 — 통합 전 미채택
+
+[OPERATIONS.md의 timeout 계약](../OPERATIONS.md#codex-검토-장기-running-한정-timeout-계약-미채택-정책)을
+기존 전체 정책에 추가 결합한다. WIP-20261025-v1 §3의 취소·재요청 권한을 추가하지
+않는 기존 문구와 WIP/HOLD 규칙은 유지한다. 실제 설정 반영 직전에 기존 운영 담당자와
+중앙 단일 owner를 다시 확인한다. 이 템플릿 자체는 요청 실행 또는 예약 변경 지시가 아니다.
+
+- 영속 원장의 최초 intent로부터 30분 경고, 60분 초과 timeout을 판정한다.
+  `review_timeout_policy.cjs`의 `assess`에 전체 계보·늦은 결과·finding 처분과 최신
+  repo/PR/head/base를 전달한다. timeout은 kill 또는 검토 통과가 아니다.
+- GitHub Codex 취소는 지원된 것으로 가정하지 않는다. 선행 종료 UNKNOWN을 보존한
+  동일 head/base의 대체는 최대 1회다. 취소 가능한 실행은 실제 exit 확인이 선행한다.
+  CLI/CI 전환이나 gate 대체를 하지 않는다. 불확실 전송은 새 ID로 재전송하지 않는다.
+- 후보 판정을 실제 요청으로 연결하려면 먼저 중앙 owner fencing, 원장 CAS/잠금,
+  repo/PR/head별 예산의 원자적 소진, 전송 전 intent와 전송 후 receipt의 내구성
+  저장/readback이 필요하다. 로컬 구현은 `review_timeout_ledger.cjs`와
+  [전환 문서](../REVIEW_TIMEOUT_TRANSITION.md)를 따른다. 실제 transport·eligibility
+  adapter 및 private 전체 prompt 채택은 별도 검증 대상이다.
+- 대체까지 timeout이면 BLOCKED와 정확한 담당자·다음 조치·관측 trigger를 남긴다.
+  선행/대체 결과 수집을 지속하고 늦은 유효 finding을 원 task/PR로 연결해 처분한다.
+  head/base가 바뀐 clean은 사용하지 않는다. 기존 검토·thread·병합 gate를 적용한다.
+- 독립 작업은 기존 권한과 WIP/HOLD 안에서 계속할 수 있다. 기존 canonical journal
+  장벽, supervision gate와 pending 인계는 보존한다. Notion preflight 재시도와
+  검토 재요청을 혼합하지 않는다. 실제 채택은 보호된 전체 설정 readback 및 예약
+  회차 실행 증거로 별도 확인한다.
+
+이 계약은 execution-queues §3 소유자 경로로만 결합한다. 공개 projection broker
+allowlist를 확대하거나 Notion 직접 쓰기로 적용하지 않는다. 현재 전체 private prompt의
+보존 갱신 경로는 미확인이고 실제 정책/prompt 채택은 미완료다.
+
+실제 dispatch는 `review_timeout_isolated.cjs`의 별도 watchdog 프로세스 경로를
+사용한다. in-process callback만으로는 동기 무한 정지를 제한할 수 없어 그 단독
+운영 경로는 NOT ACCEPTED다. watchdog의 SIGKILL은 로컬 adapter만 종료하며
+provider 검토의 종료나 통과를 의미하지 않는다. 같은 원장을 재조회하고 UNKNOWN을
+보존하며 자동 재전송하지 않는다.

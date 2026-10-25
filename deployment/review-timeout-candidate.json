@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "repository": "HeaInSeo/notion-projection-guard",
+  "status": "LOCAL_CANDIDATE_NOT_DEPLOYED",
+  "productionEnabled": false,
+  "sourceBaseCommit": "ac95acf6b64bb68a62b785f0e1a1b72129f9d62c",
+  "sourceCommitRequirement": "Resolve this candidate from an independently reviewed immutable commit before adoption; this is not an installation receipt.",
+  "platform": "Linux local filesystem with flock; one canonical private ledger",
+  "sha256": {
+    "review_timeout_policy.cjs": "a80e555aa3b87378d7b898c0318037de32900343fea1092ff7ee8d8baa65ec3f",
+    "review_timeout_ledger.cjs": "aafe56680c959a57a5a1b7e5922e0ba2cd0c3530829b26ab3ae08d529281a308",
+    "review_timeout_policy_cases.cjs": "548d2456c4d206e82e1fd353cc11388b4bfcd594107ec2dbc3f4a8dfce769e8f",
+    "review_timeout_ledger_cases.cjs": "d0401431fda4a76bae54aed137edbe18b36ac3d9e4984607b2c325f36fb49080",
+    "test-fixtures/review_timeout_worker.cjs": "426f8542a75307ae1225e845ae920d1ecdbe919905ba92b6924323715582a3a7",
+    "review_timeout_isolated.cjs": "d72f77f9940183d8c46389062ca6713af8190d3315b4bb9145ab4ab4fb3d52fd",
+    "test-fixtures/review_timeout_isolated_transport.cjs": "ac3774ce115733ef8467f30ff165344fa95a704005e311334cd36ff2640c2cd1"
+  }
+}
