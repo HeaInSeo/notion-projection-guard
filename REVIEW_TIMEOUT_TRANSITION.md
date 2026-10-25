@@ -51,10 +51,38 @@ boundary. This is an application lock/fence, not a GitHub server fencing token.
   ID for later lookup. Merely commenting against an unverified current PR head
   is insufficient. GitHub atomic head-bound dispatch is not claimed by this code.
 - The lock spans dispatch so two processes cannot reserve or send concurrently.
-  Every callback has a bounded wait (10 seconds by default, configurable 1–30000
-  milliseconds); a hung/failed send leaves UNKNOWN, releases the local lock and
-  permits observation/other independent work. Timeout does **not** cancel the
-  underlying request. Late receipt must be reconciled by exact ID, never resent.
+  The low-level in-process API requires **nonblocking callbacks** that return
+  control to the event loop. Its timer bounds cooperative asynchronous waits
+  (10 seconds by default, configurable 1–30000 milliseconds). A monotonic
+  after-return check also refuses receipts returned after the deadline by a slow
+  synchronous callback. Such receipts leave UNKNOWN, never ACKNOWLEDGED. This
+  API alone cannot interrupt a synchronous infinite loop and is **NOT ACCEPTED
+  as the operational dispatch entry point**.
+- Operational dispatch must use `runIsolated` from `review_timeout_isolated.cjs`:
+  a separate supervisor process owns the wall-time deadline and runs all provider
+  module code in a worker process. The supervisor imports no provider callbacks.
+  It SIGKILLs the local worker at the deadline, waits for the process close event
+  and only then reports its confirmed local exit. The kernel releases the
+  worker's lock. A blocked caller event loop cannot block the separate supervisor.
+  This depends on a healthy supervisor/OS and interruptible local storage; it is
+  not a guarantee against supervisor death, host failure or uninterruptible
+  kernel I/O. Those require the existing service/host supervision and recovery.
+- `runIsolated({directory, token, revision, key, transportModule, context,
+  timeoutMs, ioTimeoutMs})` accepts an absolute, regular trusted provider module.
+  `timeoutMs` (1–30000ms) bounds total worker lifetime, including module loading;
+  `ioTimeoutMs` bounds each cooperative callback. The module exports
+  `createTransport(context)` returning `readCurrent/checkEligibility/send` (and
+  an optional synthetic clock for tests). It must not retry, spawn detached
+  sends, share lock descriptors with children, or send after it has returned.
+  The module is executable trusted configuration, not untrusted callback text.
+  Use reviewed immutable module bytes and bind the real provider request to its
+  exact scope/ID. No production provider implementation is included.
+- The worker also receives the supervisor's monotonic deadline. Late callback
+  returns cannot acknowledge even if the event-loop timer was delayed. A timed
+  out supervisor response means **outcome unknown**, not successful provider
+  cancellation. Reload the same ledger: a completed receipt may already have
+  been durably recorded before worker termination, otherwise retain UNKNOWN.
+  Never resend. Local adapter termination does not cancel a GitHub review.
   After receipt, the live fence is checked again before durable acknowledgement.
   Lease expiration after send retains UNKNOWN even if transport returned success.
 - `recordResult(token, revision, key, result, findings)` atomically retains the
@@ -90,7 +118,10 @@ node verify_review_timeout_candidate.cjs
 The tests use temporary 0700 directories and synthetic receipts. Two real child
 processes race for one head. Child processes exit immediately after durable
 intent and after a fsynced synthetic delivery, then a fresh adapter reloads the
-ledger and refuses resend. No GitHub/Notion requests are made by these tests.
+ledger and refuses resend. The independent-review 150ms synchronous callback
+with a 10ms deadline now retains UNKNOWN. An infinite synchronous send is killed
+by the separate watchdog; another OS process reloads the durable intent and
+refuses resend. No GitHub/Notion requests are made by these tests.
 
 ## Safe adoption handoff — not performed
 
@@ -109,7 +140,9 @@ ledger and refuses resend. No GitHub/Notion requests are made by these tests.
    protected canonical timeout ledger location; initialize/import only when the
    complete history fits the reviewed migration contract. Keep the broker
    journal untouched. Never backfill invented receipts or worker ownership.
-4. Review a real transport/observer/eligibility adapter separately. Verify exact
+4. Review a real transport/observer/eligibility adapter separately and use the
+   isolated supervisor entry point. The direct in-process API is not accepted
+   for operational dispatch. Verify exact
    head binding, bounded calls without internal retries, request-ID lookup, live
    result ingestion and old-head finding reconciliation. There is no verified
    GitHub Codex cancel API; leave termination UNKNOWN. Managed-process cancellation

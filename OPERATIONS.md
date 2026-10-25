@@ -166,7 +166,10 @@ GitHub·시계에 접근하지 않으며 요청, 취소, 예약, 원장 저장, 
 ### 구현된 로컬 계층과 실제 적용 전 통합 조건
 
 `review_timeout_ledger.cjs`는 아래 원장·lease/fencing/CAS·intent/receipt 경계를
-Linux 로컬 파일시스템과 주입형 transport로 구현한다. 실제 GitHub adapter나 예약은
+Linux 로컬 파일시스템과 주입형 transport로 구현한다. 운영 dispatch 진입점은
+`review_timeout_isolated.cjs`의 별도 supervisor/worker 격리를 필수로 사용한다.
+동기 무한 정지는 로컬 worker를 종료하고 UNKNOWN을 보존하며 provider 취소가 아니다.
+직접 in-process API만 사용하는 운영 경로는 NOT ACCEPTED다. 실제 GitHub adapter나 예약은
 포함하지 않는다. API·crash 회귀·안전한 전환과 남은 채택 blocker는
 [REVIEW_TIMEOUT_TRANSITION.md](REVIEW_TIMEOUT_TRANSITION.md)에 기록한다.
 

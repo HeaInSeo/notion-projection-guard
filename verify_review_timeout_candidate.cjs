@@ -2,7 +2,8 @@
 // Read-only local candidate check. Never imports the adapter or reads private state.
 const fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto');
 const FILES=['review_timeout_policy.cjs','review_timeout_ledger.cjs',
-  'review_timeout_policy_cases.cjs','review_timeout_ledger_cases.cjs','test-fixtures/review_timeout_worker.cjs'];
+  'review_timeout_policy_cases.cjs','review_timeout_ledger_cases.cjs','test-fixtures/review_timeout_worker.cjs',
+  'review_timeout_isolated.cjs','test-fixtures/review_timeout_isolated_transport.cjs'];
 function verify(root=__dirname) {
  const file=path.join(root,'deployment/review-timeout-candidate.json');
  const regular=p=>{const s=fs.lstatSync(p);if(!s.isFile()||s.isSymbolicLink())throw Error('nonregular candidate file');};

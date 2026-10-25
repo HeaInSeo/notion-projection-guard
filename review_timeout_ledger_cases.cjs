@@ -168,3 +168,43 @@ test('candidate pins detect changed bytes and symlink modules',t=>{
  fs.unlinkSync(target);fs.symlinkSync(path.join(__dirname,FILES[0]),target);
  assert.throws(()=>verify(directory),/nonregular/);
 });
+
+test('independent-review P2: 150ms synchronous receipt misses 10ms deadline and stays UNKNOWN',async t=>{
+ const f=await fixture(t),short=new ReviewLedger(f.directory,{clock:()=>f.now,ioTimeoutMs:10});
+ const r=await short.dispatchReplacement(f.token,await f.revision(),f.key,{
+  readCurrent:()=>f.snapshot.scope,checkEligibility:eligible,send:()=>{
+   const end=process.hrtime.bigint()+150000000n;while(process.hrtime.bigint()<end){}
+   return 'late-synthetic-receipt';
+  }});
+ assert.equal(r.reason,'UNCERTAIN_SEND');
+ assert.equal((await f.read()).chains[0].attempts[1].delivery,'UNKNOWN');
+ assert.equal((await f.dispatch({send:()=>assert.fail()})).reason,'RECONCILE_DELIVERY_NO_RESEND');
+});
+for(const [mode,timeoutMs,ioTimeoutMs]of [['INFINITE_SYNC',600,100],['SLOW_SYNC',2000,10],['NORMAL',2000,1000]])
+ test('isolated watchdog '+mode+' confirms exit and another process reloads without resend',async t=>{
+ const f=await fixture(t),{runIsolated}=require('./review_timeout_isolated.cjs');
+ const started=Date.now();
+ const out=await runIsolated({directory:f.directory,token:f.token,revision:await f.revision(),key:f.key,
+  transportModule:path.join(__dirname,'test-fixtures/review_timeout_isolated_transport.cjs'),timeoutMs,ioTimeoutMs,
+  context:{directory:f.directory,now:f.now,scope:f.snapshot.scope,mode}});
+ assert.ok(Date.now()-started<5000,'watchdog did not bound local worker');
+ if(mode==='INFINITE_SYNC') {
+  assert.equal(out.reason,'LOCAL_ADAPTER_OUTCOME_UNKNOWN');assert.equal(out.localWorkerExitConfirmed,true);
+  assert.equal(out.signal,'SIGKILL');assert.equal(out.providerTermination,'UNKNOWN');
+ }
+ const s=await f.read(),attempt=s.chains[0].attempts[1];assert.ok(attempt,'intent must predate the killed send');
+ assert.equal(attempt.delivery,mode==='NORMAL'?'ACKNOWLEDGED':'UNKNOWN');
+ const delivered=fs.readFileSync(path.join(f.directory,'isolated-synthetic-deliveries'),'utf8').trim().split('\n');
+ assert.deepEqual(delivered,[attempt.requestId]);
+ // This is another OS process, not only another object in the test process.
+ const input={directory:f.directory,now:f.now,token:f.token,revision:s.revision,key:f.key,scope:f.snapshot.scope};
+ const restarted=await new Promise((resolve,reject)=>{
+  const p=spawn(process.execPath,[path.join(__dirname,'test-fixtures/review_timeout_worker.cjs'),JSON.stringify(input)]);
+  let out='';p.stdout.on('data',b=>out+=b);p.on('error',reject);p.on('close',code=>resolve({code,out}));
+ });
+ assert.equal(restarted.code,0,restarted.out);
+ const decision=JSON.parse(restarted.out);
+ assert.equal(mode==='NORMAL'?decision.action:decision.reason,mode==='NORMAL'?'WAIT':'RECONCILE_DELIVERY_NO_RESEND');
+ assert.equal(deliveries(f).length,0);
+ assert.equal((await f.read()).chains[0].attempts[1].requestId,attempt.requestId);
+ });

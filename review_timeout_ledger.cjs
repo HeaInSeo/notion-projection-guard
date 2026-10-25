@@ -13,7 +13,7 @@ function budgetKey(scope) {
   return JSON.stringify([scope.repo.toLowerCase(), scope.pr, scope.head]); // base never resets the budget
 }
 class ReviewLedger {
-  constructor(directory, {clock = Date.now, ioTimeoutMs = 10000} = {}) {
+  constructor(directory, {clock = Date.now, ioTimeoutMs = 10000, deadlineNs = null} = {}) {
     need(path.isAbsolute(directory), 'absolute private directory required');
     const stat = fs.lstatSync(directory);
     need(stat.isDirectory() && !stat.isSymbolicLink() && (stat.mode & 0o777) === 0o700 &&
@@ -23,6 +23,8 @@ class ReviewLedger {
     this.lock = path.join(directory, 'review-attempts.lock'); this.clock = clock;
     need(Number.isSafeInteger(ioTimeoutMs)&&ioTimeoutMs>0&&ioTimeoutMs<=30000,'bounded I/O deadline required');
     this.ioTimeoutMs=ioTimeoutMs;
+    need(deadlineNs===null||(typeof deadlineNs==='string'&&/^[0-9]+$/.test(deadlineNs)), 'invalid watchdog deadline');
+    this.deadlineNs=deadlineNs===null?null:BigInt(deadlineNs);
     try { fs.closeSync(fs.openSync(this.lock, 'wx', 0o600)); } catch (e) { if (e.code !== 'EEXIST') throw e; }
     this.regular(this.lock);
   }
@@ -32,11 +34,25 @@ class ReviewLedger {
       (s.mode & 0o777) === 0o600, 'owned regular 0600 file required');
   }
   now() { const n=this.clock(); need(Number.isSafeInteger(n) && n >= 0, 'clock invalid'); return n; }
+  deadlineAlive() {
+    need(this.deadlineNs===null||process.hrtime.bigint()<this.deadlineNs,'LOCAL_ADAPTER_DEADLINE_UNKNOWN');
+  }
   async bounded(fn) {
+    const start=process.hrtime.bigint();
+    const ioDeadline=start+BigInt(this.ioTimeoutMs)*1000000n;
+    const deadline=this.deadlineNs===null||ioDeadline<this.deadlineNs?ioDeadline:this.deadlineNs;
+    need(start<deadline,'IO_TIMEOUT_UNKNOWN');
     let timer;
-    try {return await Promise.race([Promise.resolve().then(fn),new Promise((_,reject)=>{
-      timer=setTimeout(()=>reject(new Error('REVIEW_LEDGER: IO_TIMEOUT_UNKNOWN')),this.ioTimeoutMs);
-    })]);} finally {clearTimeout(timer);}
+    try {
+      const result=await Promise.race([Promise.resolve().then(fn),new Promise((_,reject)=>{
+        timer=setTimeout(()=>reject(new Error('REVIEW_LEDGER: IO_TIMEOUT_UNKNOWN')),
+          Math.max(1,Number((deadline-start)/1000000n)));
+      })]);
+      // Timers cannot run during synchronous callbacks. Check the monotonic clock
+      // after return as well: a late receipt must never promote UNKNOWN to ACK.
+      need(process.hrtime.bigint()<deadline,'IO_TIMEOUT_UNKNOWN');
+      return result;
+    } finally {clearTimeout(timer);}
   }
   async locked(fn) {
     this.regular(this.lock);
@@ -88,6 +104,7 @@ class ReviewLedger {
   }
   async read() { return this.locked(()=>clone(this.load())); }
   check(s, revision) {
+    this.deadlineAlive();
     need(s.revision===revision,'REVISION_CONFLICT');
     const now=this.now();need(now>=s.lastAt,'CLOCK_ROLLBACK');return now;
   }

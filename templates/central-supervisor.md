@@ -89,3 +89,9 @@
 이 계약은 execution-queues §3 소유자 경로로만 결합한다. 공개 projection broker
 allowlist를 확대하거나 Notion 직접 쓰기로 적용하지 않는다. 현재 전체 private prompt의
 보존 갱신 경로는 미확인이고 실제 정책/prompt 채택은 미완료다.
+
+실제 dispatch는 `review_timeout_isolated.cjs`의 별도 watchdog 프로세스 경로를
+사용한다. in-process callback만으로는 동기 무한 정지를 제한할 수 없어 그 단독
+운영 경로는 NOT ACCEPTED다. watchdog의 SIGKILL은 로컬 adapter만 종료하며
+provider 검토의 종료나 통과를 의미하지 않는다. 같은 원장을 재조회하고 UNKNOWN을
+보존하며 자동 재전송하지 않는다.
