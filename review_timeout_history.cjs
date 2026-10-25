@@ -1,32 +1,58 @@
 'use strict';
 const {budgetKey} = require('./review_timeout_ledger.cjs');
 const {scopeKey,TIMEOUT_MS,assess} = require('./review_timeout_policy.cjs');
-const {need} = require('./review_timeout_operational_ledger.cjs');
+const {need,managedCommentMatches,providerFindings} = require('./review_timeout_evidence.cjs');
+const {retainedFindingHolds} = require('./review_timeout_operational_ledger.cjs');
 const utc = x => new Date(x).toISOString();
 const SHA = '[a-f0-9]{40}';
 function bodyScope(body, repo, pr) {
-  const get = label => body.match(new RegExp(label +
-    '\\s*(?:sha|commit)?\\s*[:=]?\\s*[\x60*]*(' + SHA + ')','i'))?.[1];
-  const head = get('(?:exact[- ]head|frozen[- ]head|head)');
-  const base = get('base');
-  if (!head || !base) return null;
-  const scope = {repo,pr,head,base}; scopeKey(scope); return scope;
+  if(typeof body!=='string')return null;
+  const get = pattern => [...body.matchAll(new RegExp(pattern,'gim'))]
+    .map(m=>m[1].toLowerCase());
+  const explicit=get('\\b(?:exact[- ]head|frozen[- ]head)\\s*(?:sha|commit)?\\s*[:=]?\\s*[\x60*]*('+SHA+')\\b');
+  const fallback=get('^\\s*(?:[-*]\\s*)?head\\s*(?:sha|commit)?\\s*[:=]\\s*[\x60*]*('+SHA+')\\b');
+  const heads=[...new Set(explicit.length?explicit:fallback)];
+  const bases=[...new Set(get('\\bbase\\s*(?:sha|commit)?\\s*[:=]?\\s*[\x60*]*('+SHA+')\\b'))];
+  if(heads.length!==1||bases.length!==1)return null;
+  const scope={repo,pr,head:heads[0],base:bases[0]};
+  try {scopeKey(scope);return scope;} catch {return null;}
 }
-function migrate(snapshot, evidenceSha256, owner, existing = []) {
+function migrate(snapshot, evidenceSha256, owner, existing = [], binding = {}) {
   need(snapshot.complete === true, 'incomplete history cannot be migrated');
   const groups = new Map(), quarantine = [], managed = new Map();
   const q = (reason, requestIds, key = null) => quarantine.push({
     repo:snapshot.repo,pr:snapshot.pr,key,reason,requestIds});
-  for (const comment of snapshot.comments) {
+  const comments=snapshot.requestCommentHistory??snapshot.comments;
+  const versions=new Map(),ambiguous=new Set();
+  for(const c of comments) {
+    const id=String(c.id),b=versions.get(id)??new Set();
+    b.add(c.body??'');versions.set(id,b);
+  }
+  for(const[id,bodies]of versions)if(bodies.size>1) {
+    ambiguous.add(id);q('REQUEST_BODY_EDIT_HISTORY_REQUIRES_RECONCILIATION',[id]);
+  }
+  for (const comment of comments) {
+    if(ambiguous.has(String(comment.id)))continue;
     if (!/^\s*@codex\s+review\b/i.test(comment.body ?? '') ||
       /\[bot\]$/.test(comment.user?.login ?? '')) continue;
     const marker = (comment.body ?? '').match(/^Review-Timeout-Request: ([a-f0-9-]{36})$/m)?.[1];
     if (marker) {
       if (managed.has(marker)) q('DUPLICATE_MANAGED_REQUEST_ID',[marker]);
       managed.set(marker,comment);
-      const known = existing.flatMap(c => c.attempts).find(a => a.requestId === marker);
+      const chain=existing.find(c=>c.attempts.some(a=>a.requestId===marker));
+      const known=chain?.attempts.find(a=>a.requestId===marker);
       if (!known) q('MANAGED_INTENT_NOT_IN_CANONICAL_LEDGER',[marker]);
+      else if(!managedCommentMatches(comment,chain,known,snapshot,
+        binding.outbound?.[marker],binding.requesterLogin))
+        q('MANAGED_REQUEST_SCOPE_BODY_OR_REQUESTER_MISMATCH',[marker]);
       continue;
+    }
+    if((comment.body??'').includes('Review-Timeout-Request:')) {
+      q('INVALID_MANAGED_REQUEST_MARKER',[String(comment.id)]);continue;
+    }
+    if(!Number.isFinite(Date.parse(comment.created_at))||
+      Date.parse(comment.created_at)>Date.parse(snapshot.observedAt)) {
+      q('INVALID_REQUEST_TIMESTAMP',[String(comment.id)]);continue;
     }
     const scope = bodyScope(comment.body ?? '',snapshot.repo,snapshot.pr);
     if (!scope) { q('LEGACY_REQUEST_SCOPE_OR_BASE_UNKNOWN',[String(comment.id)]); continue; }
@@ -90,17 +116,19 @@ function decisionFor(chain, state, snapshot, now = Date.now()) {
   const hold = (state.historyQuarantine ?? []).find(q =>
     q.repo.toLowerCase() === chain.scope.repo.toLowerCase() &&
     q.pr === chain.scope.pr && (!q.key || q.key === key));
+  const findingHolds=retainedFindingHolds(state,snapshot.current,providerFindings(snapshot));
   if (snapshot.metadata.state !== 'open')
     return {...base,action:'HISTORICAL',reason:'PR_TERMINATED_PRESERVE_ALL_EVIDENCE',
-      retainedFindingIds:snapshot.threads.filter(t => !t.isResolved).map(t => t.id),
+      retainedFindingIds:findingHolds,
       historicalQuarantine:hold?.reason ?? null,dispatchAuthorized:false,
       next:'Preserve late results/findings; existing owner disposes valid defects.',
       nextTrigger:'New provider evidence; no request for the terminated PR.'};
   if (hold) return {...base,action:'BLOCKED',reason:'HISTORY_RECONCILIATION_REQUIRED',
-    historyReason:hold.reason,retainedEvidence:hold.evidence};
-  const open = snapshot.threads.filter(t => t.isResolved !== true);
-  if (open.length) return {...base,action:'BLOCKED',reason:'PROVIDER_FINDING_DISPOSITION_REQUIRED',
-    retainedFindingIds:open.map(t => t.id)};
+    historyReason:hold.reason,retainedEvidence:hold.evidence,retainedFindingIds:findingHolds};
+  if (findingHolds.length) return {...base,action:'BLOCKED',
+    reason:'PROVIDER_FINDING_DISPOSITION_REQUIRED',retainedFindingIds:findingHolds,
+    next:'Existing owner records explicit definition- and current-scope-bound finding disposition.',
+    nextTrigger:'Verified responsible owner and evidence for every retained finding.'};
   const latest = chain.attempts.at(-1), provider = summary(snapshot);
   // The mutable shared summary has no execution ID. It can prevent duplicate sends,
   // but can never become a request-specific CLEAN verdict or overwrite prior results.

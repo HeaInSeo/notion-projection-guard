@@ -2,19 +2,21 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const {OperationalLedger,need,digest,readPrivate,writeNew} =
+const {OperationalLedger,need,digest,readPrivate,writeNew,readOutboundRecords} =
   require('./review_timeout_operational_ledger.cjs');
 const {budgetKey} = require('./review_timeout_ledger.cjs');
 const {WARNING_MS,TIMEOUT_MS,scopeKey} = require('./review_timeout_policy.cjs');
 const {runIsolated} = require('./review_timeout_isolated.cjs');
 const {runTask} = require('./review_timeout_operational_worker.cjs');
 const {migrate,decisionFor,bodyScope} = require('./review_timeout_history.cjs');
+const {managedCommentMatches} = require('./review_timeout_evidence.cjs');
 const {verify} = require('./verify_review_timeout_candidate.cjs');
 const utc = () => new Date().toISOString();
 function loadConfig(file) {
   const config = JSON.parse(readPrivate(file,0o444));
   need(config.version === 1 && config.channel === 'GITHUB_CODEX' &&
     typeof config.owner === 'string' && Array.isArray(config.allowedRepos) &&
+    typeof config.requesterLogin==='string'&&config.requesterLogin.length>0&&
     Array.isArray(config.seedTargets) && path.isAbsolute(config.directory) &&
     path.isAbsolute(config.evidenceDirectory),'invalid operational configuration');
   return config;
@@ -47,8 +49,9 @@ function barrierFor(config,scope) {
   const state = JSON.parse(fs.readFileSync(p,'utf8'));
   if (!state.active) return null;
   const affected = config.barrierScopes?.[state.active];
-  if (Array.isArray(affected) &&
-    config.barrierPlanHashes?.[state.active] === state.batches?.[state.active]?.planHash &&
+  const pin=config.barrierPlanHashes?.[state.active],actual=state.batches?.[state.active]?.planHash;
+  if (Array.isArray(affected) && /^[a-f0-9]{64}$/.test(pin??'') &&
+    /^[a-f0-9]{64}$/.test(actual??'') && pin===actual &&
     !affected.map(x => x.toLowerCase()).includes(scope.repo.toLowerCase())) return null;
   return {reason:'EXISTING_CANONICAL_BARRIER',batch:state.active,
     status:state.batches?.[state.active]?.status ?? 'UNKNOWN'};
@@ -108,10 +111,12 @@ async function tick(config,input,{observer = runTask} = {}) {
   const decisions = [];
   try {
     for (const {snapshot,evidence} of observations) {
+      try {
       state = await ledger.read();
-      const migration = migrate(snapshot,evidence.sha256,config.owner,state.chains);
+      const migration = {quarantine:[]};
       quarantineForLegacy(config,snapshot,migration);
-      state = await ledger.importObserved(token,state.revision,evidence,migration);
+      state = await ledger.importObserved(token,state.revision,evidence,{
+        owner:config.owner,requesterLogin:config.requesterLogin,quarantine:migration.quarantine});
       for (const c of state.chains.filter(c =>
         c.scope.repo.toLowerCase() === snapshot.repo.toLowerCase() && c.scope.pr === snapshot.pr)) {
         let d = decisionFor(c,state,snapshot);
@@ -134,6 +139,14 @@ async function tick(config,input,{observer = runTask} = {}) {
           next:'Reconcile the complete preserved legacy lineage without resetting its budget.',
           nextTrigger:'Reviewed exact history reconciliation.',gate:'NOT_ASSESSED',
           dispatchAuthorized:false,retainedEvidence:q.evidence});
+      }
+      } catch(error) {
+        errors.push({repo:snapshot.repo,pr:snapshot.pr,reason:'SCOPE_HISTORY_RECONCILIATION_REQUIRED',
+          detail:String(error.message).slice(0,250)});
+        decisions.push({repo:snapshot.repo,pr:snapshot.pr,action:'BLOCKED',
+          reason:'SCOPE_HISTORY_RECONCILIATION_REQUIRED',owner:config.owner,nextOwner:config.owner,
+          next:'Reconcile this preserved scope history; do not infer free budget.',
+          nextTrigger:'Verified same-scope reconciliation.',gate:'NOT_ASSESSED',dispatchAuthorized:false});
       }
     }
     state = await ledger.read();
@@ -161,7 +174,6 @@ async function prepare(config,input) {
   scopeKey(input.scope);
   need(config.allowedRepos.map(x => x.toLowerCase()).includes(input.scope.repo.toLowerCase()),
     'unregistered repository');
-  need(!barrierFor(config,input.scope),'existing canonical barrier blocks dispatch');
   const ledger = new OperationalLedger(config.directory);
   let state = await ledger.read();
   const token = await ledger.acquire(input.actor,300000,state.revision);
@@ -180,17 +192,10 @@ async function dispatch(config,input,kind) {
   const ledger = new OperationalLedger(config.directory);
   let state = await ledger.read();
   ledger.authorize(state,prepared.token,state.revision);
-  const knownProviderCommentIds = [];
-  for (const o of Object.values(state.observations ?? {})) {
-    const bytes = readPrivate(o.evidence.file);
-    need(digest(bytes) === o.evidence.sha256,'provider history changed');
-    const snapshot = JSON.parse(bytes);
-    if (snapshot.repo.toLowerCase() === prepared.scope.repo.toLowerCase() &&
-      snapshot.pr === prepared.scope.pr) knownProviderCommentIds.push(...snapshot.comments.map(c => String(c.id)));
-  }
+  need(!barrierFor(config,prepared.scope),'existing canonical barrier blocks dispatch');
   const common = {directory:config.directory,token:prepared.token,revision:state.revision,
     timeoutMs:30000,ioTimeoutMs:10000,context:{owner:prepared.owner,runId:prepared.runId,
-      configFile:prepared.configFile,grantFile:input.grantFile,knownProviderCommentIds,
+      configFile:prepared.configFile,grantFile:input.grantFile,kind,
       token:prepared.token}};
   let result;
   if (kind === 'replacement') {
@@ -213,7 +218,7 @@ async function dispatch(config,input,kind) {
   const evidence = writeNew(config.evidenceDirectory,'dispatch-' + crypto.randomUUID() + '.json',receipt);
   return {receipt,evidence};
 }
-async function reconcile(config,input) {
+async function reconcile(config,input,{observer=runTask}={}) {
   const prepared = JSON.parse(readPrivate(input.contextFile));
   need(prepared.owner === config.owner && prepared.origin === 'SCHEDULED','invalid prepared owner');
   const ledger = new OperationalLedger(config.directory);
@@ -223,30 +228,53 @@ async function reconcile(config,input) {
   const chain = state.chains.find(c => budgetKey(c.scope) === key);
   const attempt = chain?.attempts.find(a => a.requestId === input.requestId);
   need(attempt && attempt.delivery !== 'ACKNOWLEDGED','exact uncertain intent required');
-  const r = await runTask({operation:'observe',repo:prepared.scope.repo,
+  const outbound=readOutboundRecords(config.directory,state,config.requesterLogin,prepared.scope)[attempt.requestId];
+  const r = await observer({operation:'observe',repo:prepared.scope.repo,
     pr:prepared.scope.pr,timeoutMs:30000});
   need(r.action === 'OBSERVED','complete provider lookup unavailable; keep UNKNOWN');
   const evidence = writeNew(config.evidenceDirectory,
     'delivery-lookup-' + crypto.randomUUID() + '.json',r.snapshot);
+  state=await ledger.importObserved(prepared.token,state.revision,evidence,{
+    owner:config.owner,requesterLogin:config.requesterLogin});
   const matches = r.snapshot.comments.filter(c =>
-    (c.body ?? '').split('\n').includes('Review-Timeout-Request: ' + input.requestId) &&
-    Date.parse(c.created_at) >= Date.parse(attempt.intentAt) &&
-    (c.body ?? '').split('\n').includes('Owner fence: ' + attempt.reservedBy.fence) &&
-    (c.body ?? '').split('\n').includes('Parent request: ' + (attempt.parentRequestId ?? 'NONE')) &&
-    (() => { const s = bodyScope(c.body ?? '',prepared.scope.repo,prepared.scope.pr);
-      return s && scopeKey(s) === scopeKey(attempt.scope); })());
+    managedCommentMatches(c,chain,attempt,r.snapshot,outbound,config.requesterLogin));
   let result = {action:'BLOCKED',reason:'EXACT_DELIVERY_NOT_PROVEN_KEEP_UNKNOWN',
     requestId:attempt.requestId};
   if (matches.length === 1) {
     state = await ledger.read();
     const receipt = JSON.stringify({requestId:attempt.requestId,commentId:matches[0].id,
-      url:matches[0].html_url,scope:attempt.scope,evidence,providerTermination:'UNKNOWN'});
+      url:matches[0].html_url,scope:attempt.scope,evidence,requester:matches[0].user.login,
+      bodySha256:outbound.bodySha256,providerTermination:'UNKNOWN'});
     await ledger.reconcileDelivery(prepared.token,state.revision,key,attempt.requestId,receipt);
     result = {action:'DELIVERY_RECONCILED',requestId:attempt.requestId,commentId:matches[0].id};
   }
   state = await ledger.read();
   await ledger.release(prepared.token,state.revision);
   return {result,evidence,newRequests:0,providerTermination:'UNKNOWN',gate:'NOT_ASSESSED'};
+}
+async function disposeFinding(config,input) {
+  const prepared=JSON.parse(readPrivate(input.contextFile));
+  need(prepared.owner===config.owner&&prepared.origin==='SCHEDULED','invalid prepared owner');
+  const ledger=new OperationalLedger(config.directory);
+  let state=await ledger.read();
+  ledger.authorize(state,prepared.token,state.revision);
+  const packet=JSON.parse(readPrivate(input.dispositionFile));
+  need(scopeKey(packet.assessedScope)===scopeKey(prepared.scope),'assessment/prepared scope mismatch');
+  const observed=await runTask({operation:'observe',repo:prepared.scope.repo,
+    pr:prepared.scope.pr,timeoutMs:30000});
+  need(observed.action==='OBSERVED'&&
+    scopeKey(observed.snapshot.current)===scopeKey(packet.assessedScope),
+  'fresh actual provider scope required for finding disposition');
+  const observation=writeNew(config.evidenceDirectory,
+    'finding-assessment-observation-'+crypto.randomUUID()+'.json',observed.snapshot);
+  state=await ledger.importObserved(prepared.token,state.revision,observation,{
+    owner:config.owner,requesterLogin:config.requesterLogin});
+  const evidence=writeNew(config.evidenceDirectory,
+    'finding-disposition-'+crypto.randomUUID()+'.json',packet);
+  await ledger.disposeProviderFinding(prepared.token,state.revision,packet.findingId,evidence);
+  state=await ledger.read();await ledger.release(prepared.token,state.revision);
+  return {action:'FINDING_DISPOSITION_RECORDED',findingId:packet.findingId,evidence,
+    gate:'NOT_ASSESSED',newRequests:0};
 }
 async function main(argv) {
   const command = argv[0], flags = {};
@@ -273,10 +301,11 @@ async function main(argv) {
   if (command === 'send-original') return dispatch(config,input,'original');
   if (command === 'send-replacement') return dispatch(config,input,'replacement');
   if (command === 'reconcile-delivery') return reconcile(config,input);
+  if (command === 'dispose-finding') return disposeFinding(config,input);
   throw Error('unknown operational command');
 }
 if (require.main === module) main(process.argv.slice(2)).then(
   result => process.stdout.write(JSON.stringify(result) + '\n'),
   error => { process.stderr.write(String(error.message) + '\n'); process.exitCode = 1; });
 module.exports = {loadConfig,ensureLocal,quarantineForLegacy,barrierFor,scheduledProof,
-  tick,prepare,dispatch,reconcile,main};
+  tick,prepare,dispatch,reconcile,disposeFinding,main};

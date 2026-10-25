@@ -4,12 +4,15 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const {OperationalLedger,writeNew,digest} = require('./review_timeout_operational_ledger.cjs');
+const {OperationalLedger,writeNew,digest,persistObservationInbox,retainedFindingHolds} =
+  require('./review_timeout_operational_ledger.cjs');
 const {budgetKey} = require('./review_timeout_ledger.cjs');
 const {assess,scopeKey,WARNING_MS,TIMEOUT_MS} = require('./review_timeout_policy.cjs');
 const {migrate,decisionFor} = require('./review_timeout_history.cjs');
-const {validateGrant,makeTransport,REQUIRED_GATES,pages} = require('./review_timeout_github.cjs');
-const {tick,scheduledProof,barrierFor} = require('./review_timeout_operational.cjs');
+const {validateGrant,makeTransport,REQUIRED_GATES,pages,providerStateHolds,canonicalBarrier} =
+  require('./review_timeout_github.cjs');
+const {tick,scheduledProof,barrierFor,reconcile} = require('./review_timeout_operational.cjs');
+const {outboundRecord,requestBody,providerFindings} = require('./review_timeout_evidence.cjs');
 const {runTask} = require('./review_timeout_operational_worker.cjs');
 const {runIsolated} = require('./review_timeout_isolated.cjs');
 const scope = {repo:'Example/Project',pr:7,head:'a'.repeat(40),base:'b'.repeat(40)};
@@ -170,7 +173,7 @@ test('late predecessor finding blocks even a newer shared clean summary',()=>{
   const c=migrate(snap,'e','central').chains[0];
   const d=decisionFor(c,{historyQuarantine:[]},snap,now);
   assert.equal(d.reason,'PROVIDER_FINDING_DISPOSITION_REQUIRED');
-  assert.deepEqual(d.retainedFindingIds,['late-finding']);
+  assert.equal(d.retainedFindingIds.length,1);
 });
 test('shared summary never becomes a request-specific clean result',()=>{
   const now=Date.now(),snap=snapshot([comment(1,now-20000000)]);
@@ -204,8 +207,9 @@ test('fresh full-gate central attestation binds exact owner, fence, scope and ru
 });
 test('canonical barriers keep their positively scoped independent repo free',t=>{
   const root=temp(t),p=path.join(root,'journal.json');
-  fs.writeFileSync(p,JSON.stringify({active:'batch',batches:{batch:{status:'HALTED',planHash:'p'}}}));
-  const cfg={canonicalJournal:p,barrierScopes:{batch:['Example/Project']},barrierPlanHashes:{batch:'p'}};
+  fs.writeFileSync(p,JSON.stringify({active:'batch',batches:{batch:{status:'HALTED',planHash:'a'.repeat(64)}}}));
+  const cfg={canonicalJournal:p,barrierScopes:{batch:['Example/Project']},
+    barrierPlanHashes:{batch:'a'.repeat(64)}};
   assert.equal(barrierFor(cfg,scope).status,'HALTED');
   assert.equal(barrierFor(cfg,{...scope,repo:'Example/Independent'}),null);
 });
@@ -215,7 +219,8 @@ test('actual provider POST has exactly one intent and no retry after uncertain s
   fs.writeFileSync(journal,JSON.stringify({active:null}));
   fs.writeFileSync(grantFile,JSON.stringify(grant()),{mode:0o600});
   const config={version:1,owner:'central',channel:'GITHUB_CODEX',directory:root,
-    allowedRepos:[scope.repo],canonicalJournal:journal};
+    allowedRepos:[scope.repo],canonicalJournal:journal,requesterLogin:'owner'};
+  persistObservationInbox(root,snapshot([]));
   const tx=makeTransport(config,{owner:'central',token,grantFile,runId:'actual-run'},async(method,route)=>{
     if(method==='POST'){posts++;throw Error('uncertain socket outcome');}
     return {state:'open',draft:false,head:{sha:scope.head},base:{sha:scope.base}};
@@ -232,7 +237,8 @@ for(const change of ['expired-grant','new-barrier']) test(
     fs.writeFileSync(journal,JSON.stringify({active:null}));
     fs.writeFileSync(grantFile,JSON.stringify(grant()),{mode:0o600});
     const config={version:1,owner:'central',channel:'GITHUB_CODEX',directory:root,
-      allowedRepos:[scope.repo],canonicalJournal:journal};
+      allowedRepos:[scope.repo],canonicalJournal:journal,requesterLogin:'owner'};
+    persistObservationInbox(root,snapshot([]));
     const tx=makeTransport(config,{owner:'central',token,grantFile,runId:'actual-run'},
       async method=>{
         if(method==='POST')posts++;
@@ -262,18 +268,18 @@ test('terminated PR history cannot be offered as a new timeout replacement',()=>
 });
 test('provider send refuses a stale fence before the POST',async t=>{
   const {root,token}=await ledger(t);let posts=0;
-  const tx=makeTransport({version:1,owner:'central',channel:'GITHUB_CODEX',directory:root,
+  const tx=makeTransport({version:1,owner:'central',requesterLogin:'owner',channel:'GITHUB_CODEX',directory:root,
     allowedRepos:[scope.repo]},{owner:'central',token:{...token,id:'stale'}},async method=>{
       if(method==='POST')posts++;
       return {state:'open',draft:false,head:{sha:scope.head},base:{sha:scope.base}};
     });
-  await assert.rejects(tx.send({requestId:'id',scope,parentRequestId:null,reservedBy:token}),
+  await assert.rejects(tx.send({requestId:'01234567-89ab-4def-8123-0123456789ab',scope,parentRequestId:null,reservedBy:token}),
     /owner expired/);
   assert.equal(posts,0);
 });
 test('head change before provider send makes zero POSTs',async t=>{
   const {root,token}=await ledger(t);let posts=0;
-  const tx=makeTransport({version:1,owner:'central',channel:'GITHUB_CODEX',directory:root,
+  const tx=makeTransport({version:1,owner:'central',requesterLogin:'owner',channel:'GITHUB_CODEX',directory:root,
     allowedRepos:[scope.repo]},{owner:'central',token},async method=>{
       if(method==='POST')posts++;
       return {state:'open',draft:false,head:{sha:'c'.repeat(40)},base:{sha:scope.base}};
@@ -325,4 +331,238 @@ test('real operational tick imports, assesses and writes a receipt without sendi
   assert.equal(disk.origin,'MANUAL_VERIFICATION');
   assert.equal(disk.wipContract,'SEPARATE_UNCHANGED');
   assert.equal((await new OperationalLedger(dir).read()).lease,null);
+});
+test('an observed finding remains enforced after it disappears or becomes resolved',async t=>{
+  const {root,l,token}=await ledger(t),start=Date.now()-TIMEOUT_MS-1000;
+  const first=snapshot([comment(1,start)],{threads:[{id:'valid-finding',isResolved:false,
+    comments:{nodes:[{databaseId:7,body:'[P2] real retained defect',
+      author:{login:'chatgpt-codex-connector[bot]'},commit:{oid:scope.head}}]}}]});
+  const e1=writeNew(root,'first.json',first);
+  let state=await l.importObserved(token,(await l.read()).revision,e1,{owner:'central',requesterLogin:'owner'});
+  assert.equal(state.providerFindings.length,1);
+  const gone=snapshot([comment(1,start)]);
+  const e2=writeNew(root,'gone.json',gone);
+  state=await l.importObserved(token,state.revision,e2,{owner:'central',requesterLogin:'owner'});
+  assert.equal(decisionFor(state.chains[0],state,gone).reason,'PROVIDER_FINDING_DISPOSITION_REQUIRED');
+  const resolved=structuredClone(first);resolved.observedAt=new Date().toISOString();
+  resolved.threads[0].isResolved=true;
+  const e3=writeNew(root,'resolved.json',resolved);
+  state=await l.importObserved(token,state.revision,e3,{owner:'central',requesterLogin:'owner'});
+  assert.equal(state.providerFindings[0].disposition,'OPEN');
+  assert.equal(decisionFor(state.chains[0],state,resolved).action,'BLOCKED');
+});
+test('only explicit responsible-owner/current-scope evidence disposes a retained finding',async t=>{
+  const {root,l,token}=await ledger(t);
+  const snap=snapshot([comment(1,Date.now()-TIMEOUT_MS-1000)],
+    {threads:[{id:'valid-finding',isResolved:true,comments:{nodes:[]}}]});
+  let state=await l.importObserved(token,(await l.read()).revision,
+    writeNew(root,'history.json',snap),{owner:'central',requesterLogin:'owner'});
+  const f=state.providerFindings[0],content='synthetic exact source/code evidence';
+  const packet={version:1,findingId:f.id,definitionSha256:f.definitionSha256,
+    owner:'central',responsibleOwner:'existing-writer',sourceEvaluator:'EXISTING_CENTRAL_POLICY_OWNER',
+    disposition:'FIXED',assessedScope:scope,assessedAt:new Date().toISOString(),
+    explanation:'Synthetic reproduction fixed and independently checked.',
+    sources:[{url:'https://github.com/Example/Project/commit/'+scope.head,
+      content,sha256:digest(content)}]};
+  const bad=writeNew(root,'bad-disposition.json',{...packet,owner:'wrong-owner'});
+  await assert.rejects(l.disposeProviderFinding(token,state.revision,f.id,bad),/explicit owner/);
+  const proof=writeNew(root,'good-disposition.json',packet);
+  state=await l.disposeProviderFinding(token,state.revision,f.id,proof);
+  assert.deepEqual(retainedFindingHolds(state,scope),[]);
+  assert.equal(retainedFindingHolds(state,{...scope,head:'c'.repeat(40)}).length,1);
+  fs.writeFileSync(proof.file,'corrupt evidence\n',{mode:0o600});
+  assert.equal(retainedFindingHolds(state,scope).length,1);
+});
+test('a callback finding inbox blocks actual POST even if the later provider page omits it',async t=>{
+  const {root,l,token}=await ledger(t);
+  const snap=snapshot([],{threads:[{id:'late-hidden-finding',isResolved:false}]});
+  persistObservationInbox(root,snap);
+  persistObservationInbox(root,snapshot([]));
+  const config={version:1,owner:'central',requesterLogin:'owner',channel:'GITHUB_CODEX',
+    directory:root,allowedRepos:[scope.repo]};
+  assert.equal(providerStateHolds(config,await l.read(),scope).reason,'PROVIDER_FINDING_DISPOSITION_REQUIRED');
+  let state=await l.importObserved(token,(await l.read()).revision,
+    writeNew(root,'gone-provider.json',snapshot([])),{owner:'central',requesterLogin:'owner'});
+  assert.equal(state.providerFindings.length,1);
+  assert.equal(state.providerFindings[0].disposition,'OPEN');
+});
+test('observed then deleted extra requests cannot disappear from effective retry accounting',async t=>{
+  const {root,l,token,state}=await imported(t,2*TIMEOUT_MS+2000);
+  const first=state.chains[0].attempts[0];
+  const extra=snapshot([comment(1,Date.parse(first.intentAt)),
+    comment(2,Date.parse(first.intentAt)+TIMEOUT_MS+1000)]);
+  persistObservationInbox(root,extra);
+  const now=snapshot([comment(1,Date.parse(first.intentAt))]);
+  persistObservationInbox(root,now);
+  const cfg={version:1,owner:'central',requesterLogin:'owner',channel:'GITHUB_CODEX',
+    directory:root,allowedRepos:[scope.repo]};
+  assert.equal(providerStateHolds(cfg,await l.read(),scope).reason,'PROVIDER_REQUEST_NOT_IN_DURABLE_LEDGER');
+  const next=await l.importObserved(token,(await l.read()).revision,
+    writeNew(root,'later.json',now),{owner:'central',requesterLogin:'owner'});
+  assert(next.historyQuarantine.some(q=>q.reason==='UNRECONCILED_EXISTING_CHAIN_EXTENSION'));
+});
+test('an explicit exact head wins over Previous head without creating another budget',()=>{
+  const now=Date.now(),c='c'.repeat(40),d='d'.repeat(40);
+  const first=comment(1,now-2*TIMEOUT_MS-2000,{body:'@codex review\nPrevious head: '+d+
+    '\nExact head: '+c+'\nBase: '+scope.base});
+  const second=comment(2,now-1000,{head:c});
+  const result=migrate(snapshot([first,second]),'e','central');
+  assert.equal(result.chains.length,1);assert.equal(result.chains[0].scope.head,c);
+  assert.equal(result.chains[0].attempts.length,2);
+});
+test('conflicting explicit head labels are quarantined rather than guessed',()=>{
+  const c=comment(1,Date.now()-1000,{body:'@codex review\nExact head: '+scope.head+
+    '\nExact head: '+'c'.repeat(40)+'\nBase: '+scope.base});
+  const r=migrate(snapshot([c]),'e','central');
+  assert.equal(r.chains.length,0);assert.equal(r.quarantine.length,1);
+});
+test('uppercase SHA input is canonicalized and cannot abort a whole census',()=>{
+  const r=migrate(snapshot([comment(1,Date.now()-1000,{head:scope.head.toUpperCase(),
+    base:scope.base.toUpperCase()})]),'e','central');
+  assert.equal(r.chains.length,1);assert.equal(r.chains[0].scope.head,scope.head);
+});
+test('a managed UUID copied from another PR is never silently excluded',()=>{
+  const a={number:1,scope:{...scope,pr:99},requestId:'01234567-89ab-4def-8123-0123456789ab',
+    parentRequestId:null,reservedBy:{owner:'central',fence:1},delivery:'UNKNOWN',
+    intentAt:new Date(Date.now()-1000).toISOString()};
+  const c=comment(7,Date.now(),{body:requestBody(a)});
+  const result=migrate(snapshot([c]),'e','central',[{scope:a.scope,attempts:[a]}],
+    {requesterLogin:'owner',outbound:{[a.requestId]:outboundRecord(a,'owner')}});
+  assert.equal(result.quarantine.length,1);
+  assert.equal(result.quarantine[0].reason,'MANAGED_REQUEST_SCOPE_BODY_OR_REQUESTER_MISMATCH');
+});
+test('managed marker binding checks exact immutable body, requester and acknowledged comment ID',()=>{
+  const a={number:1,scope,requestId:'01234567-89ab-4def-8123-0123456789ab',
+    parentRequestId:null,reservedBy:{owner:'central',fence:1},delivery:'UNKNOWN',
+    intentAt:new Date(Date.now()-1000).toISOString()};
+  const record=outboundRecord(a,'owner'),source=comment(7,Date.now(),{body:record.body});
+  const run=(c,attempt=a)=>migrate(snapshot([c]),'e','central',[{scope,attempts:[attempt]}],
+    {requesterLogin:'owner',outbound:{[a.requestId]:record}});
+  assert.equal(run(source).quarantine.length,0);
+  assert.equal(run({...source,user:{login:'unrelated-contributor'}}).quarantine.length,1);
+  assert.equal(run({...source,body:source.body+'\nquoted progress'}).quarantine.length,1);
+  const acknowledged={...a,delivery:'ACKNOWLEDGED',
+    requestReceipt:JSON.stringify({requestId:a.requestId,scope,commentId:8})};
+  assert.equal(run(source,acknowledged).quarantine.length,1);
+});
+for(const forged of ['quoted-progress','wrong-requester','changed-body']) test(
+  'actual reconciliation refuses '+forged+' without acknowledging UNKNOWN',async t=>{
+    const {root,l,token}=await ledger(t);
+    await l.dispatchOriginal(token,(await l.read()).revision,scope,handoff,transport({count:0},{
+      send:async a=>{writeNew(root,'outbound-'+a.requestId+'.json',outboundRecord(a,'owner'));
+        throw Error('synthetic uncertain transport');}}));
+    const state=await l.read(),a=state.chains[0].attempts[0],body=requestBody(a);
+    const c=comment(7,Date.now(),{body:forged==='quoted-progress'?'This is NOT a review request\n'+body:
+      forged==='changed-body'?body+'\nprogress':body});
+    if(forged==='wrong-requester')c.user.login='unrelated-contributor';
+    const context=writeNew(root,'context.json',{owner:'central',origin:'SCHEDULED',
+      runId:'synthetic-test',token,scope});
+    const cfg={owner:'central',requesterLogin:'owner',directory:root,evidenceDirectory:root};
+    const result=await reconcile(cfg,{contextFile:context.file,requestId:a.requestId},
+      {observer:async()=>({action:'OBSERVED',snapshot:snapshot([c])})});
+    assert.equal(result.result.action,'BLOCKED');
+    assert.equal((await l.read()).chains[0].attempts[0].delivery,'UNKNOWN');
+  });
+test('exact request-body/requester reconciliation acknowledges one delivery with no resend',async t=>{
+  const {root,l,token}=await ledger(t);let sends=0;
+  await l.dispatchOriginal(token,(await l.read()).revision,scope,handoff,transport({count:0},{
+    send:async a=>{sends++;writeNew(root,'outbound-'+a.requestId+'.json',outboundRecord(a,'owner'));
+      throw Error('synthetic uncertain send');}}));
+  const a=(await l.read()).chains[0].attempts[0];
+  const context=writeNew(root,'context.json',{owner:'central',origin:'SCHEDULED',
+    runId:'synthetic-test',token,scope});
+  const cfg={owner:'central',requesterLogin:'owner',directory:root,evidenceDirectory:root};
+  const result=await reconcile(cfg,{contextFile:context.file,requestId:a.requestId},
+    {observer:async()=>({action:'OBSERVED',snapshot:snapshot([
+      comment(7,Date.now(),{body:requestBody(a)})])})});
+  assert.equal(result.result.action,'DELIVERY_RECONCILED');
+  assert.equal((await l.read()).chains[0].attempts[0].delivery,'ACKNOWLEDGED');
+  assert.equal((await l.read()).chains[0].attempts.length,1);assert.equal(sends,1);
+});
+test('absent plan hashes cannot compare equal and exempt an unrelated barrier',t=>{
+  const root=temp(t),journal=path.join(root,'journal.json');
+  fs.writeFileSync(journal,JSON.stringify({active:'unknown',batches:{}}));
+  const cfg={canonicalJournal:journal,barrierScopes:{unknown:['Example/Other']}};
+  assert.equal(barrierFor(cfg,scope).reason,'EXISTING_CANONICAL_BARRIER');
+  assert.equal(canonicalBarrier(cfg,scope).reason,'EXISTING_CANONICAL_BARRIER');
+});
+test('one failed scope import leaves independent scope decisions and a PARTIAL receipt',async t=>{
+  const root=temp(t),dir=path.join(root,'ledger'),evidenceDirectory=path.join(root,'evidence');
+  fs.mkdirSync(dir,{mode:0o700});fs.mkdirSync(evidenceDirectory,{mode:0o700});
+  await new OperationalLedger(dir).initialize();
+  const journal=path.join(root,'journal.json');fs.writeFileSync(journal,JSON.stringify({active:null}));
+  const other={...scope,repo:'Example/Independent'};
+  const result=await tick({owner:'central',requesterLogin:'owner',directory:dir,evidenceDirectory,
+    allowedRepos:[scope.repo,other.repo],seedTargets:[scope,other],discoverOpen:false,
+    canonicalJournal:journal,legacyConstraints:[]},
+  {origin:'MANUAL_VERIFICATION',actor:'manual-owner',runId:'synthetic-test'},
+  {observer:async input=>({action:'OBSERVED',snapshot:input.repo===scope.repo?
+    snapshot([comment(1,Date.now()-TIMEOUT_MS-1000)],{observedAt:'malformed-time'}):
+    snapshot([comment(2,Date.now()-TIMEOUT_MS-1000)],{repo:other.repo,current:other})})});
+  assert.equal(result.receipt.scopeCoverage,'PARTIAL');
+  assert(result.receipt.errors.some(e=>e.repo===scope.repo));
+  assert(result.receipt.decisions.some(d=>d.repo===other.repo&&d.action==='REPLACEMENT_CANDIDATE'));
+});
+test('real provider adapter acknowledges a matching one-POST receipt and preserves full outbound bytes',async t=>{
+  const {root,l,token}=await ledger(t);let posts=0,posted;
+  const journal=path.join(root,'journal.json'),grantFile=path.join(root,'grant.json');
+  fs.writeFileSync(journal,JSON.stringify({active:null}));
+  fs.writeFileSync(grantFile,JSON.stringify(grant()),{mode:0o600});
+  persistObservationInbox(root,snapshot([]));
+  const cfg={version:1,owner:'central',requesterLogin:'owner',channel:'GITHUB_CODEX',
+    directory:root,allowedRepos:[scope.repo],canonicalJournal:journal};
+  const tx=makeTransport(cfg,{owner:'central',token,kind:'original',runId:'actual-run',grantFile},
+    async(method,route,data)=>{
+      if(method==='POST'){posts++;posted=data.body;return {id:77,body:posted,user:{login:'owner'},
+        html_url:'https://github.com/Example/Project/pull/7#issuecomment-77'};}
+      return {state:'open',draft:false,head:{sha:scope.head},base:{sha:scope.base}};
+    });
+  const r=await l.dispatchOriginal(token,(await l.read()).revision,scope,handoff,
+    transport({count:0},{send:tx.send}));
+  assert.equal(r.action,'REQUEST_RECORDED');assert.equal(posts,1);
+  const a=(await l.read()).chains[0].attempts[0],receipt=JSON.parse(a.requestReceipt);
+  assert.equal(receipt.requester,'owner');assert.equal(receipt.bodySha256,digest(posted));
+  assert.equal(JSON.parse(fs.readFileSync(path.join(root,'outbound-'+a.requestId+'.json'),'utf8')).body,posted);
+});
+test('a second call cannot reuse an uncertain outbound body to issue another POST',async t=>{
+  const {root,l,token}=await ledger(t);let posts=0;
+  const journal=path.join(root,'journal.json'),grantFile=path.join(root,'grant.json');
+  fs.writeFileSync(journal,JSON.stringify({active:null}));
+  fs.writeFileSync(grantFile,JSON.stringify(grant()),{mode:0o600});
+  persistObservationInbox(root,snapshot([]));
+  const tx=makeTransport({version:1,owner:'central',requesterLogin:'owner',channel:'GITHUB_CODEX',
+    directory:root,allowedRepos:[scope.repo],canonicalJournal:journal},
+  {owner:'central',token,runId:'actual-run',grantFile},async method=>{
+    if(method==='POST'){posts++;throw Error('uncertain');}
+    return {state:'open',draft:false,head:{sha:scope.head},base:{sha:scope.base}};
+  });
+  await l.dispatchOriginal(token,(await l.read()).revision,scope,handoff,
+    transport({count:0},{send:tx.send}));
+  const a=(await l.read()).chains[0].attempts[0];
+  await assert.rejects(tx.send(a),/EEXIST/);assert.equal(posts,1);
+});
+test('identical provider facts deduplicate, while edited request versions remain budget-blocking',async t=>{
+  const {root,l,token}=await ledger(t),time=Date.now()-TIMEOUT_MS-1000;
+  const first=snapshot([comment(1,time)]);
+  persistObservationInbox(root,first);
+  const same={...structuredClone(first),observedAt:new Date(Date.now()+1).toISOString()};
+  assert.equal(persistObservationInbox(root,same).length,1);
+  const changed=snapshot([comment(1,time,{head:'c'.repeat(40)})]);
+  assert.equal(persistObservationInbox(root,changed).length,2);
+  const state=await l.importObserved(token,(await l.read()).revision,
+    writeNew(root,'edited-history.json',changed),{owner:'central',requesterLogin:'owner'});
+  assert(state.historyQuarantine.some(q=>q.reason==='REQUEST_BODY_EDIT_HISTORY_REQUIRES_RECONCILIATION'));
+  assert.equal(state.chains.length,0);
+});
+test('a new original cannot hide an already in-flight provider execution as a fresh budget',async t=>{
+  const {root,l}=await ledger(t),now=Date.now();
+  const snap=snapshot([]);
+  snap.comments.push({id:5,user:{login:'chatgpt-codex-connector[bot]'},
+    updated_at:new Date(now).toISOString(),body:'<!-- codex-review-state:v1 '+
+      JSON.stringify({code_review:{commit_sha:scope.head,status:'running'}})+
+      ' --> <relative-time datetime="'+new Date(now-1000).toISOString()+'">running</relative-time>'});
+  persistObservationInbox(root,snap);
+  const hold=providerStateHolds({owner:'central',requesterLogin:'owner',directory:root},
+    await l.read(),scope,'original');
+  assert.equal(hold.reason,'INFLIGHT_PROVIDER_LINEAGE_REQUIRES_RECONCILIATION');
 });

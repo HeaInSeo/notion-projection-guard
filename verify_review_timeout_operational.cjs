@@ -2,6 +2,7 @@
 const fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto');
 const {verify:verifyBaseline}=require('./verify_review_timeout_candidate.cjs');
 const FILES=['review_timeout_operational.cjs','review_timeout_operational_ledger.cjs',
+  'review_timeout_evidence.cjs',
   'review_timeout_operational_worker.cjs','review_timeout_github.cjs',
   'review_timeout_history.cjs','review_timeout_operational_cases.cjs',
   'test-fixtures/review_timeout_operational_transport.cjs','REVIEW_TIMEOUT_OPERATIONS.md',

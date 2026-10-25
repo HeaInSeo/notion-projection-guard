@@ -12,6 +12,11 @@ a copied/rolled-back ledger or reinitialization. Missing normal state is an erro
 The explicit initializer runs once. All mutations use the original flock, exact
 revision CAS, at-most-five-minute lease and monotonic fence. Initial requests
 also fsync/read back UNKNOWN intent before POST. Locks span dispatch.
+The same canonical directory also holds scope-marked append-only provider
+observations and immutable full outbound-body records. Missing initialized
+history requires same-scope reconciliation. Identical provider facts are
+deduplicated without rewriting their first observation; fresh full snapshots
+and retrieval times remain in immutable external evidence receipts.
 
 All operational provider code runs in a separately supervised worker.
 Replacements use review_timeout_isolated.cjs:runIsolated. Original requests and
@@ -37,11 +42,19 @@ Missing scope/base, third requests, conflicting bases, unknown managed UUIDs,
 missing known local requests and opaque already-consumed recovery budgets are
 quarantined. Do not import only a last request as a fresh original. Quarantine
 has no automatic clear/reset.
+Scope parsing requires an unambiguous exact/frozen or explicit labeled head
+and one base, canonicalizes SHA case, and never selects Previous head by
+substring. Edited request bodies retain all observed versions and quarantine.
+Managed UUIDs bind the exact owning repo/PR/scope, immutable full body,
+parent/fence, authenticated requester and any acknowledged provider comment ID.
 
 PR-open automatic reviews remain preserved evidence, not the formal post-pair
 request when that later phase is explicitly required. If a legacy recovery
 replaced an automatic execution, retain its spent-budget constraint instead
 of inventing an original intent. Preserve all old-head and late findings.
+A new original cannot bypass an already in-flight provider execution on the
+same head. If its automatic lineage cannot be safely migrated, keep a concrete
+reconciliation blocker; do not rename a recovery into a fresh original.
 
 ## Real eligibility and provider limitations
 
@@ -58,8 +71,11 @@ do not manufacture an attestation.
 The provider additionally checks the real canonical barrier, open/non-draft
 scope, complete fresh history, unresolved threads and unaccounted requests.
 Immediately before POST it rechecks the live fence and durable UNKNOWN intent.
+It fsyncs the entire immutable outbound body before POST and rechecks the
+source-grant expiry, canonical barrier and retained provider holds afterward.
 A positively scoped unrelated barrier does not block an independent repo.
-An unmapped barrier cannot be assumed unrelated. Other independent work
+Only valid matching nonempty plan hashes can prove that exemption. An unmapped
+or missing-proof barrier cannot be assumed unrelated. Other independent work
 continues under its existing gates.
 
 One POST embeds exact head/base, unique request UUID, predecessor and fence.
@@ -74,10 +90,21 @@ older execution or overwrites a newer decision. Ambiguous terminal evidence
 stays RECONCILE_RESULTS. Unresolved provider threads block; preserve/dispose
 late valid defects even after newer clean. The original core request-bound
 result/disposition APIs keep their strict evidence requirements.
+Every observed finding definition has a first-class durable hold. Disappearing
+threads, isResolved, deleted comments or later clean summaries do not clear it.
+Provider callbacks persist scoped observation intake before returning; later
+calls enforce that intake even before the main ledger import. All observed
+request bodies and edits remain effective history if the provider page changes.
+Only an explicit definition/current-scope-bound responsible-owner disposition
+with preserved source evidence can clear a finding hold. A changed head/base
+requires reassessment. One bad scope yields PARTIAL and does not suppress
+independently verified other scopes.
 
 Watchdog SIGKILL/close confirms only local exit. Provider termination remains
 UNKNOWN. Unique exact UUID/head/base/fence/parent lookup can acknowledge a
-request already present. Missing matches do not prove non-delivery or return
+request already present only when its entire pre-recorded body and expected
+authenticated requester match; copied progress/quoted comments never do.
+Missing matches do not prove non-delivery or return
 the spent budget.
 
 ## Existing scheduled central owner protocol
@@ -102,9 +129,19 @@ Keep the complete pre-existing prompt, reservation, WIP and every user HOLD.
    and gates as above. Invoke send-original or send-replacement with an input
    containing contextFile and grantFile. Every new manual/post-pair request
    uses this path; never also use legacy direct @codex comment dispatch.
+   Prepare is fencing/bookkeeping, not dispatch approval. Barriers are enforced
+   on actual sends; local reconciliation/disposition remains possible.
 5. For uncertain delivery, acquire a fresh prepare context for the same scope,
    then reconcile-delivery with contextFile/requestId. It only acknowledges
    unique exact existing delivery. It never sends or records cancellation.
+6. For a retained finding, prepare the actual current scope, then invoke
+   dispose-finding with contextFile/dispositionFile. The private disposition JSON
+   must contain version=1, findingId, definitionSha256, owner (the fenced central
+   assessor), responsibleOwner, sourceEvaluator=EXISTING_CENTRAL_POLICY_OWNER,
+   disposition=FIXED or DISMISSED, assessedScope, fresh assessedAt, explanation,
+   and sources with URL/full content/SHA256. The command independently observes
+   the provider's current scope, retains that observation, and preserves a
+   private immutable copy of the assessment. It grants no merge/review PASS.
 
 At >=30 minutes warn; strictly beyond 60 classify timeout. A first timeout
 is only a candidate and still needs every gate and isolated reservation/send.
