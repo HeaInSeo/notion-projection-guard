@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "status": "OPERATIONAL_CANDIDATE_NOT_DEPLOYED",
+  "baselineCommit": "2442583580c644aefe8a142c43532f61320dfda9",
+  "operationalReplacementEntry": "review_timeout_isolated.cjs:runIsolated",
+  "sha256": {
+    "review_timeout_operational.cjs": "9b6785aa8867c6c1e829bde3f0401d9ce1722094e6141f10ca8e40fe4f2ff72e",
+    "review_timeout_operational_ledger.cjs": "4016550a2c4f478be8a0d62c902af8ecc4baeffa8a6ec0b1b0976ac4ef0de632",
+    "review_timeout_operational_worker.cjs": "8ded75e8394585b175a52d8654837e41036358615c66e73a8e2953e6732a76a1",
+    "review_timeout_github.cjs": "069267eb0f8d9f0fef6a9fd0cc7af9e78ef01c793606e77a580f84dc5a18c44f",
+    "review_timeout_history.cjs": "66c4696ee5152a346099e71cd69bd7d826db8f4021b91bcb82e14088a58307c2",
+    "review_timeout_operational_cases.cjs": "cb3c059887ef551dd169ae0a04452d7e18d179be87e57aa05b81f536541e65d7",
+    "test-fixtures/review_timeout_operational_transport.cjs": "438c4d649d6a14e40d1c6fbff9ddc32ad3f502ed66ca628c89ea0d0a6dfc89cb",
+    "REVIEW_TIMEOUT_OPERATIONS.md": "f876d63ff95c202397db551cd7f01914fc00f722a6c6abb55db0f3c0cc53c588",
+    "verify_review_timeout_operational.cjs": "226af80b4a1661030c1ab35cdc433b6c4b39f6cd1b6a9fcd3a2738a81585b8f7",
+    "review_timeout_evidence.cjs": "8c2ecc7680f5b0fd411f283dc03459127360cc48d6225b0a5b997b33d0f432c6"
+  }
+}
