@@ -35,6 +35,31 @@ function snapshot(comments,extra={}) {
     inlineComments:[],threads:[],metadata:{state:'open',draft:false,
       head:{sha:scope.head},base:{sha:scope.base}},...extra};
 }
+function fakeGitHub(handler,getSnapshot=()=>snapshot([])) {
+  return async(method,route,data)=>{
+    if((method==='GET'&&/\/pulls\/\d+$/.test(route))||
+      (method==='POST'&&/\/issues\/\d+\/comments$/.test(route)))
+      return handler(method,route,data);
+    const s=getSnapshot(route);
+    if(method==='GET'&&/\/issues\/\d+\/comments\?/.test(route))return s.comments;
+    if(method==='GET'&&/\/pulls\/\d+\/reviews\?/.test(route))return s.reviews;
+    if(method==='GET'&&/\/pulls\/\d+\/comments\?/.test(route))return s.inlineComments;
+    if(method==='POST'&&route==='/graphql')return {data:{repository:{pullRequest:{reviewThreads:{
+      pageInfo:{hasNextPage:false,endCursor:null},nodes:s.threads.map(t=>({...t,
+        comments:{nodes:t.comments?.nodes??[],pageInfo:{hasNextPage:false,endCursor:null}}}))}}}}};
+    throw Error('unexpected synthetic API route '+route);
+  };
+}
+function providerSnapshot(comments,status,at,trigger='PR opened',extra={}) {
+  const s=snapshot(comments);
+  s.comments.push({id:99,created_at:new Date(at).toISOString(),
+    updated_at:new Date().toISOString(),user:{login:'chatgpt-codex-connector[bot]'},
+    body:'<!-- codex-review-state:v1 '+JSON.stringify({code_review:{
+      commit_sha:scope.head,status,has_any_findings:status==='completed'?false:null}})+
+      ' -->\n| Code Review | <relative-time datetime="'+new Date(at).toISOString()+
+      '">state</relative-time> | '+trigger+' |',...extra});
+  return s;
+}
 async function ledger(t) {
   const root = temp(t), l = new OperationalLedger(root);
   await l.initialize();
@@ -221,10 +246,10 @@ test('actual provider POST has exactly one intent and no retry after uncertain s
   const config={version:1,owner:'central',channel:'GITHUB_CODEX',directory:root,
     allowedRepos:[scope.repo],canonicalJournal:journal,requesterLogin:'owner'};
   persistObservationInbox(root,snapshot([]));
-  const tx=makeTransport(config,{owner:'central',token,grantFile,runId:'actual-run'},async(method,route)=>{
+  const tx=makeTransport(config,{owner:'central',token,grantFile,runId:'actual-run'},fakeGitHub(async(method,route)=>{
     if(method==='POST'){posts++;throw Error('uncertain socket outcome');}
     return {state:'open',draft:false,head:{sha:scope.head},base:{sha:scope.base}};
-  });
+  }));
   const r=await l.dispatchOriginal(token,(await l.read()).revision,scope,handoff,
     transport({count:0},{send:tx.send}));
   assert.equal(r.reason,'UNCERTAIN_SEND');
@@ -240,14 +265,14 @@ for(const change of ['expired-grant','new-barrier']) test(
       allowedRepos:[scope.repo],canonicalJournal:journal,requesterLogin:'owner'};
     persistObservationInbox(root,snapshot([]));
     const tx=makeTransport(config,{owner:'central',token,grantFile,runId:'actual-run'},
-      async method=>{
+      fakeGitHub(async method=>{
         if(method==='POST')posts++;
         if(change==='new-barrier')
           fs.writeFileSync(journal,JSON.stringify({active:'new',batches:{new:{status:'HALTED'}}}));
         else {const g=grant();g.expiresAt=new Date(Date.now()-1).toISOString();
           fs.writeFileSync(grantFile,JSON.stringify(g),{mode:0o600});}
         return {state:'open',draft:false,head:{sha:scope.head},base:{sha:scope.base}};
-      });
+      }));
     const r=await l.dispatchOriginal(token,(await l.read()).revision,scope,handoff,
       transport({count:0},{send:tx.send}));
     assert.equal(r.reason,'UNCERTAIN_SEND');assert.equal(posts,0);
@@ -269,10 +294,10 @@ test('terminated PR history cannot be offered as a new timeout replacement',()=>
 test('provider send refuses a stale fence before the POST',async t=>{
   const {root,token}=await ledger(t);let posts=0;
   const tx=makeTransport({version:1,owner:'central',requesterLogin:'owner',channel:'GITHUB_CODEX',directory:root,
-    allowedRepos:[scope.repo]},{owner:'central',token:{...token,id:'stale'}},async method=>{
+    allowedRepos:[scope.repo]},{owner:'central',token:{...token,id:'stale'}},fakeGitHub(async method=>{
       if(method==='POST')posts++;
       return {state:'open',draft:false,head:{sha:scope.head},base:{sha:scope.base}};
-    });
+    }));
   await assert.rejects(tx.send({requestId:'01234567-89ab-4def-8123-0123456789ab',scope,parentRequestId:null,reservedBy:token}),
     /owner expired/);
   assert.equal(posts,0);
@@ -280,10 +305,10 @@ test('provider send refuses a stale fence before the POST',async t=>{
 test('head change before provider send makes zero POSTs',async t=>{
   const {root,token}=await ledger(t);let posts=0;
   const tx=makeTransport({version:1,owner:'central',requesterLogin:'owner',channel:'GITHUB_CODEX',directory:root,
-    allowedRepos:[scope.repo]},{owner:'central',token},async method=>{
+    allowedRepos:[scope.repo]},{owner:'central',token},fakeGitHub(async method=>{
       if(method==='POST')posts++;
       return {state:'open',draft:false,head:{sha:'c'.repeat(40)},base:{sha:scope.base}};
-    });
+    }));
   await assert.rejects(tx.send({requestId:'id',scope,parentRequestId:null,reservedBy:token}),
     /scope changed before/);assert.equal(posts,0);
 });
@@ -512,11 +537,11 @@ test('real provider adapter acknowledges a matching one-POST receipt and preserv
   const cfg={version:1,owner:'central',requesterLogin:'owner',channel:'GITHUB_CODEX',
     directory:root,allowedRepos:[scope.repo],canonicalJournal:journal};
   const tx=makeTransport(cfg,{owner:'central',token,kind:'original',runId:'actual-run',grantFile},
-    async(method,route,data)=>{
+    fakeGitHub(async(method,route,data)=>{
       if(method==='POST'){posts++;posted=data.body;return {id:77,body:posted,user:{login:'owner'},
         html_url:'https://github.com/Example/Project/pull/7#issuecomment-77'};}
       return {state:'open',draft:false,head:{sha:scope.head},base:{sha:scope.base}};
-    });
+    }));
   const r=await l.dispatchOriginal(token,(await l.read()).revision,scope,handoff,
     transport({count:0},{send:tx.send}));
   assert.equal(r.action,'REQUEST_RECORDED');assert.equal(posts,1);
@@ -532,10 +557,10 @@ test('a second call cannot reuse an uncertain outbound body to issue another POS
   persistObservationInbox(root,snapshot([]));
   const tx=makeTransport({version:1,owner:'central',requesterLogin:'owner',channel:'GITHUB_CODEX',
     directory:root,allowedRepos:[scope.repo],canonicalJournal:journal},
-  {owner:'central',token,runId:'actual-run',grantFile},async method=>{
+  {owner:'central',token,runId:'actual-run',grantFile},fakeGitHub(async method=>{
     if(method==='POST'){posts++;throw Error('uncertain');}
     return {state:'open',draft:false,head:{sha:scope.head},base:{sha:scope.base}};
-  });
+  }));
   await l.dispatchOriginal(token,(await l.read()).revision,scope,handoff,
     transport({count:0},{send:tx.send}));
   const a=(await l.read()).chains[0].attempts[0];
@@ -565,4 +590,89 @@ test('a new original cannot hide an already in-flight provider execution as a fr
   const hold=providerStateHolds({owner:'central',requesterLogin:'owner',directory:root},
     await l.read(),scope,'original');
   assert.equal(hold.reason,'INFLIGHT_PROVIDER_LINEAGE_REQUIRES_RECONCILIATION');
+});
+test('automatic RUNNING remains a durable hold after disappearance or a head switch',async t=>{
+  const {root,l,token}=await ledger(t);
+  const first=providerSnapshot([],'running',Date.now()-TIMEOUT_MS-1000);
+  let state=await l.importObserved(token,(await l.read()).revision,
+    writeNew(root,'auto-running.json',first),{owner:'central',requesterLogin:'owner'});
+  assert.equal(state.providerActivities[0].status,'PENDING');
+  const gone=snapshot([]);
+  state=await l.importObserved(token,state.revision,writeNew(root,'auto-gone.json',gone),
+    {owner:'central',requesterLogin:'owner'});
+  const cfg={owner:'central',requesterLogin:'owner',directory:root};
+  assert.equal(providerStateHolds(cfg,state,scope,'original').reason,
+    'INFLIGHT_PROVIDER_LINEAGE_REQUIRES_RECONCILIATION');
+  const changed=snapshot([],{current:{...scope,head:'c'.repeat(40)}});
+  persistObservationInbox(root,changed);
+  assert.equal(providerStateHolds(cfg,state,scope,'replacement').reason,
+    'INFLIGHT_PROVIDER_LINEAGE_REQUIRES_RECONCILIATION');
+  assert.equal(state.providerActivities[0].providerTermination,'UNKNOWN');
+});
+test('only a proven single pre-formal phase result is recorded as consumed, never provider exit or PASS',async t=>{
+  const {root,l,token}=await ledger(t),now=Date.now();
+  let state=await l.importObserved(token,(await l.read()).revision,
+    writeNew(root,'run.json',providerSnapshot([],'running',now-10000)),
+    {owner:'central',requesterLogin:'owner'});
+  state=await l.importObserved(token,state.revision,
+    writeNew(root,'complete.json',providerSnapshot([],'completed',now-5000)),
+    {owner:'central',requesterLogin:'owner'});
+  assert.equal(state.providerActivities[0].status,'PRE_FORMAL_PHASE_CONSUMED');
+  assert.equal(state.providerActivities[0].providerTermination,'UNKNOWN');
+  assert.equal(state.providerActivities[0].resolution.gate,'NOT_ASSESSED');
+  assert.equal(providerStateHolds({owner:'central',requesterLogin:'owner',directory:root},
+    state,scope,'original'),null);
+  assert.equal(state.chains.length,0);
+});
+test('a result arriving after a formal request cannot consume an older opaque automatic phase',async t=>{
+  const {root,l,token}=await ledger(t),now=Date.now();
+  let state=await l.importObserved(token,(await l.read()).revision,
+    writeNew(root,'run.json',providerSnapshot([],'running',now-10000)),
+    {owner:'central',requesterLogin:'owner'});
+  state=await l.importObserved(token,state.revision,
+    writeNew(root,'late-complete.json',providerSnapshot([comment(1,now-7000)],'completed',now-5000)),
+    {owner:'central',requesterLogin:'owner'});
+  assert.equal(state.providerActivities[0].status,'PENDING');
+  assert.equal(providerStateHolds({owner:'central',requesterLogin:'owner',directory:root},
+    state,scope,'replacement').reason,'INFLIGHT_PROVIDER_LINEAGE_REQUIRES_RECONCILIATION');
+});
+test('initially edited legacy comments cannot use creation time for a guessed current scope',()=>{
+  const now=Date.now(),c=comment(1,now-TIMEOUT_MS-1000,{head:'c'.repeat(40)});
+  c.updated_at=new Date(now-1).toISOString();
+  const result=migrate(snapshot([c]),'e','central');
+  assert.equal(result.chains.length,0);
+  assert.equal(result.quarantine[0].reason,'LEGACY_REQUEST_EDITED_BEFORE_OBSERVATION');
+});
+for(const transitionAt of [1,2,3]) test(
+  'replacement sends zero requests when terminal evidence arrives at observation '+transitionAt,async t=>{
+    const {root,l,token,state}=await imported(t,TIMEOUT_MS+10000);
+    const first=state.chains[0].attempts[0],start=Date.parse(first.intentAt);
+    const journal=path.join(root,'journal.json'),grantFile=path.join(root,'grant.json');
+    fs.writeFileSync(journal,JSON.stringify({active:null}));
+    fs.writeFileSync(grantFile,JSON.stringify(grant()),{mode:0o600});
+    let reads=0,posts=0;
+    const client=fakeGitHub(async method=>{
+      if(method==='POST'){posts++;throw Error('unexpected review POST');}
+      return {state:'open',draft:false,head:{sha:scope.head},base:{sha:scope.base}};
+    },route=>{
+      if(/\/issues\/\d+\/comments\?/.test(route))reads++;
+      return providerSnapshot([comment(1,start)],reads>=transitionAt?'completed':'running',
+        start+1000,'Manual request');
+    });
+    const tx=makeTransport({version:1,owner:'central',requesterLogin:'owner',channel:'GITHUB_CODEX',
+      directory:root,allowedRepos:[scope.repo],canonicalJournal:journal,dispatchEnabled:true},
+    {owner:'central',token,kind:'replacement',runId:'actual-run',grantFile},client);
+    const result=await l.dispatchReplacement(token,(await l.read()).revision,budgetKey(scope),tx);
+    assert.equal(result.action,'BLOCKED');assert.equal(posts,0);
+    const after=await l.read();
+    assert.equal(after.chains[0].attempts.length,transitionAt===1?1:2);
+    if(transitionAt>1)assert.equal(after.chains[0].attempts[1].delivery,'UNKNOWN');
+  });
+test('unparseable provider state is held durably instead of being treated as empty',async t=>{
+  const {root,l}=await ledger(t),s=snapshot([]);
+  s.comments.push({id:99,user:{login:'chatgpt-codex-connector[bot]'},
+    body:'<!-- codex-review-state:v1 {broken} -->'});
+  persistObservationInbox(root,s);persistObservationInbox(root,snapshot([]));
+  assert.equal(providerStateHolds({owner:'central',requesterLogin:'owner',directory:root},
+    await l.read(),scope,'original').reason,'INFLIGHT_PROVIDER_LINEAGE_REQUIRES_RECONCILIATION');
 });

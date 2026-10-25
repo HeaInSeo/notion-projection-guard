@@ -50,6 +50,10 @@ function migrate(snapshot, evidenceSha256, owner, existing = [], binding = {}) {
     if((comment.body??'').includes('Review-Timeout-Request:')) {
       q('INVALID_MANAGED_REQUEST_MARKER',[String(comment.id)]);continue;
     }
+    if(Number.isFinite(Date.parse(comment.updated_at))&&
+      Date.parse(comment.updated_at)>Date.parse(comment.created_at)) {
+      q('LEGACY_REQUEST_EDITED_BEFORE_OBSERVATION',[String(comment.id)]);continue;
+    }
     if(!Number.isFinite(Date.parse(comment.created_at))||
       Date.parse(comment.created_at)>Date.parse(snapshot.observedAt)) {
       q('INVALID_REQUEST_TIMESTAMP',[String(comment.id)]);continue;
@@ -102,13 +106,97 @@ function summary(snapshot) {
     const match = (c.body ?? '').match(/<!-- codex-review-state:v1 (.*?) -->/);
     if (!match) return [];
     try {
-      const state = JSON.parse(match[1]).code_review;
+      const parsed=JSON.parse(match[1]);
+      need(Object.prototype.hasOwnProperty.call(parsed,'code_review'),'unsupported provider state schema');
+      const state=parsed.code_review;
+      need(state===null||(state&&Object.prototype.hasOwnProperty.call(state,'status')),
+        'missing provider review status');
       const times = [...(c.body ?? '').matchAll(/datetime="([^"]+)"/g)].map(x => x[1]);
+      const rawTime=times[0],knownTime=rawTime&&Number.isFinite(Date.parse(rawTime));
+      const trigger=(c.body??'').match(/\|\s*(Manual request|PR opened|Draft marked ready)\s*\|/i)?.[1]??'UNKNOWN';
       return [{commentId:String(c.id),updatedAt:c.updated_at,...state,
-        providerTime:times.length ? utc(times[0]) : null}];
+        ...(typeof state?.commit_sha==='string'&&/^[a-f0-9]{40}$/i.test(state.commit_sha)?
+          {commit_sha:state.commit_sha.toLowerCase()}:{}),
+        ...(state?.status===null&&state?.commit_sha?{status:'pending'}:{}),trigger,
+        providerTime:knownTime ? utc(rawTime) : null}];
     } catch { return []; }
   });
   return states.sort((a,b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))[0] ?? null;
+}
+function terminalObservationBlocks(provider,scope,referenceAt) {
+  return !!provider&&provider.commit_sha===scope.head&&provider.status&&
+    !['running','pending','queued'].includes(provider.status.toLowerCase())&&
+    (!provider.providerTime||Date.parse(provider.providerTime)>=Date.parse(referenceAt));
+}
+function activityBudgetCoverage(activity,chains) {
+  const reference=activity.startedAt??activity.observedProviderTime;
+  if(activity.trigger.toLowerCase()!=='manual request'||!reference)return null;
+  const candidates=chains.filter(c=>c.scope.repo.toLowerCase()===activity.repo.toLowerCase()&&
+    c.scope.pr===activity.pr&&c.scope.head===activity.head).flatMap(c=>c.attempts)
+    .filter(a=>a.delivery==='ACKNOWLEDGED'&&typeof a.requestReceipt==='string'&&
+      a.requestReceipt.length>0&&Date.parse(a.intentAt)<=Date.parse(reference))
+    .sort((a,b)=>Date.parse(b.intentAt)-Date.parse(a.intentAt));
+  const a=candidates[0];
+  return a?{kind:'EXISTING_REQUEST_BUDGET_ACCOUNTED',requestId:a.requestId,
+    requestReceipt:a.requestReceipt,providerTermination:'UNKNOWN',gate:'NOT_ASSESSED'}:null;
+}
+function opaqueActivities(history,chains=[]) {
+  const combined=require('./review_timeout_evidence.cjs').combineHistory(history.map(h=>h.snapshot));
+  const comments=combined.requestCommentHistory??combined.comments, found=new Map();
+  for(const h of [...history].sort((a,b)=>Date.parse(a.snapshot.observedAt)-Date.parse(b.snapshot.observedAt))) {
+    const p=summary(h.snapshot);
+    if(!p) {
+      for(const c of h.snapshot.comments.filter(c=>c.user?.login==='chatgpt-codex-connector[bot]'&&
+        (c.body??'').includes('codex-review-state:v1'))) {
+        const id='provider-activity:'+require('./review_timeout_evidence.cjs').digest(
+          JSON.stringify([combined.repo.toLowerCase(),combined.pr,'UNPARSEABLE',String(c.id)]));
+        if(!found.has(id))found.set(id,{id,repo:combined.repo,pr:combined.pr,head:'UNKNOWN',
+          startedAt:null,trigger:'UNPARSEABLE_PROVIDER_STATE',firstEvidence:h.evidence,
+          providerTermination:'UNKNOWN'});
+      }
+      continue;
+    }
+    const inflight=['running','pending','queued'].includes((p.status??'').toLowerCase());
+    if(!p.status)continue;
+    const knownManual=p.trigger.toLowerCase()==='manual request'&&p.providerTime&&comments.some(c=>{
+      const scope=bodyScope(c.body??'',combined.repo,combined.pr);
+      return scope&&scope.head===p.commit_sha&&/^\s*@codex\s+review\b/i.test(c.body??'')&&
+        Date.parse(c.updated_at??c.created_at)<=Date.parse(c.created_at)&&
+        Date.parse(c.created_at)<=Date.parse(p.providerTime);
+    });
+    if(knownManual)continue;
+    if(p.status.toLowerCase()==='completed'&&typeof p.has_any_findings==='boolean'&&
+      /^[a-f0-9]{40}$/.test(p.commit_sha??'')&&
+      ['pr opened','draft marked ready'].includes(p.trigger.toLowerCase()))continue;
+    const head=/^[a-f0-9]{40}$/.test(p.commit_sha??'')?p.commit_sha:'UNKNOWN';
+    const id='provider-activity:'+require('./review_timeout_evidence.cjs').digest(
+      JSON.stringify([combined.repo.toLowerCase(),combined.pr,head,p.providerTime,p.trigger,p.commentId]));
+    const activity={id,repo:combined.repo,pr:combined.pr,head,
+      startedAt:inflight?p.providerTime:null,observedProviderTime:p.providerTime,
+      trigger:p.trigger,firstEvidence:h.evidence,
+      providerTermination:'UNKNOWN'};
+    if(!activityBudgetCoverage(activity,chains)&&!found.has(id))found.set(id,activity);
+  }
+  return [...found.values()];
+}
+function activityResolution(activity,history,chains,quarantine) {
+  const activities=opaqueActivities(history,chains);
+  if(activity.head==='UNKNOWN'||!activity.startedAt||
+    !['pr opened','draft marked ready'].includes(activity.trigger.toLowerCase())||
+    activities.filter(a=>a.head===activity.head).length!==1)return null;
+  if(quarantine.some(q=>q.repo.toLowerCase()===activity.repo.toLowerCase()&&q.pr===activity.pr&&
+    (!q.key||JSON.parse(q.key)[2]===activity.head)))return null;
+  const manualTimes=chains.filter(c=>c.scope.repo.toLowerCase()===activity.repo.toLowerCase()&&
+    c.scope.pr===activity.pr&&c.scope.head===activity.head).flatMap(c=>c.attempts.map(a=>Date.parse(a.intentAt)));
+  for(const h of history) {
+    const p=summary(h.snapshot);
+    if(terminalObservationBlocks(p,{head:activity.head},activity.startedAt)&&p.providerTime&&
+      p.status.toLowerCase()==='completed'&&typeof p.has_any_findings==='boolean'&&
+      !manualTimes.some(at=>at<=Date.parse(p.providerTime)))
+      return {kind:'PRE_FORMAL_PHASE_RESULT_OBSERVED',evidence:h.evidence,
+        providerTime:p.providerTime,providerTermination:'UNKNOWN',gate:'NOT_ASSESSED'};
+  }
+  return null;
 }
 function decisionFor(chain, state, snapshot, now = Date.now()) {
   const key = budgetKey(chain.scope);
@@ -117,9 +205,13 @@ function decisionFor(chain, state, snapshot, now = Date.now()) {
     q.repo.toLowerCase() === chain.scope.repo.toLowerCase() &&
     q.pr === chain.scope.pr && (!q.key || q.key === key));
   const findingHolds=retainedFindingHolds(state,snapshot.current,providerFindings(snapshot));
+  const activityHolds=(state.providerActivities??[]).filter(a=>
+    a.repo.toLowerCase()===snapshot.repo.toLowerCase()&&a.pr===snapshot.pr&&
+    (a.head==='UNKNOWN'||a.head===snapshot.current.head)&&a.status==='PENDING').map(a=>a.id);
   if (snapshot.metadata.state !== 'open')
     return {...base,action:'HISTORICAL',reason:'PR_TERMINATED_PRESERVE_ALL_EVIDENCE',
       retainedFindingIds:findingHolds,
+      retainedActivityIds:activityHolds,
       historicalQuarantine:hold?.reason ?? null,dispatchAuthorized:false,
       next:'Preserve late results/findings; existing owner disposes valid defects.',
       nextTrigger:'New provider evidence; no request for the terminated PR.'};
@@ -129,14 +221,17 @@ function decisionFor(chain, state, snapshot, now = Date.now()) {
     reason:'PROVIDER_FINDING_DISPOSITION_REQUIRED',retainedFindingIds:findingHolds,
     next:'Existing owner records explicit definition- and current-scope-bound finding disposition.',
     nextTrigger:'Verified responsible owner and evidence for every retained finding.'};
+  if(activityHolds.length)return {...base,action:'BLOCKED',
+    reason:'OPAQUE_PROVIDER_LINEAGE_UNRECONCILED',retainedActivityIds:activityHolds,
+    next:'Reconcile the exact observed automatic/provider lineage without a fresh budget.',
+    nextTrigger:'Verified existing request budget or pre-formal phase evidence.'};
   const latest = chain.attempts.at(-1), provider = summary(snapshot);
   // The mutable shared summary has no execution ID. It can prevent duplicate sends,
   // but can never become a request-specific CLEAN verdict or overwrite prior results.
-  if (provider && provider.commit_sha === chain.scope.head &&
-    provider.providerTime && Date.parse(provider.providerTime) >= Date.parse(latest.intentAt) &&
-    provider.status && !['running','pending','queued'].includes(provider.status.toLowerCase()))
+  if (terminalObservationBlocks(provider,chain.scope,latest.intentAt))
     return {...base,action:'RECONCILE_RESULTS',reason:'SHARED_SUMMARY_NOT_REQUEST_SPECIFIC',
       providerObservation:provider,gate:'NOT_ASSESSED'};
   return {...base,providerObservation:provider};
 }
-module.exports = {bodyScope,migrate,summary,decisionFor};
+module.exports = {bodyScope,migrate,summary,decisionFor,terminalObservationBlocks,
+  opaqueActivities,activityResolution,activityBudgetCoverage};

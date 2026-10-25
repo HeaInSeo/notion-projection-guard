@@ -45,6 +45,8 @@ has no automatic clear/reset.
 Scope parsing requires an unambiguous exact/frozen or explicit labeled head
 and one base, canonicalizes SHA case, and never selects Previous head by
 substring. Edited request bodies retain all observed versions and quarantine.
+An already-edited legacy request also quarantines at its first intake: its
+current text cannot be assigned its older creation-time scope.
 Managed UUIDs bind the exact owning repo/PR/scope, immutable full body,
 parent/fence, authenticated requester and any acknowledged provider comment ID.
 
@@ -55,6 +57,14 @@ of inventing an original intent. Preserve all old-head and late findings.
 A new original cannot bypass an already in-flight provider execution on the
 same head. If its automatic lineage cannot be safely migrated, keep a concrete
 reconciliation blocker; do not rename a recovery into a fresh original.
+Opaque provider activity is retained across disappeared summaries and head
+switches. A known manual request can account for its budget without proving
+provider termination. A single known automatic pre-formal phase is consumed
+only by a preserved same-head completed result with a known finding flag,
+before any formal request, with no competing opaque activity/quarantine.
+That verified phase reconciliation is committed under the owner/fence and
+remains NOT_ASSESSED for review gates; provider termination stays UNKNOWN.
+Failed, ambiguous, missing-time or competing activity stays blocked.
 
 ## Real eligibility and provider limitations
 
@@ -73,12 +83,16 @@ scope, complete fresh history, unresolved threads and unaccounted requests.
 Immediately before POST it rechecks the live fence and durable UNKNOWN intent.
 It fsyncs the entire immutable outbound body before POST and rechecks the
 source-grant expiry, canonical barrier and retained provider holds afterward.
+Actual send performs a fresh full provider observation, not only a head read.
+A terminal/ambiguous same-head result blocks a replacement at both eligibility
+checks and at actual POST. After reservation it is compared to the predecessor
+intent, so an original finishing before attempt 2 cannot be missed.
 A positively scoped unrelated barrier does not block an independent repo.
 Only valid matching nonempty plan hashes can prove that exemption. An unmapped
 or missing-proof barrier cannot be assumed unrelated. Other independent work
 continues under its existing gates.
 
-One POST embeds exact head/base, unique request UUID, predecessor and fence.
+One review-dispatch POST embeds exact head/base, unique request UUID, predecessor and fence.
 The PR scope is checked before/after POST; changes leave UNKNOWN. GitHub issue
 comments do not offer atomic head-conditioned review dispatch. This adapter
 does not claim GitHub server fencing or atomic provider head binding. Real

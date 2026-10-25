@@ -7,7 +7,8 @@ const {scopeKey} = require('./review_timeout_policy.cjs');
 const {need,digest,readPrivate,writeNew,persistObservationInbox,readObservationInbox,
   readOutboundRecords,retainedFindingHolds} = require('./review_timeout_operational_ledger.cjs');
 const {outboundRecord,providerFindings,combineHistory} = require('./review_timeout_evidence.cjs');
-const {migrate,summary} = require('./review_timeout_history.cjs');
+const {migrate,summary,opaqueActivities,activityResolution,activityBudgetCoverage,terminalObservationBlocks} =
+  require('./review_timeout_history.cjs');
 const BOT = 'chatgpt-codex-connector[bot]';
 const REQUIRED_GATES = ['authority','wip','singleWriter','workerRelease','independentReview',
   'uncertainWrite','usage','currentHead','findingDisposition','ci'];
@@ -176,9 +177,27 @@ function providerStateHolds(config,state,scope,kind=null) {
   if(!history.length)return {reason:'PROVIDER_HISTORY_NOT_OBSERVED'};
   const combined=combineHistory(history.map(h=>h.snapshot));
   const provider=summary(combined);
-  if(kind==='original'&&provider?.commit_sha===scope.head&&
-    ['running','pending','queued'].includes((provider.status??'').toLowerCase()))
-    return {reason:'INFLIGHT_PROVIDER_LINEAGE_REQUIRES_RECONCILIATION'};
+  const activities=new Map((state.providerActivities??[]).filter(a=>
+    a.repo.toLowerCase()===scope.repo.toLowerCase()&&a.pr===scope.pr)
+    .map(a=>[a.id,a]));
+  for(const a of opaqueActivities(history,state.chains))activities.set(a.id,a);
+  for(const activity of [...activities.values()].filter(a=>a.head==='UNKNOWN'||a.head===scope.head)) {
+    const recorded=(state.providerActivities??[]).find(a=>a.id===activity.id);
+    const coverage=activityBudgetCoverage(activity,state.chains);
+    if(coverage&&recorded?.status==='BUDGET_ACCOUNTED'&&
+      recorded.resolution?.requestId===coverage.requestId)continue;
+    const proof=activityResolution(activity,history,state.chains,state.historyQuarantine??[]);
+    if(recorded?.status!=='PRE_FORMAL_PHASE_CONSUMED'||!proof||
+      recorded.resolution?.evidence.sha256!==proof.evidence.sha256)
+      return {reason:'INFLIGHT_PROVIDER_LINEAGE_REQUIRES_RECONCILIATION',activityId:activity.id};
+  }
+  const chain=state.chains.find(c=>c.scope.repo.toLowerCase()===scope.repo.toLowerCase()&&
+    c.scope.pr===scope.pr&&c.scope.head===scope.head);
+  // During a replacement's reservation/POST, an original finishing must stop
+  // the extra request even if its result predates newly reserved attempt 2.
+  if(kind==='replacement'&&chain&&
+    terminalObservationBlocks(provider,scope,chain.attempts[0].intentAt))
+    return {reason:'SHARED_SUMMARY_RESULTS_RECONCILIATION_REQUIRED'};
   const migration=migrate(combined,'durable-observation-inbox',config.owner,state.chains,
     {requesterLogin:config.requesterLogin,
       outbound:readOutboundRecords(config.directory,state,config.requesterLogin,scope)});
@@ -228,12 +247,16 @@ function makeTransport(config,context,api) {
     send:async attempt => {
       permitted(attempt.scope);
       const route = '/repos/' + attempt.scope.repo + '/pulls/' + attempt.scope.pr;
-      const before = await api('GET',route);
+      ownedState(config,context,attempt.reservedBy.fence);
+      const fresh = await observe(api,attempt.scope.repo,attempt.scope.pr);
+      let state=ownedState(config,context,attempt.reservedBy.fence);
+      persistObservationInbox(config.directory,fresh);
+      const before=fresh.metadata;
       need(before.state === 'open' && !before.draft &&
-        scopeKey(currentScope(attempt.scope.repo,attempt.scope.pr,before)) ===
+        scopeKey(fresh.current) ===
         scopeKey(attempt.scope),'scope changed before provider send');
       const record=outboundRecord(attempt,config.requesterLogin),body=record.body;
-      let state=ownedState(config,context,attempt.reservedBy.fence);
+      state=ownedState(config,context,attempt.reservedBy.fence);
       const recorded = state.chains.flatMap(c => c.attempts)
         .find(a => a.requestId === attempt.requestId);
       need(recorded && recorded.delivery === 'UNKNOWN' &&

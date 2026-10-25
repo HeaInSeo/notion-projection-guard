@@ -140,6 +140,21 @@ async function tick(config,input,{observer = runTask} = {}) {
           nextTrigger:'Reviewed exact history reconciliation.',gate:'NOT_ASSESSED',
           dispatchAuthorized:false,retainedEvidence:q.evidence});
       }
+      for(const activity of (state.providerActivities??[]).filter(a=>
+        a.repo.toLowerCase()===snapshot.repo.toLowerCase()&&a.pr===snapshot.pr&&
+        a.status!=='PRE_FORMAL_PHASE_CONSUMED')) {
+        const historical=snapshot.metadata.state!=='open'||activity.head!==snapshot.current.head;
+        const age=activity.startedAt?Date.now()-Date.parse(activity.startedAt):null;
+        decisions.push({repo:activity.repo,pr:activity.pr,head:activity.head,
+          action:historical?'HISTORICAL':'BLOCKED',reason:'OPAQUE_PROVIDER_LINEAGE_UNRECONCILED',
+          activityId:activity.id,warning:age===null?null:age>=WARNING_MS,
+          timedOut:age===null?null:age>TIMEOUT_MS,
+          ageBasis:'Observed provider start, not invented request time.',
+          providerTermination:'UNKNOWN',owner:config.owner,nextOwner:config.owner,
+          next:'Reconcile exact automatic/provider phase and existing retry budget; never import a fresh original.',
+          nextTrigger:'Verified pre-formal terminal phase proof or separately reviewed exact history migration.',
+          gate:'NOT_ASSESSED',dispatchAuthorized:false});
+      }
       } catch(error) {
         errors.push({repo:snapshot.repo,pr:snapshot.pr,reason:'SCOPE_HISTORY_RECONCILIATION_REQUIRED',
           detail:String(error.message).slice(0,250)});

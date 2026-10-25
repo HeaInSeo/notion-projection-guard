@@ -135,7 +135,8 @@ class OperationalLedger extends ReviewLedger {
       'complete provider history required');
       const history=persistObservationInbox(this.directory,snapshot);
       const combined=combineHistory(history.map(x=>x.snapshot));
-      const {migrate}=require('./review_timeout_history.cjs');
+      const {migrate,opaqueActivities,activityResolution,activityBudgetCoverage}=
+        require('./review_timeout_history.cjs');
       const migrations=migrate(combined,evidence.sha256,context.owner??token.owner,s.chains,
         {requesterLogin:context.requesterLogin,
           outbound:readOutboundRecords(this.directory,s,context.requesterLogin,snapshot)});
@@ -174,6 +175,29 @@ class OperationalLedger extends ReviewLedger {
         need(!s.chains.some(x => x.attempts.some(a =>
           c.attempts.some(b => b.requestId === a.requestId))), 'duplicate migrated request');
         s.chains.push(clone(c));
+      }
+      s.providerActivities??=[];
+      const activities=new Map(s.providerActivities.filter(a=>
+        a.repo.toLowerCase()===snapshot.repo.toLowerCase()&&a.pr===snapshot.pr)
+        .map(a=>[a.id,a]));
+      for(const a of opaqueActivities(history,s.chains))activities.set(a.id,a);
+      for(const activity of activities.values()) {
+        const old=s.providerActivities.find(a=>a.id===activity.id);
+        const coverage=activityBudgetCoverage(activity,s.chains);
+        const resolution=coverage??activityResolution(activity,history,s.chains,s.historyQuarantine);
+        const value={...activity,status:coverage?'BUDGET_ACCOUNTED':
+          resolution?'PRE_FORMAL_PHASE_CONSUMED':'PENDING',
+          assessedScope:clone(snapshot.current),resolution,
+          reconciledBy:resolution?token.owner:null,providerTermination:'UNKNOWN'};
+        if(!old)s.providerActivities.push(value);
+        else {
+          if(old.status!==value.status||JSON.stringify(old.resolution)!==JSON.stringify(value.resolution)) {
+            old.reconciliationHistory??=[];
+            old.reconciliationHistory.push({status:old.status,resolution:clone(old.resolution),
+              reconciledBy:old.reconciledBy,at:new Date(now).toISOString()});
+          }
+          Object.assign(old,value);
+        }
       }
       // Keep every immutable observation, including old results and unresolved old-head findings.
       const id = snapshot.repo.toLowerCase() + '#' + snapshot.pr;
