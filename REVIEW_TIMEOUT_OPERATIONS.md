@@ -87,6 +87,11 @@ Actual send performs a fresh full provider observation, not only a head read.
 A terminal/ambiguous same-head result blocks a replacement at both eligibility
 checks and at actual POST. After reservation it is compared to the predecessor
 intent, so an original finishing before attempt 2 cannot be missed.
+Terminal observations also have an append-only durable index. All retained
+summary/result observations remain effective if the live summary disappears
+or changes back to an older RUNNING state. Provider callbacks enforce the
+entire immutable intake before main-ledger import. Decisions compare the
+latest intent; a late predecessor observation cannot overwrite its successor.
 A positively scoped unrelated barrier does not block an independent repo.
 Only valid matching nonempty plan hashes can prove that exemption. An unmapped
 or missing-proof barrier cannot be assumed unrelated. Other independent work

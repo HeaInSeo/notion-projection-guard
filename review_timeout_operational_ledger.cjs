@@ -135,7 +135,7 @@ class OperationalLedger extends ReviewLedger {
       'complete provider history required');
       const history=persistObservationInbox(this.directory,snapshot);
       const combined=combineHistory(history.map(x=>x.snapshot));
-      const {migrate,opaqueActivities,activityResolution,activityBudgetCoverage}=
+      const {migrate,opaqueActivities,activityResolution,activityBudgetCoverage,terminalObservations}=
         require('./review_timeout_history.cjs');
       const migrations=migrate(combined,evidence.sha256,context.owner??token.owner,s.chains,
         {requesterLogin:context.requesterLogin,
@@ -148,6 +148,10 @@ class OperationalLedger extends ReviewLedger {
         if(!old)s.providerFindings.push({...f,disposition:'OPEN',assessedScope:null,
           firstObservedAt:h.snapshot.observedAt,sourceEvidence:clone(h.evidence)});
       }
+      s.providerTerminalObservations??=[];
+      for(const p of terminalObservations(history))
+        if(!s.providerTerminalObservations.some(old=>old.id===p.id))
+          s.providerTerminalObservations.push(clone(p));
       s.historyQuarantine ??= [];
       s.observations ??= {};
       for (const q of migrations.quarantine) {

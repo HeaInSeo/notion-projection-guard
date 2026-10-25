@@ -676,3 +676,61 @@ test('unparseable provider state is held durably instead of being treated as emp
   assert.equal(providerStateHolds({owner:'central',requesterLogin:'owner',directory:root},
     await l.read(),scope,'original').reason,'INFLIGHT_PROVIDER_LINEAGE_REQUIRES_RECONCILIATION');
 });
+for(const later of ['missing','older-running'])for(const importedResult of [true,false])test(
+  'retained terminal evidence blocks eligibility and actual POST after '+later+
+  (importedResult?' with durable index':' before main import'),async t=>{
+    const {root,l,token,state}=await imported(t,TIMEOUT_MS+10000);
+    const start=Date.parse(state.chains[0].attempts[0].intentAt);
+    const done=providerSnapshot([comment(1,start)],'completed',start+2000,'Manual request');
+    let current=state;
+    if(importedResult)current=await l.importObserved(token,current.revision,
+      writeNew(root,'terminal.json',done),{owner:'central',requesterLogin:'owner'});
+    else persistObservationInbox(root,done);
+    const gone=later==='missing'?snapshot([comment(1,start)]):
+      providerSnapshot([comment(1,start)],'running',start+1000,'Manual request');
+    if(importedResult) {
+      current=await l.importObserved(token,current.revision,
+        writeNew(root,'later.json',gone),{owner:'central',requesterLogin:'owner'});
+      assert.equal(current.providerTerminalObservations.length,1);
+      assert.equal(decisionFor(current.chains[0],current,gone).action,'RECONCILE_RESULTS');
+      assert.equal(current.providerTerminalObservations[0].gate,'NOT_ASSESSED');
+    }else persistObservationInbox(root,gone);
+    const journal=path.join(root,'journal.json'),grantFile=path.join(root,'grant.json');
+    fs.writeFileSync(journal,JSON.stringify({active:null}));
+    fs.writeFileSync(grantFile,JSON.stringify(grant()),{mode:0o600});
+    let posts=0;
+    const cfg={version:1,owner:'central',requesterLogin:'owner',channel:'GITHUB_CODEX',
+      directory:root,allowedRepos:[scope.repo],canonicalJournal:journal,dispatchEnabled:true};
+    const tx=makeTransport(cfg,{owner:'central',token,kind:'replacement',runId:'actual-run',grantFile},
+      fakeGitHub(async method=>{
+        if(method==='POST'){posts++;throw Error('unexpected duplicate request');}
+        return {state:'open',draft:false,head:{sha:scope.head},base:{sha:scope.base}};
+      },()=>gone));
+    const eligible=await tx.checkEligibility({scope,owner:'central',fence:token.fence});
+    assert.equal(eligible.allowed,false);
+    assert.equal(eligible.reason,'SHARED_SUMMARY_RESULTS_RECONCILIATION_REQUIRED');
+    // Simulate both eligibility checks completing before result intake. The
+    // real adapter's send still enforces every retained terminal fact at POST.
+    const result=await l.dispatchReplacement(token,(await l.read()).revision,budgetKey(scope),
+      {...tx,checkEligibility:transport({count:0}).checkEligibility});
+    assert.equal(result.action,'BLOCKED');assert.equal(posts,0);
+    current=await l.read();
+    assert.equal(current.chains[0].attempts.length,2);
+    assert.equal(current.chains[0].attempts[1].delivery,'UNKNOWN');
+    // A late predecessor result does not become attempt 2's verdict.
+    assert.notEqual(decisionFor(current.chains[0],current,gone).action,'RECONCILE_RESULTS');
+  });
+test('an observed native provider review remains a terminal hold after it disappears',async t=>{
+  const {root,l,token,state}=await imported(t,TIMEOUT_MS+10000);
+  const start=Date.parse(state.chains[0].attempts[0].intentAt),s=snapshot([comment(1,start)]);
+  s.reviews=[{id:55,user:{login:'chatgpt-codex-connector[bot]'},commit_id:scope.head,
+    state:'COMMENTED',submitted_at:new Date(start+1000).toISOString(),body:''}];
+  let current=await l.importObserved(token,state.revision,writeNew(root,'native-review.json',s),
+    {owner:'central',requesterLogin:'owner'});
+  current=await l.importObserved(token,current.revision,
+    writeNew(root,'native-gone.json',snapshot([comment(1,start)])),
+    {owner:'central',requesterLogin:'owner'});
+  assert.equal(providerStateHolds({owner:'central',requesterLogin:'owner',directory:root},
+    current,scope,'replacement').reason,'SHARED_SUMMARY_RESULTS_RECONCILIATION_REQUIRED');
+  assert.equal(current.providerTerminalObservations[0].providerKey,'review:55');
+});

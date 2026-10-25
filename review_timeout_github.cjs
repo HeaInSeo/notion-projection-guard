@@ -7,7 +7,8 @@ const {scopeKey} = require('./review_timeout_policy.cjs');
 const {need,digest,readPrivate,writeNew,persistObservationInbox,readObservationInbox,
   readOutboundRecords,retainedFindingHolds} = require('./review_timeout_operational_ledger.cjs');
 const {outboundRecord,providerFindings,combineHistory} = require('./review_timeout_evidence.cjs');
-const {migrate,summary,opaqueActivities,activityResolution,activityBudgetCoverage,terminalObservationBlocks} =
+const {migrate,opaqueActivities,activityResolution,activityBudgetCoverage,terminalObservationBlocks,
+  retainedTerminalObservations} =
   require('./review_timeout_history.cjs');
 const BOT = 'chatgpt-codex-connector[bot]';
 const REQUIRED_GATES = ['authority','wip','singleWriter','workerRelease','independentReview',
@@ -176,7 +177,6 @@ function providerStateHolds(config,state,scope,kind=null) {
     return {reason:'DURABLE_HISTORY_QUARANTINE'};
   if(!history.length)return {reason:'PROVIDER_HISTORY_NOT_OBSERVED'};
   const combined=combineHistory(history.map(h=>h.snapshot));
-  const provider=summary(combined);
   const activities=new Map((state.providerActivities??[]).filter(a=>
     a.repo.toLowerCase()===scope.repo.toLowerCase()&&a.pr===scope.pr)
     .map(a=>[a.id,a]));
@@ -195,9 +195,11 @@ function providerStateHolds(config,state,scope,kind=null) {
     c.scope.pr===scope.pr&&c.scope.head===scope.head);
   // During a replacement's reservation/POST, an original finishing must stop
   // the extra request even if its result predates newly reserved attempt 2.
-  if(kind==='replacement'&&chain&&
-    terminalObservationBlocks(provider,scope,chain.attempts[0].intentAt))
-    return {reason:'SHARED_SUMMARY_RESULTS_RECONCILIATION_REQUIRED'};
+  const terminal=kind==='replacement'&&chain?retainedTerminalObservations(state,history)
+    .filter(p=>terminalObservationBlocks(p,scope,chain.attempts[0].intentAt)):[];
+  if(terminal.length)
+    return {reason:'SHARED_SUMMARY_RESULTS_RECONCILIATION_REQUIRED',
+      retainedTerminalIds:terminal.map(p=>p.id)};
   const migration=migrate(combined,'durable-observation-inbox',config.owner,state.chains,
     {requesterLogin:config.requesterLogin,
       outbound:readOutboundRecords(config.directory,state,config.requesterLogin,scope)});

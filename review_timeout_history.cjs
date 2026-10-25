@@ -100,7 +100,7 @@ function migrate(snapshot, evidenceSha256, owner, existing = [], binding = {}) {
   }
   return {evidenceSha256,chains,quarantine};
 }
-function summary(snapshot) {
+function summaries(snapshot) {
   const comments = snapshot.comments.filter(c => c.user?.login === 'chatgpt-codex-connector[bot]');
   const states = comments.flatMap(c => {
     const match = (c.body ?? '').match(/<!-- codex-review-state:v1 (.*?) -->/);
@@ -121,10 +121,41 @@ function summary(snapshot) {
         providerTime:knownTime ? utc(rawTime) : null}];
     } catch { return []; }
   });
-  return states.sort((a,b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))[0] ?? null;
+  return states.sort((a,b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
+}
+function summary(snapshot) {
+  return summaries(snapshot)[0] ?? null;
+}
+function terminalObservations(history) {
+  const found=new Map();
+  for(const h of history) {
+    const s=h.snapshot;
+    const candidates=summaries(s).map(p=>({providerKey:'summary:'+p.commentId,...p}));
+    for(const r of s.reviews)if(r.user?.login==='chatgpt-codex-connector[bot]'&&
+      typeof r.state==='string'&&r.state.toLowerCase()!=='pending')
+      candidates.push({providerKey:'review:'+r.id,commit_sha:r.commit_id,status:r.state,
+        providerTime:Number.isFinite(Date.parse(r.submitted_at))?utc(r.submitted_at):null});
+    for(const p of candidates) {
+      if(typeof p.status!=='string'||!p.status||
+        ['running','pending','queued'].includes(p.status.toLowerCase()))continue;
+      const head=/^[a-f0-9]{40}$/i.test(p.commit_sha??'')?p.commit_sha.toLowerCase():'UNKNOWN';
+      const id='provider-terminal:'+require('./review_timeout_evidence.cjs').digest(
+        JSON.stringify([s.repo.toLowerCase(),s.pr,p.providerKey,head,p.status,p.providerTime]));
+      if(!found.has(id))found.set(id,{id,repo:s.repo,pr:s.pr,...p,commit_sha:head,
+        firstObservedAt:s.observedAt,sourceEvidence:h.evidence??null,gate:'NOT_ASSESSED'});
+    }
+  }
+  return [...found.values()];
+}
+function retainedTerminalObservations(state,history) {
+  const all=new Map((state.providerTerminalObservations??[]).map(p=>[p.id,p]));
+  for(const p of terminalObservations(history))if(!all.has(p.id))all.set(p.id,p);
+  return [...all.values()];
 }
 function terminalObservationBlocks(provider,scope,referenceAt) {
-  return !!provider&&provider.commit_sha===scope.head&&provider.status&&
+  return !!provider&&(!scope.repo||provider.repo.toLowerCase()===scope.repo.toLowerCase())&&
+    (!scope.pr||provider.pr===scope.pr)&&
+    (provider.commit_sha===scope.head||provider.commit_sha==='UNKNOWN')&&provider.status&&
     !['running','pending','queued'].includes(provider.status.toLowerCase())&&
     (!provider.providerTime||Date.parse(provider.providerTime)>=Date.parse(referenceAt));
 }
@@ -228,10 +259,13 @@ function decisionFor(chain, state, snapshot, now = Date.now()) {
   const latest = chain.attempts.at(-1), provider = summary(snapshot);
   // The mutable shared summary has no execution ID. It can prevent duplicate sends,
   // but can never become a request-specific CLEAN verdict or overwrite prior results.
-  if (terminalObservationBlocks(provider,chain.scope,latest.intentAt))
+  const terminal=retainedTerminalObservations(state,[{snapshot}]).filter(p=>
+    terminalObservationBlocks(p,chain.scope,latest.intentAt));
+  if (terminal.length)
     return {...base,action:'RECONCILE_RESULTS',reason:'SHARED_SUMMARY_NOT_REQUEST_SPECIFIC',
-      providerObservation:provider,gate:'NOT_ASSESSED'};
+      providerObservation:provider,retainedTerminalIds:terminal.map(p=>p.id),gate:'NOT_ASSESSED'};
   return {...base,providerObservation:provider};
 }
 module.exports = {bodyScope,migrate,summary,decisionFor,terminalObservationBlocks,
+  terminalObservations,retainedTerminalObservations,
   opaqueActivities,activityResolution,activityBudgetCoverage};
