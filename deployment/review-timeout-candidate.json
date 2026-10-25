@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "repository": "HeaInSeo/notion-projection-guard",
+  "status": "LOCAL_CANDIDATE_NOT_DEPLOYED",
+  "productionEnabled": false,
+  "sourceBaseCommit": "ac95acf6b64bb68a62b785f0e1a1b72129f9d62c",
+  "sourceCommitRequirement": "Resolve this candidate from an independently reviewed immutable commit before adoption; this is not an installation receipt.",
+  "platform": "Linux local filesystem with flock; one canonical private ledger",
+  "sha256": {
+    "review_timeout_policy.cjs": "a80e555aa3b87378d7b898c0318037de32900343fea1092ff7ee8d8baa65ec3f",
+    "review_timeout_ledger.cjs": "dcf29f62717681e24e873466b859b6489bed601a79a3ec70779feacba706a3f2",
+    "review_timeout_policy_cases.cjs": "548d2456c4d206e82e1fd353cc11388b4bfcd594107ec2dbc3f4a8dfce769e8f",
+    "review_timeout_ledger_cases.cjs": "5a6a0e19504ff46f56af0f518b0edd1c16bab27ab8e059a7f0482480c4d6f662",
+    "test-fixtures/review_timeout_worker.cjs": "426f8542a75307ae1225e845ae920d1ecdbe919905ba92b6924323715582a3a7"
+  }
+}
