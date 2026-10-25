@@ -146,7 +146,9 @@ function canonicalBarrier(config, scope) {
   if (!state.active) return null;
   const affected = config.barrierScopes?.[state.active];
   // A positively scoped unrelated barrier does not block an independent repo.
-  if (Array.isArray(affected) && !affected.map(x => x.toLowerCase()).includes(scope.repo.toLowerCase()))
+  if (Array.isArray(affected) &&
+    config.barrierPlanHashes?.[state.active] === state.batches?.[state.active]?.planHash &&
+    !affected.map(x => x.toLowerCase()).includes(scope.repo.toLowerCase()))
     return null;
   return {reason:'EXISTING_CANONICAL_BARRIER',batch:state.active,
     status:state.batches?.[state.active]?.status ?? 'UNKNOWN',sha256:digest(bytes)};
@@ -212,6 +214,12 @@ function makeTransport(config,context,api) {
         recorded.reservedBy?.owner === context.owner &&
         recorded.reservedBy?.fence === attempt.reservedBy.fence,
       'canonical pre-send intent required');
+      // readCurrent itself awaits network I/O. Recheck expiring source authority
+      // and a newly raised barrier at the last synchronous point before POST.
+      need(!canonicalBarrier(config,attempt.scope),'canonical barrier raised before actual POST');
+      validateGrant(JSON.parse(readPrivate(context.grantFile)),{
+        scope:attempt.scope,owner:context.owner,fence:attempt.reservedBy.fence,
+        runId:context.runId});
       // Exactly one POST. A socket failure or non-2xx outcome is not retried.
       const sent = await api('POST','/repos/' + attempt.scope.repo + '/issues/' +
         attempt.scope.pr + '/comments',{body});

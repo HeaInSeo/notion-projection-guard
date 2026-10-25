@@ -90,6 +90,12 @@ function decisionFor(chain, state, snapshot, now = Date.now()) {
   const hold = (state.historyQuarantine ?? []).find(q =>
     q.repo.toLowerCase() === chain.scope.repo.toLowerCase() &&
     q.pr === chain.scope.pr && (!q.key || q.key === key));
+  if (snapshot.metadata.state !== 'open')
+    return {...base,action:'HISTORICAL',reason:'PR_TERMINATED_PRESERVE_ALL_EVIDENCE',
+      retainedFindingIds:snapshot.threads.filter(t => !t.isResolved).map(t => t.id),
+      historicalQuarantine:hold?.reason ?? null,dispatchAuthorized:false,
+      next:'Preserve late results/findings; existing owner disposes valid defects.',
+      nextTrigger:'New provider evidence; no request for the terminated PR.'};
   if (hold) return {...base,action:'BLOCKED',reason:'HISTORY_RECONCILIATION_REQUIRED',
     historyReason:hold.reason,retainedEvidence:hold.evidence};
   const open = snapshot.threads.filter(t => t.isResolved !== true);

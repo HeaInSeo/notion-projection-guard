@@ -48,6 +48,7 @@ function barrierFor(config,scope) {
   if (!state.active) return null;
   const affected = config.barrierScopes?.[state.active];
   if (Array.isArray(affected) &&
+    config.barrierPlanHashes?.[state.active] === state.batches?.[state.active]?.planHash &&
     !affected.map(x => x.toLowerCase()).includes(scope.repo.toLowerCase())) return null;
   return {reason:'EXISTING_CANONICAL_BARRIER',batch:state.active,
     status:state.batches?.[state.active]?.status ?? 'UNKNOWN'};

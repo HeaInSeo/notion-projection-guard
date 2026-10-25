@@ -204,16 +204,19 @@ test('fresh full-gate central attestation binds exact owner, fence, scope and ru
 });
 test('canonical barriers keep their positively scoped independent repo free',t=>{
   const root=temp(t),p=path.join(root,'journal.json');
-  fs.writeFileSync(p,JSON.stringify({active:'batch',batches:{batch:{status:'HALTED'}}}));
-  const cfg={canonicalJournal:p,barrierScopes:{batch:['Example/Project']}};
+  fs.writeFileSync(p,JSON.stringify({active:'batch',batches:{batch:{status:'HALTED',planHash:'p'}}}));
+  const cfg={canonicalJournal:p,barrierScopes:{batch:['Example/Project']},barrierPlanHashes:{batch:'p'}};
   assert.equal(barrierFor(cfg,scope).status,'HALTED');
   assert.equal(barrierFor(cfg,{...scope,repo:'Example/Independent'}),null);
 });
 test('actual provider POST has exactly one intent and no retry after uncertain send',async t=>{
   const {root,l,token}=await ledger(t);let posts=0;
+  const journal=path.join(root,'journal.json'),grantFile=path.join(root,'grant.json');
+  fs.writeFileSync(journal,JSON.stringify({active:null}));
+  fs.writeFileSync(grantFile,JSON.stringify(grant()),{mode:0o600});
   const config={version:1,owner:'central',channel:'GITHUB_CODEX',directory:root,
-    allowedRepos:[scope.repo]};
-  const tx=makeTransport(config,{owner:'central',token},async(method,route)=>{
+    allowedRepos:[scope.repo],canonicalJournal:journal};
+  const tx=makeTransport(config,{owner:'central',token,grantFile,runId:'actual-run'},async(method,route)=>{
     if(method==='POST'){posts++;throw Error('uncertain socket outcome');}
     return {state:'open',draft:false,head:{sha:scope.head},base:{sha:scope.base}};
   });
@@ -221,6 +224,41 @@ test('actual provider POST has exactly one intent and no retry after uncertain s
     transport({count:0},{send:tx.send}));
   assert.equal(r.reason,'UNCERTAIN_SEND');
   assert.equal(posts,1);
+});
+for(const change of ['expired-grant','new-barrier']) test(
+  'actual POST rechecks '+change+' after awaited provider scope read',async t=>{
+    const {root,l,token}=await ledger(t);let posts=0;
+    const journal=path.join(root,'journal.json'),grantFile=path.join(root,'grant.json');
+    fs.writeFileSync(journal,JSON.stringify({active:null}));
+    fs.writeFileSync(grantFile,JSON.stringify(grant()),{mode:0o600});
+    const config={version:1,owner:'central',channel:'GITHUB_CODEX',directory:root,
+      allowedRepos:[scope.repo],canonicalJournal:journal};
+    const tx=makeTransport(config,{owner:'central',token,grantFile,runId:'actual-run'},
+      async method=>{
+        if(method==='POST')posts++;
+        if(change==='new-barrier')
+          fs.writeFileSync(journal,JSON.stringify({active:'new',batches:{new:{status:'HALTED'}}}));
+        else {const g=grant();g.expiresAt=new Date(Date.now()-1).toISOString();
+          fs.writeFileSync(grantFile,JSON.stringify(g),{mode:0o600});}
+        return {state:'open',draft:false,head:{sha:scope.head},base:{sha:scope.base}};
+      });
+    const r=await l.dispatchOriginal(token,(await l.read()).revision,scope,handoff,
+      transport({count:0},{send:tx.send}));
+    assert.equal(r.reason,'UNCERTAIN_SEND');assert.equal(posts,0);
+    assert.equal((await l.read()).chains[0].attempts[0].delivery,'UNKNOWN');
+  });
+test('a stale barrier scope mapping cannot exempt an unrelated repo',t=>{
+  const root=temp(t),p=path.join(root,'journal.json');
+  fs.writeFileSync(p,JSON.stringify({active:'batch',batches:{batch:{status:'HALTED',planHash:'new'}}}));
+  const cfg={canonicalJournal:p,barrierScopes:{batch:['Example/Project']},barrierPlanHashes:{batch:'old'}};
+  assert.equal(barrierFor(cfg,{...scope,repo:'Example/Independent'}).reason,'EXISTING_CANONICAL_BARRIER');
+});
+test('terminated PR history cannot be offered as a new timeout replacement',()=>{
+  const now=Date.now(),snap=snapshot([comment(1,now-TIMEOUT_MS-1000)],
+    {metadata:{state:'closed',merged:true}});
+  const c=migrate(snap,'e','central').chains[0];
+  const d=decisionFor(c,{historyQuarantine:[]},snap,now);
+  assert.equal(d.action,'HISTORICAL');assert.equal(d.dispatchAuthorized,false);
 });
 test('provider send refuses a stale fence before the POST',async t=>{
   const {root,token}=await ledger(t);let posts=0;
