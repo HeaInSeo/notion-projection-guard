@@ -36,7 +36,8 @@ ADDED_CODE_PATHS = frozenset(("reconcile_claim40_superseded.cjs", "claim40_closu
                              "reconcile_bori_prepared_mcp.cjs", "test_bori_prepared_mcp.cjs",
                              "continue_bori_prepared_mcp.js",
                              "supervision_gate.js", "recover_unwritten.cjs",
-                             "test_fenced_dispatch.cjs", "test_unwritten_recovery.cjs"))
+                             "test_fenced_dispatch.cjs", "test_unwritten_recovery.cjs",
+                             "case_exception.cjs", "case_gate.cjs", "central_case_owner.js", "recover_exception.cjs", "test_case_exception.cjs", "test-fixtures/case_mcp_stub.cjs"))
 # This PR now includes a separately identified post-import P1 correction. These
 # paths are not represented as unchanged bytes; all other imported paths are.
 CORRECTIONS = frozenset(("broker.cjs", "test_guard.cjs", "router_stale_prewrite_cases.cjs",
@@ -45,6 +46,12 @@ FINDING = "https://github.com/HeaInSeo/notion-projection-guard/pull/1#discussion
 # Reviewed operational source updates are separate from the immutable import
 # and correction commit. Never obtain these pins from a mutable manifest.
 SOURCE_UPDATES = {
+    "test-fixtures/case_mcp_stub.cjs": "b57e2bd4ead7d83d47d2cefa552da4fb1796541b",
+    "test_case_exception.cjs": "19c88d14a81a0cb2b16bac234c9f7d8ef1265397",
+    "recover_exception.cjs": "77266614a91d5c9779ebe72ab129dfb38b89055a",
+    "central_case_owner.js": "1597432135c61b3d81ad0bcafe3239958a73e716",
+    "case_gate.cjs": "79c64d90cc8c8ca6863f3ea8328c09daa47e6283",
+    "case_exception.cjs": "c65655227f4bc78573d86e15ae1c599d9dc246b4",
     "test_unwritten_recovery.cjs": "72ff2bdca1e1fb55cf4c81c387c563bc9646c25b",
     "test_fenced_dispatch.cjs": "547e42b06748232476a76528ac37fffc710fa40a",
     "recover_unwritten.cjs": "e3cbf9f0c41ac83d6021d5e1a4d1a9fb4a5c89e6",
@@ -56,7 +63,7 @@ SOURCE_UPDATES = {
     "complete_projection_cases.cjs": "f032dd8fb38436cd7fa68f3de2cd3db4ec1ed38c",
     "transport_preprepare_cases.cjs": "4f1737873592c57e07f1dd1a676587319ae1182b",
     "router_stale_prewrite_cases.cjs": "6914f417d20f590c12c7ffaf1b2df122cefc5dd5",
-    "broker.cjs": "0d4fb199c7efec2ee29ff28c9d41b5f4a1176930",
+    "broker.cjs": "5bb07b2e25e676e697d6dca097d0e7d1f9bb62f3",
     "runner.js": "9b16539116ace0478e652ca1a3b546b916d5a1dd",
     "test_guard.cjs": "79fafd8a8a2062d7e3064842bb06d002956138ab",
     "reconcile_claim40_superseded.cjs": "562fa5e9988cfc2f7d73e4c46f035f9e89830678",

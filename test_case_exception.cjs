@@ -187,14 +187,14 @@ test('an approved admission ID cannot export a different plan',t=>{
 });
 test('a damaged closed ticket is rejected rather than hidden as an idempotent replay',t=>{
   const f=fixture(t);close(f);f.b.state.batches[BATCH].ticketDisposition.status='ACTIVE';f.b.save();
-  const before=tree(f.root);assert.throws(()=>f.b.handle({...f.input,apply:true}),e=>e.code==='CASE_REPLAY_CHANGED');assert.deepEqual(tree(f.root),before);
+  const before=tree(f.root);assert.throws(()=>f.b.handle({...f.input,apply:true}),e=>e.code==='CASE_CONTROL_INVALID');assert.deepEqual(tree(f.root),before);
 });
 for(const field of ['approvalBytes','freshPage','audit'])test('replay rejects tampered saved '+field,t=>{
   const f=fixture(t);close(f);const a=JSON.parse(fs.readFileSync(f.audit));
   if(field==='approvalBytes')a.approvalBytes+=' ';
   if(field==='freshPage')a.freshPage=page('PARTIAL');
   if(field==='audit')a.audit.classification='A';write(f.audit,a);const before=tree(f.root);
-  assert.throws(()=>f.b.handle({...f.input,apply:true}),e=>e.code==='CASE_AUDIT_CHANGED');assert.deepEqual(tree(f.root),before);
+  assert.throws(()=>f.b.handle({...f.input,apply:true}),e=>['CASE_AUDIT_CHANGED','CASE_CONTROL_INVALID'].includes(e.code));assert.deepEqual(tree(f.root),before);
 });
 test('positive canonical dispatch evidence refuses risk closure',t=>{
   const f=fixture(t);f.restart();f.b.state.batches[BATCH].dispatch={phase:'SEND_INTENT'};f.b.save();
@@ -253,5 +253,24 @@ test('central adapter refuses missing prerequisite checks and a retired marker a
   const base={centralTaskId:'synthetic-central',actor:{kind:'manual',ownerId:f.m.retiredOwnerId,generation:'old'}};
   await assert.rejects(factory(tools,async()=>f.b.state.caseExceptionControl,base)({batchId:BATCH}),/PREREQUISITES_CAPABILITY_REQUIRED/);
   await assert.rejects(factory(tools,async()=>f.b.state.caseExceptionControl,{...base,assertPrerequisites:async({batchId})=>({allowed:true,batchId,observedAt:new Date().toISOString()})})({batchId:BATCH}),/CASE_OWNER_CONFLICT/);
+});
+for(const [delay,lease] of [[61000,120000],[3000,2000]])test('delayed central reply cannot renew prerequisite freshness '+delay,async t=>{
+  const f=fixture(t);close(f);let clock=Date.now();class FakeDate extends Date{static now(){return clock;}}
+  const factory=vm.runInNewContext(fs.readFileSync(path.join(__dirname,'central_case_owner.js'),'utf8'),{Date:FakeDate});
+  const fn=factory({mcp__codex_apps__automations_peek:async()=>{clock+=delay;return {structuredContent:{automations:[{
+    id:'synthetic-central',run_details:{last_run:{id:'run',recorded_status:'completed'}}}]}};}},async()=>f.b.state.caseExceptionControl,
+    {centralTaskId:'synthetic-central',actor:{kind:'manual',...f.authority},assertPrerequisites:async({batchId})=>({
+      allowed:true,batchId,observedAt:new Date(clock).toISOString(),validUntil:new Date(clock+lease).toISOString()})});
+  await assert.rejects(fn({batchId:BATCH}),/PREREQUISITES_NOT_CURRENT/);
+});
+for(const target of ['plan','packet','completed-edits'])test('canonical permit rejects tampered '+target+' binding',t=>{
+  const f=fixture(t);close(f);installSyntheticAdmission(f);const c=f.b.state.caseExceptionControl;
+  if(target==='plan')c.admissionPlanHashes['synthetic-admission']='1'.repeat(64);
+  if(target==='packet'){
+    const other=path.join(f.dir,'OTHER-PACKET');write(other,'different source');
+    c.worker.packetPath=other;c.worker.packetHash=hash('different source');c.admission.packetHash=c.worker.packetHash;
+  }
+  if(target==='completed-edits')f.b.state.batches['synthetic-admission'].edits[0].newStr='state=OTHER';
+  f.b.save();assert.throws(()=>permit(f.c,f.configHash,'operator'),e=>['CASE_CONTROL_INVALID','CASE_PERMIT_INVALID'].includes(e.code));
 });
 module.exports={fixture,close,installSyntheticAdmission};

@@ -28,9 +28,14 @@
       if(actor.ownerId!=='automation:'+config.centralTaskId||actor.generation!==run.id||
         run.recorded_status!=='in_progress'||canonical.exclusive===true)throw Error('CENTRAL_RUN_MISMATCH');
     } else throw Error('CASE_OWNER_KIND');
-    const now=Date.now();
+    // Remote replies cannot refresh an earlier prerequisite observation.
+    const now=Date.now(),gateAt=Date.parse(gates.observedAt);
+    const gateUntil=gates.validUntil===undefined?gateAt+30000:Date.parse(gates.validUntil);
+    if(gateAt>now||now-gateAt>=30000||!Number.isFinite(gateUntil)||gateUntil<=now)
+      throw Error('PREREQUISITES_NOT_CURRENT');
+    const until=Math.min(now+15000,gateAt+30000,gateUntil);
     return {ownerId:actor.ownerId,generation:actor.generation,scope:batchId,prerequisites:true,conflicts,
-      evidenceHash:canonical.manifestHash,observedAt:new Date(now).toISOString(),validUntil:new Date(now+15000).toISOString(),
+      evidenceHash:canonical.manifestHash,observedAt:new Date(gateAt).toISOString(),validUntil:new Date(until).toISOString(),
       currentCentralRunId:run.id,currentCentralRunStatus:run.recorded_status,authoritySource:'CANONICAL_CASE_ADMISSION',
       prerequisiteEvidence:gates.evidenceReference??null};
   };

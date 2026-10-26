@@ -437,6 +437,7 @@ class Broker {
   // All participating central ownership transfers MUST take the same lock.
   // It cannot revoke a request already exported to an old/nonparticipating client.
   ownerProof(proof, binding) {
+    caseException.validateControl(this.root,this.state);
     if (!proof || proof.prerequisites !== true || !Array.isArray(proof.conflicts) || proof.conflicts.length !== 0 ||
         !['ownerId','scope','generation'].every(k => typeof proof[k] === 'string' && proof[k].trim().length > 0) ||
         !/^[a-f0-9]{64}$/.test(proof.evidenceHash ?? '') ||
@@ -1077,7 +1078,7 @@ class Broker {
       ...(fencedOwner?{executor:this.executor,planHash:b.planHash}:{}) };
   }
   handle(input) {
-    caseException.assertControl(this.state);
+    caseException.validateControl(this.root,this.state);
     if(input.action==='reconcile_scoped_exception')return caseException.reconcile(this,input);
     if(input.action==='record_case_admission')return caseException.admit(this,input);
     if(input.action==='release_case_owner')return caseException.release(this,input);

@@ -31,6 +31,29 @@ function assertControl(state) {
     closed[0].exceptionDisposition?.retiredOwnerId===c.retiredOwnerId&&
     closed[0].exceptionDisposition?.manifestHash===c.manifestHash&&c.configHash,'CASE_CONTROL_INVALID');
 }
+function validateControl(root,state) {
+  assertControl(state);const c=state.caseExceptionControl;if(!c)return null;
+  const a=JSON.parse(bytes(path.join(root,digest(c.batchId)+'.exception-closure.json')));
+  need(digest(a.manifestBytes??'')===c.manifestHash,'CASE_CONTROL_INVALID');
+  const m=JSON.parse(a.manifestBytes);
+  const batch=state.batches[c.batchId],original=a.journalBefore?.batches?.[c.batchId];
+  need(original&&JSON.stringify(batch.exceptionDisposition)===JSON.stringify(a.audit)&&
+    digest(a.approvalBytes??'')===a.audit?.approvalHash&&
+    batch.ticketDisposition?.ticket===original.receipt?.ticket&&
+    batch.ticketDisposition?.status==='REVOKED_LOCAL_ONLY'&&batch.ticketDisposition?.externalPayloadRevoked===false,
+    'CASE_CONTROL_INVALID');
+  for(const k of ['planHash','edits','next','receipt','error','haltedFrom'])
+    need(JSON.stringify(batch[k])===JSON.stringify(original[k]),'CASE_CONTROL_INVALID');
+  for(const k of ['retiredOwnerId','authority','worker','admissionBatchIds','admissionPlanHashes'])
+    need(JSON.stringify(c[k])===JSON.stringify(m[k]),'CASE_CONTROL_INVALID');
+  need(c.configHash===m.gateConfigHash&&typeof c.exclusive==='boolean','CASE_CONTROL_INVALID');
+  if(c.exclusive===false) {
+    const observation=JSON.parse(bytes(path.join(root,digest(c.batchId)+'.intake-observation.json')));
+    need(observation.manifestHash===c.manifestHash&&JSON.stringify(observation.observation)===JSON.stringify(c.actualIntakeObservation)&&
+      digest(JSON.stringify(observation.source))===c.actualIntakeObservation.sourceHash,'CASE_CONTROL_INVALID');
+  }
+  return m;
+}
 function guardOwner(state,proof) {
   assertControl(state);
   const c=state.caseExceptionControl;if(!c)return;
@@ -221,10 +244,15 @@ function release(b,input) {
     Number.isFinite(Date.parse(e.event_at_utc))&&Date.parse(e.event_at_utc)<=Date.now()&&
     Date.now()-Date.parse(e.event_at_utc)<300000,'CASE_OWN_CLAIM_REQUIRED');
   if(c.exclusive===false)return {alreadyReleased:true,ownClaimEventId:e.event_id};
+  const observationFile=path.join(b.root,digest(c.batchId)+'.intake-observation.json');
+  const previous=fs.existsSync(observationFile)?JSON.parse(bytes(observationFile)):null;
   c.exclusive=false;c.actualIntakeObservation={eventId:e.event_id,version:e.version,sessionId:e.session_id,
-    sourceHash:digest(JSON.stringify(input.page)),observedAt:new Date().toISOString()};
+    sourceHash:digest(JSON.stringify(input.page)),observedAt:previous?.observation?.observedAt??new Date().toISOString()};
+  const observation={manifestHash:c.manifestHash,observation:c.actualIntakeObservation,source:input.page};
+  if(previous)need(JSON.stringify(previous)===JSON.stringify(observation),'CASE_CONTROL_INVALID');
+  else atomic(observationFile,observation);
   need(bytes(b.file)===before,'PERSISTENCE');atomic(b.file,next);b.state=JSON.parse(bytes(b.file));
   need(JSON.stringify(b.state)===JSON.stringify(next),'PERSISTENCE');
   return {released:true,ownClaimEventId:e.event_id,workerRecordsChanged:false};
 }
-module.exports={bytes,pinned,config,assertControl,guardOwner,guardBatch,reconcile,admit,release,loadManifest,controls};
+module.exports={bytes,pinned,config,assertControl,validateControl,guardOwner,guardBatch,reconcile,admit,release,loadManifest,controls};
