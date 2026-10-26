@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const readline = require('node:readline');
+const caseException = require('./case_exception.cjs');
 
 class GuardError extends Error {
   constructor(code, message) { super(message); this.code = code; }
@@ -444,6 +445,7 @@ class Broker {
         Date.parse(proof.validUntil) <= Date.now() ||
         (binding && ['ownerId','scope','generation'].some(k => proof[k] !== binding[k])))
       fail('OWNERSHIP_FENCE', 'Fresh same-generation scoped ownership and all prerequisites required');
+    caseException.guardOwner(this.state, proof);
     return clone(proof);
   }
   fencedIdentity(input, requireProof=true) {
@@ -464,12 +466,15 @@ class Broker {
   }
   fencedHandle(input) {
     this.assertLock();
+    if(fs.existsSync(this.file)&&JSON.stringify(read(this.file))!==JSON.stringify(this.state))
+      fail('PERSISTENCE','Canonical memory/disk differs; restart inspection is required');
     const {action,batchId}=input;
     if(!['fence_begin','fence_recover_unsent','fence_reconcile_prepared','fence_late_observation','fence_halt',
         'fence_prepare','fence_authorize','fence_dispatch','fence_confirm_send','fence_observe','fence_ack','fence_verify'].includes(action))
       fail('ACTION','Unknown fenced action; unsent recovery requires explicit check-only/apply');
     if(action==='fence_begin') {
       const owner=this.ownerProof(input.ownerProof);
+      caseException.guardBatch(this.state,batchId,owner,input.edits);
       const checked=this.handle({action:'validate_batch',batchId,edits:input.edits});
       const previous=checked.reused?this.state.batches[batchId]:null;
       if(checked.status!=='READY'||previous?.dispatch||previous?.receipt)
@@ -1072,12 +1077,20 @@ class Broker {
       ...(fencedOwner?{executor:this.executor,planHash:b.planHash}:{}) };
   }
   handle(input) {
+    caseException.assertControl(this.state);
+    if(input.action==='reconcile_scoped_exception')return caseException.reconcile(this,input);
+    if(input.action==='record_case_admission')return caseException.admit(this,input);
+    if(input.action==='release_case_owner')return caseException.release(this,input);
+    if(input.action==='case_authority')return clone(this.state.caseExceptionControl??null);
     if(this.readOnly&&!(input.action==='status'||input.action==='close'||input.action==='validate_owner_proof'||
         (input.action==='reconcile_verified_unsent'&&input.apply===false)))
       fail('READ_ONLY','Read-only diagnostics cannot mutate canonical state');
     if(input.action==='reconcile_verified_unsent')return this.reconcileVerifiedUnsent(input);
     if(input.action==='validate_owner_proof')return this.ownerProof(input.ownerProof,input.binding);
     if(typeof input?.action==='string'&&input.action.startsWith('fence_'))return this.fencedHandle(input);
+    if(this.state.caseExceptionControl && !this.fencedInternal &&
+        !['status','close','validate_batch','preflight','validate_owner_proof'].includes(input.action))
+      fail('OWNER_FENCED_RUNNER_REQUIRED','Exception retirement requires the participating owner-checked runner');
     if(!this.fencedInternal&&this.state.batches[input?.batchId]?.dispatch&&
         !['status','close','validate_batch','preflight','begin'].includes(input.action))
       fail('FENCED_PROTOCOL_REQUIRED','Fenced transactions cannot use legacy actions or recovery');
