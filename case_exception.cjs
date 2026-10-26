@@ -52,7 +52,122 @@ function validateControl(root,state) {
     need(observation.manifestHash===c.manifestHash&&JSON.stringify(observation.observation)===JSON.stringify(c.actualIntakeObservation)&&
       digest(JSON.stringify(observation.source))===c.actualIntakeObservation.sourceHash,'CASE_CONTROL_INVALID');
   }
-  return m;
+  return c.successor?validateSuccessor(root,state,m):m;
+}
+function admissionScope(root,state) {
+  const m=validateControl(root,state);
+  return {batchIds:m?.admissionBatchIds??[],planHashes:m?.admissionPlanHashes??{}};
+}
+function successorSpec(root,m,raw,before) {
+  const s=JSON.parse(raw),c=before.caseExceptionControl;
+  need(s.schema==='EXACT_CASE_SUCCESSOR_V1'&&s.root===root&&s.batchId===c.batchId&&
+    s.originalManifestHash===c.manifestHash&&s.gateConfigHash===c.configHash&&
+    /^[a-f0-9]{40}$/.test(s.sourceHead??'')&&s.sourceHead!==m.sourceHead&&digest(JSON.stringify(before))===s.journalHash&&
+    before.active===null&&c.exclusive===true&&c.admission===null&&!c.successor&&
+    m.admissionBatchIds.length===1&&s.predecessor?.batchId===m.admissionBatchIds[0], 'CASE_SUCCESSOR_IDENTITY');
+  const old=before.batches[s.predecessor.batchId],d=old?.dispatch,n=s.nextAttempt;
+  need(old&&digest(JSON.stringify(old))===s.predecessor.batchHash&&old.status==='ABORTED_UNWRITTEN'&&
+    old.planHash===m.admissionPlanHashes[s.predecessor.batchId]&&digest(JSON.stringify(old.edits))===old.planHash&&
+    old.next===0&&old.receipt===null&&d?.phase==='REVOKED_UNSENT'&&d.revoked===true&&
+    Array.isArray(d.attempts)&&d.attempts.length===0&&!d.provider&&!old.verifications?.length&&
+    d.owner?.ownerId===c.authority.ownerId&&d.owner.generation===c.authority.generation&&
+    d.owner.scope===s.predecessor.batchId&&old.reconciliations?.length===1&&
+    old.reconciliations[0].kind==='FENCED_UNSENT_TERMINAL'&&old.reconciliations[0].notionWrites===0&&
+    old.reconciliations[0].next===0&&old.reconciliations[0].ticket===null&&
+    old.reconciliations[0].phase==='UNSENT', 'CASE_SUCCESSOR_NOT_UNSENT');
+  need(n&&typeof n.batchId==='string'&&/^[A-Za-z0-9_.:-]{1,150}$/.test(n.batchId)&&
+    !['__proto__','prototype','constructor'].includes(n.batchId)&&n.batchId!==c.batchId&&
+    !Object.hasOwn(before.batches,n.batchId)&&n.planHash===old.planHash,'CASE_SUCCESSOR_PLAN');
+  // Replace only the reviewed runtime bytes; keep hooks, policy and permissions.
+  const changed=new Set(['broker.cjs','runner.js','case_exception.cjs','case_gate.cjs','central_case_owner.js','approved.sha256']);
+  need(Array.isArray(s.controls?.files)&&s.controls.files.length===m.controls.files.length&&
+    JSON.stringify(s.controls.roles)===JSON.stringify(m.controls.roles)&&
+    Array.isArray(s.previousControls)&&s.previousControls.length===m.controls.files.length,'CASE_SUCCESSOR_CONTROLS');
+  for(const f of m.controls.files) {
+    const next=s.controls.files.filter(x=>x.path===f.path),backup=s.previousControls.filter(x=>x.originalPath===f.path);
+    need(next.length===1&&backup.length===1&&backup[0].sha256===f.sha256&&
+      (next[0].sha256===f.sha256||changed.has(path.basename(f.path))),'CASE_SUCCESSOR_CONTROLS');
+    pinned(backup[0].backupPath,f.sha256,false);
+  }
+  const byName=name=>s.controls.files.find(f=>path.basename(f.path)===name);
+  const approved=byName('approved.sha256');
+  if(approved)need(pinned(approved.path,approved.sha256,false)===['broker.cjs','runner.js','policy.json']
+    .map(name=>byName(name)?.sha256+'  '+name+'\n').join(''),'CASE_SUCCESSOR_CONTROLS');
+  const reference=JSON.parse(pinned(s.referencePages?.path,s.referencePages?.sha256));
+  need(Array.isArray(reference)&&reference.length===new Set(old.edits.map(e=>e.pageId)).size,'CASE_SUCCESSOR_TARGETS');
+  const {pageData}=require('./broker.cjs');
+  for(const id of new Set(old.edits.map(e=>e.pageId))) {
+    const matches=reference.filter(p=>p.pageId===id);need(matches.length===1,'CASE_SUCCESSOR_TARGETS');
+    pageData(matches[0].page,id);
+  }
+  return {s,old,reference};
+}
+function validateSuccessor(root,state,m) {
+  const c=state.caseExceptionControl,pointer=c.successor;
+  const raw=pinned(path.join(root,digest(c.batchId)+'.successor-authorization.json'),pointer?.auditHash);
+  const a=JSON.parse(raw),s=JSON.parse(a.supplementBytes??'null');
+  need(a.schema==='CASE_SUCCESSOR_AUDIT_V1'&&digest(a.supplementBytes)===pointer.supplementHash&&
+    digest(a.approvalBytes??'')===pointer.approvalHash&&
+    JSON.stringify(pointer)===JSON.stringify({...a.authorization,auditHash:digest(raw)}),'CASE_SUCCESSOR_AUDIT');
+  successorSpec(root,m,a.supplementBytes,a.journalBefore);
+  successorApproval(a.approvalBytes,pointer.supplementHash,s.sourceHead);
+  need(JSON.stringify(state.batches[s.predecessor.batchId])===JSON.stringify(a.journalBefore.batches[s.predecessor.batchId])&&
+    pointer.sourceHead===s.sourceHead&&pointer.batchId===s.nextAttempt.batchId&&pointer.planHash===s.nextAttempt.planHash,
+    'CASE_SUCCESSOR_AUDIT');
+  return {...m,sourceHead:s.sourceHead,controls:s.controls,
+    admissionBatchIds:[s.nextAttempt.batchId],admissionPlanHashes:{[s.nextAttempt.batchId]:s.nextAttempt.planHash}};
+}
+function successorApproval(raw,supplementHash,sourceHead) {
+  const a=raw?JSON.parse(raw):null;
+  need(a?.schema==='CASE_SUCCESSOR_APPROVAL_V1'&&a.status==='APPROVED'&&a.supplementHash===supplementHash&&
+    a.sourceHead===sourceHead&&a.preservesOriginalUncertainty===true&&a.freshnessMs===30000&&a.sendPermitMs===15000&&
+    typeof a.userMessageReference==='string'&&a.userMessageReference.trim(),'CASE_APPROVAL_REQUIRED');
+}
+function authorizeSuccessor(b,input) {
+  const {atomic,pageData}=require('./broker.cjs');
+  need(typeof input.apply==='boolean'&&(!b.readOnly||!input.apply),'READ_ONLY');
+  if(b.readOnly)need(!fs.existsSync(b.lock),'LOCKED');else b.assertLock();
+  const effective=validateControl(b.root,b.state),c=b.state.caseExceptionControl;
+  need(c&&input.batchId===c.batchId,'CASE_SUCCESSOR_IDENTITY');b.ownerProof(input.ownerProof);
+  need(input.ownerProof.ownerId===c.authority.ownerId&&input.ownerProof.generation===c.authority.generation&&
+    input.ownerProof.scope===c.batchId,'CASE_OWNER_CONFLICT');
+  const raw=pinned(input.supplementPath,input.approvedSupplementHash);
+  if(c.successor) {
+    need(c.successor.supplementHash===input.approvedSupplementHash&&
+      c.successor.approvalHash===input.approvedApprovalHash,'CASE_SUCCESSOR_ALREADY_AUTHORIZED');
+    controls(effective);return {alreadyAuthorized:true,successor:clone(c.successor),notionWrites:0};
+  }
+  const before=bytes(b.file);need(before===JSON.stringify(b.state),'PERSISTENCE');
+  const {s,reference}=successorSpec(b.root,effective,raw,b.state);
+  controls({...effective,controls:s.controls});
+  for(const name of ['broker.cjs','case_exception.cjs'])need(s.controls.files.some(f=>
+    path.basename(f.path)===name&&f.sha256===digest(bytes(path.join(__dirname,name),false))),'CASE_EXECUTED_SOURCE');
+  pinned(c.worker.packetPath,c.worker.packetHash,false);pinned(c.worker.statusPath,c.worker.statusHash,false);
+  need(Array.isArray(input.pages)&&input.pages.length===reference.length,'CASE_SUCCESSOR_TARGETS');
+  for(const r of reference) {
+    const matches=input.pages.filter(p=>p.pageId===r.pageId);need(matches.length===1,'CASE_SUCCESSOR_TARGETS');
+    const pre=pageData(r.page,r.pageId),fresh=pageData(matches[0].page,r.pageId);
+    need(fresh.body===pre.body&&fresh.properties===pre.properties&&fresh.revision===pre.revision,'CASE_TARGET_CHANGED');
+  }
+  const approvalBytes=input.approvalPath?pinned(input.approvalPath,input.approvedApprovalHash):null;
+  if(input.apply)successorApproval(approvalBytes,input.approvedSupplementHash,s.sourceHead);
+  if(!input.apply)return {eligiblePendingApproval:true,newBatchId:s.nextAttempt.batchId,notionWrites:0,
+    predecessorUnwritten:true,originalApplication:'UNCONFIRMED'};
+  const file=path.join(b.root,digest(c.batchId)+'.successor-authorization.json');
+  const prior=fs.existsSync(file)?JSON.parse(bytes(file)):null;
+  const authorization={supplementHash:input.approvedSupplementHash,approvalHash:input.approvedApprovalHash,
+    sourceHead:s.sourceHead,batchId:s.nextAttempt.batchId,planHash:s.nextAttempt.planHash,
+    at:prior?.authorization?.at??new Date().toISOString()};
+  const audit={schema:'CASE_SUCCESSOR_AUDIT_V1',authorization,supplementBytes:raw,approvalBytes,
+    journalBefore:JSON.parse(before)};
+  if(prior)need(JSON.stringify(prior)===JSON.stringify(audit),'CASE_SUCCESSOR_AUDIT');
+  else atomic(file,audit);
+  const auditHash=digest(bytes(file)),next=JSON.parse(before);
+  next.caseExceptionControl.successor={...authorization,auditHash};
+  need(bytes(b.file)===before,'PERSISTENCE');atomic(b.file,next);b.state=JSON.parse(bytes(b.file));
+  need(JSON.stringify(b.state)===JSON.stringify(next),'PERSISTENCE');
+  return {authorized:true,successor:clone(next.caseExceptionControl.successor),notionWrites:0,
+    originalApplication:'UNCONFIRMED',workerClaimCreated:false};
 }
 function guardOwner(state,proof) {
   assertControl(state);
@@ -64,8 +179,9 @@ function guardOwner(state,proof) {
 }
 function guardBatch(state,batchId,proof,edits) {
   const c=state.caseExceptionControl;if(!c?.exclusive)return;
-  need(c.admissionBatchIds.includes(batchId)&&proof?.scope===batchId&&
-    digest(JSON.stringify(edits))===c.admissionPlanHashes[batchId],'CASE_SCOPE');
+  const ids=c.successor?[c.successor.batchId]:c.admissionBatchIds;
+  const plan=c.successor?.batchId===batchId?c.successor.planHash:c.admissionPlanHashes[batchId];
+  need(ids.includes(batchId)&&proof?.scope===batchId&&digest(JSON.stringify(edits))===plan,'CASE_SCOPE');
 }
 function controls(manifest) {
   const files=manifest.controls?.files;
@@ -203,12 +319,13 @@ function admit(b,input) {
   const {hash,atomic}=require('./broker.cjs');b.assertLock();b.ownerProof(input.ownerProof);
   const before=bytes(b.file);need(before===JSON.stringify(b.state),'PERSISTENCE');
   const next=clone(b.state),c=next.caseExceptionControl;
+  const scope=admissionScope(b.root,b.state);
   need(c&&next.active===null&&input.ownerProof.ownerId===c.authority.ownerId&&
     input.ownerProof.generation===c.authority.generation&&input.ownerProof.scope===c.batchId,'CASE_OWNER_CONFLICT');
-  need(Array.isArray(input.batchIds)&&JSON.stringify(input.batchIds)===JSON.stringify(c.admissionBatchIds),'CASE_ADMISSION');
+  need(Array.isArray(input.batchIds)&&JSON.stringify(input.batchIds)===JSON.stringify(scope.batchIds),'CASE_ADMISSION');
   const verified=input.batchIds.map(id=>{
     const x=next.batches[id];
-    need(x?.status==='COMPLETED'&&x.planHash===c.admissionPlanHashes[id]&&hash(JSON.stringify(x.edits))===x.planHash&&
+    need(x?.status==='COMPLETED'&&x.planHash===scope.planHashes[id]&&hash(JSON.stringify(x.edits))===x.planHash&&
       x.dispatch?.owner?.ownerId===c.authority.ownerId&&
       x.dispatch.owner.generation===c.authority.generation&&x.next===x.edits.length&&
       x.verifications?.length===x.edits.length,'CASE_ADMISSION');
@@ -246,7 +363,7 @@ function release(b,input) {
   const e=candidates.find(e=>e.event_id===props['이벤트 ID']&&e.version===props['체크포인트 버전']);
   need(e?.kind==='CLAIM'&&e.task_id===c.worker.taskId&&e.role===c.worker.role&&
     Number.isSafeInteger(e.version)&&e.version>c.worker.sourceVersion&&
-    typeof e.session_id==='string'&&e.session_id===props['세션 ID']&&e.lease_state==='CLAIM_HELD'&&
+    typeof e.session_id==='string'&&e.session_id===props['세션 ID']&&liveClaimLease(e.lease_state,reference)&&
     Number.isFinite(Date.parse(e.event_at_utc))&&Date.parse(e.event_at_utc)<=reference&&
     reference-Date.parse(e.event_at_utc)<300000,'CASE_OWN_CLAIM_REQUIRED');
   if(c.exclusive===false)return {alreadyReleased:true,ownClaimEventId:e.event_id};
@@ -259,4 +376,14 @@ function release(b,input) {
   need(JSON.stringify(b.state)===JSON.stringify(next),'PERSISTENCE');
   return {released:true,ownClaimEventId:e.event_id,workerRecordsChanged:false};
 }
-module.exports={bytes,pinned,config,assertControl,validateControl,guardOwner,guardBatch,reconcile,admit,release,loadManifest,controls};
+function liveClaimLease(value,reference) {
+  // Existing own records use a timestamped HELD/ACTIVE lease, not a synthetic
+  // CLAIM_HELD constant. Reject malformed, expired or unbounded authority.
+  const match=typeof value==='string'&&value.match(/^(?:HELD|ACTIVE) until (\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,3})?Z)$/);
+  if(!match)return false;
+  const stamp=Date.parse(match[1]);
+  return Number.isFinite(stamp)&&stamp>reference&&new Date(stamp).toISOString()===
+    match[1].replace(/(?:\.(\d{1,3}))?Z$/,(_,fraction)=>'.'+(fraction??'').padEnd(3,'0')+'Z');
+}
+module.exports={bytes,pinned,config,assertControl,validateControl,guardOwner,guardBatch,reconcile,admit,release,
+  loadManifest,controls,admissionScope,authorizeSuccessor,liveClaimLease};

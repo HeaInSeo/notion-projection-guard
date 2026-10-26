@@ -3,7 +3,7 @@
 // This gate never grants tool permissions. Success defers to existing policy;
 // an invalid/missing case permit blocks only the protected task's writes.
 const fs=require('node:fs'),path=require('node:path');
-const {bytes,pinned,config,assertControl,validateControl,guardOwner,controls}=require('./case_exception.cjs');
+const {bytes,pinned,config,assertControl,validateControl,guardOwner,controls,admissionScope}=require('./case_exception.cjs');
 const {hash}=require('./broker.cjs');
 const need=(ok,code)=>{if(!ok)throw Object.assign(new Error(code),{code});};
 function pageId(value) {
@@ -28,16 +28,17 @@ function readState(c,configHash) {
 }
 function permit(c,configHash,role) {
   const {state,x}=readState(c,configHash),a=x.admission;
+  const scope=admissionScope(c.root,state);
   need(a&&a.taskId===c.taskId&&a.pageId===c.originalPageId&&a.role===role&&
     a.issuer===x.authority.ownerId&&a.generation===x.authority.generation&&
     a.issuer!==x.retiredOwnerId&&a.packetHash===x.worker.packetHash,'CASE_PERMIT_MISSING');
   guardOwner(state,{ownerId:a.issuer,generation:a.generation});
   pinned(x.worker.packetPath,x.worker.packetHash,false);pinned(x.worker.statusPath,x.worker.statusHash,false);
-  need(Array.isArray(a.verified)&&a.verified.length===x.admissionBatchIds.length&&
-    a.verified.every((v,i)=>v.batchId===x.admissionBatchIds[i]),'CASE_PERMIT_INVALID');
+  need(Array.isArray(a.verified)&&a.verified.length===scope.batchIds.length&&
+    a.verified.every((v,i)=>v.batchId===scope.batchIds[i]),'CASE_PERMIT_INVALID');
   for(const v of a.verified) {
     const b=state.batches[v.batchId];
-    need(b?.status==='COMPLETED'&&b.planHash===v.planHash&&v.planHash===x.admissionPlanHashes[v.batchId]&&
+    need(b?.status==='COMPLETED'&&b.planHash===v.planHash&&v.planHash===scope.planHashes[v.batchId]&&
       hash(JSON.stringify(b.edits))===v.planHash&&b.next===b.edits.length&&b.verifications?.length===b.edits.length&&
       b.dispatch?.owner?.ownerId===a.issuer&&b.dispatch.owner.generation===a.generation&&
       JSON.stringify(b.verifications)===JSON.stringify(v.verifications),'CASE_PERMIT_INVALID');
