@@ -8,12 +8,15 @@
   }
   return async function assertOwnership({batchId}) {
     if(typeof config.assertPrerequisites!=='function')throw Error('PREREQUISITES_CAPABILITY_REQUIRED');
-    const gates=await config.assertPrerequisites({batchId});
+    // Finish the potentially slow canonical RPC before observing prerequisites.
+    // The callback revalidates this value under this runner's live broker lock;
+    // no old prerequisite timestamp is renewed by the control-plane round trip.
+    const canonical=await broker({action:'case_authority'});
+    if(!canonical?.manifestHash||!canonical.authority)throw Error('CASE_AUTHORITY_MISSING');
+    const gates=await config.assertPrerequisites({batchId,canonical});
     if(gates?.allowed!==true||gates.batchId!==batchId||
       !Number.isFinite(Date.parse(gates.observedAt))||Date.parse(gates.observedAt)>Date.now()||
       Date.now()-Date.parse(gates.observedAt)>30000)throw Error('PREREQUISITES_NOT_CURRENT');
-    const canonical=await broker({action:'case_authority'});
-    if(!canonical?.manifestHash||!canonical.authority)throw Error('CASE_AUTHORITY_MISSING');
     const observed=data(await tools.mcp__codex_apps__automations_peek({jawbone_id:config.centralTaskId}));
     const automation=observed?.automations?.find(a=>a.id===config.centralTaskId);
     const run=automation?.run_details?.last_run,actor=config.actor;

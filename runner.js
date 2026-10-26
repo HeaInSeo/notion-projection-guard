@@ -3,6 +3,8 @@
   // Evaluated as a function expression in Code Mode; no Node imports are used.
   const deviceId = config.deviceId;
   const command = config.command;
+  const metadataActions=new Set(['case_authority','validate_owner_proof','fence_confirm_send',
+    'close','fence_ack','fence_observe','fence_halt']);
   let pid, sequence = 0, closed = false;
   function textOf(result) { return (result?.content ?? []).filter(x => x.type === 'text').map(x => x.text).join('\n'); }
   async function settled(value) {
@@ -37,15 +39,20 @@
   async function broker(request) {
     await start();
     const requestId = 'projection-'+pid+'-'+(++sequence);
+    const input=JSON.stringify({ ...request, requestId })+'\n';
+    // Prompt matching is safe only for bounded metadata. Large page input keeps
+    // the JSON-line path and exact-ID retained-output read, without resending.
+    const metadata=metadataActions.has(request.action)&&!Object.hasOwn(request,'page')&&
+      !Object.hasOwn(request,'edits')&&input.length<=16384;
     const result = await settled(await tools.mcp__codex_apps__remote_desktop_commander_interact_with_process({
       // This is a JSON-line protocol, not a shell prompt. DC prompt detection
       // can compile the echoed multi-megabyte page as a regular expression.
-      deviceId, pid, input: JSON.stringify({ ...request, requestId })+'\n', timeout_ms: 3000, wait_for_prompt: false }));
+      deviceId, pid, input, timeout_ms: metadata?500:3000, wait_for_prompt: metadata }));
     let value = response(result, requestId);
     for (let n=0; !value && n<12; n++) {
       // DC's incremental cursor can already have consumed output during input.
       // Read the retained tail and match the exact request ID; never resend it.
-      value = response(await settled(await tools.mcp__codex_apps__remote_desktop_commander_read_process_output({ deviceId, pid, offset:-30, timeout_ms: 3000, length: 30 })), requestId);
+      value = response(await settled(await tools.mcp__codex_apps__remote_desktop_commander_read_process_output({ deviceId, pid, offset:-30, timeout_ms: 0, length: 30 })), requestId);
     }
     if (!value) throw new Error('BROKER_RESPONSE_UNKNOWN');
     if (!value.ok) { const error = new Error(value.code+': '+value.error); error.code=value.code; throw error; }

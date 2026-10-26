@@ -1,5 +1,33 @@
 # Notion projection guard
 
+## One-case successor after an unwritten admission stop
+
+`authorize_case_successor` accepts explicit check-only/apply for one separately
+approved supplement. The original exception manifest, C classification, unknown
+application, retired authority, packet and closed transaction remain unchanged.
+Its sole predecessor must have an exact unsent terminal audit, `next=0`, no
+ticket, dispatch attempt, provider result or verification. The new ID must be
+unused and its edits must have the identical approved plan hash. It is an
+authorization for one new attempt, not a replay or successful application.
+
+The supplement pins the original journal and predecessor, complete reference
+pages, exact source head and replacement controls. All fresh full bodies,
+properties and revisions must match. Only the broker, runner, case controls and
+their three-line checksum may change; original control bytes are preserved in
+pinned backups. Hooks, policy and permissions stay pinned. Explicit operational
+approval retains the original uncertainty and the 30-second freshness and
+15-second send bounds. The supplement audit is saved before its one canonical
+pointer; an exact restart can complete that commit, while a second successor,
+positive send evidence or changed data is refused.
+
+The central callback finishes its canonical RPC before observing prerequisites.
+The runner collects bounded metadata replies directly, keeps full page requests
+off prompt matching, and never resends a request after a lost reply. Validate the
+entire full-sized MCP round trip in an isolated provider test before operation;
+small proof tests do not establish this. Admission still requires complete
+verification, then a fresh real own CLAIM with its existing timestamped
+`HELD until …` or `ACTIVE until …` lease. No test result creates that CLAIM.
+
 ## Unwritten PREPARED MCP initialization recovery
 
 The explicit same-batch recovery accepts the exact recorded

@@ -1080,6 +1080,7 @@ class Broker {
   handle(input) {
     caseException.validateControl(this.root,this.state);
     if(input.action==='reconcile_scoped_exception')return caseException.reconcile(this,input);
+    if(input.action==='authorize_case_successor')return caseException.authorizeSuccessor(this,input);
     if(input.action==='record_case_admission')return caseException.admit(this,input);
     if(input.action==='release_case_owner')return caseException.release(this,input);
     if(input.action==='case_authority')return clone(this.state.caseExceptionControl??null);
