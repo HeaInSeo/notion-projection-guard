@@ -1,5 +1,11 @@
 # Notion projection guard
 
+The [R1 sprint](SPRINT_R1.md) separates current Sori recovery from subsequent
+Operator restart and wiki adoption. The [saved-ACK case bridge](ACK_CASE_RECOVERY.md)
+is a reviewed-source candidate for verifying a stopped successful successor
+dispatch without replacing the pinned installed runtime or resending its request.
+Source tests are not production admission or a worker CLAIM.
+
 ## One-case successor after an unwritten admission stop
 
 `authorize_case_successor` accepts explicit check-only/apply for one separately
