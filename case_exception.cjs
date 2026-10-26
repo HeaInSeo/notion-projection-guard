@@ -363,7 +363,9 @@ function release(b,input) {
   const e=candidates.find(e=>e.event_id===props['이벤트 ID']&&e.version===props['체크포인트 버전']);
   need(e?.kind==='CLAIM'&&e.task_id===c.worker.taskId&&e.role===c.worker.role&&
     Number.isSafeInteger(e.version)&&e.version>c.worker.sourceVersion&&
-    typeof e.session_id==='string'&&e.session_id===props['세션 ID']&&liveClaimLease(e.lease_state,reference)&&
+    typeof e.event_id==='string'&&e.event_id.trim().length>0&&
+    typeof e.session_id==='string'&&e.session_id.trim().length>0&&
+    e.session_id===props['세션 ID']&&liveClaimLease(e.lease_state,reference)&&
     Number.isFinite(Date.parse(e.event_at_utc))&&Date.parse(e.event_at_utc)<=reference&&
     reference-Date.parse(e.event_at_utc)<300000,'CASE_OWN_CLAIM_REQUIRED');
   if(c.exclusive===false)return {alreadyReleased:true,ownClaimEventId:e.event_id};

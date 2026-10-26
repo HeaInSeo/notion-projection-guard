@@ -415,6 +415,17 @@ test('new real lease cannot release recovery on a mismatched native own session'
   p.structuredContent.text=p.structuredContent.text.replace('"세션 ID":"new-synthetic-worker"','"세션 ID":"other-worker"');
   assert.throws(()=>f.b.handle({action:'release_case_owner',ownerProof:f.proof(),page:p}),e=>e.code==='CASE_OWN_CLAIM_REQUIRED');
 });
+for(const [field,native,value] of [['event_id','이벤트 ID',''],['event_id','이벤트 ID','   '],
+  ['session_id','세션 ID',''],['session_id','세션 ID','   '],
+  ['event_id','이벤트 ID',undefined],['session_id','세션 ID',undefined]])
+test('matching empty own identity cannot release recovery '+field+JSON.stringify(value),t=>{
+  const f=fixture(t);close(f);installSyntheticAdmission(f);const p=claimPage(f),text=p.structuredContent.text;
+  const props=JSON.parse(text.match(/<properties>\n([\s\S]*?)\n<\/properties>/)[1]);
+  const event=JSON.parse(text.match(/```json\n([\s\S]*?)\n```/)[1]);props[native]=value;event.QUEUE_EVENT_V1[field]=value;
+  p.structuredContent.text='<properties>\n'+JSON.stringify(props)+'\n</properties>\n<content>\n```json\n'+JSON.stringify(event)+'\n```\n</content>';
+  assert.throws(()=>f.b.handle({action:'release_case_owner',ownerProof:f.proof(),page:p}),e=>e.code==='CASE_OWN_CLAIM_REQUIRED');
+  assert.equal(f.b.state.caseExceptionControl.exclusive,true);
+});
 for(const lease of ['HELD','ACTIVE'])test('actual '+lease+' until protocol permits a fresh own CLAIM and release',t=>{
   const f=fixture(t);close(f);installSyntheticAdmission(f);const p=claimPage(f);
   p.structuredContent.text=p.structuredContent.text.replace('HELD until',lease+' until');
