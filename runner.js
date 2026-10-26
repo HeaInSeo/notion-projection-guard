@@ -91,12 +91,21 @@
     const data = connectorData(result);
     return data?.async_task ?? data?.result?.async_task;
   }
-  async function update(request) {
+  async function update(request, onProvider, permit, live) {
+    // This is the final synchronous check after the last await and immediately
+    // before invoking the native tool. A delayed confirmation reply grants no
+    // authority after its actual source lease/freshness window has expired.
+    const now=Date.now(),until=Date.parse(permit?.validUntil),observed=Date.parse(permit?.observedAt);
+    if(!permit||permit.dispatchId!==live.dispatchId||permit.executor!==live.executor||
+        permit.pageId!==request.page_id||!Number.isFinite(until)||!Number.isFinite(observed)||
+        until<=now||now-observed>30000||observed>now)
+      throw new Error('SEND_PERMIT_EXPIRED_OR_FENCED');
     let result = await tools.mcp__codex_apps__notion_notion_update_page(request);
     if (result.isError || connectorData(result)?.error) throw new Error('NOTION_UPDATE_FAILED');
     const task = asyncTask(result);
     if (task) {
       if (!task.task_id) throw new Error('ASYNC_RESULT_UNKNOWN');
+      if(onProvider)await onProvider({status:'PENDING',taskId:task.task_id,pageId:request.page_id});
       let completed=false;
       for (let n=0; n<20; n++) {
         await new Promise(resolve => setTimeout(resolve,1000));
@@ -115,7 +124,7 @@
       if(typeof data?.page_id!=='string' || data.page_id.replaceAll('-','').toLowerCase()!==request.page_id)
         throw new Error('NOTION_RESULT_UNKNOWN');
     }
-    return result;
+    return {raw:result,provider:{status:'SUCCEEDED',pageId:request.page_id,taskId:task?.task_id??null}};
   }
   async function close() {
     if (pid && !closed) {
@@ -138,84 +147,111 @@
       throw error;
     }
   }
+  async function ownership(phase,batchId) {
+    if(typeof config.assertOwnership!=='function')throw new Error('OWNERSHIP_CAPABILITY_REQUIRED');
+    // This must read the actual scoped owner, competing central runs and all
+    // required gates. Owner transfers participate in the canonical lock.
+    return await config.assertOwnership({phase,batchId});
+  }
+  async function legacyOwnership(phase,batchId,binding) {
+    // A successful callback is not itself a successful gate. Validate its
+    // returned schema/freshness/conflicts and bind the same owner generation.
+    return await broker({action:'validate_owner_proof',batchId,
+      ownerProof:await ownership(phase,batchId),binding});
+  }
+  async function fencedPages(live,edits,next,firstReceipt=null) {
+    const receipts=[],batchId=live.batchId;
+    for(let index=next;index<edits.length;index++) {
+        const edit=edits[index];live.ticket=null;live.dispatchId=null;
+        let prepared=firstReceipt&&index===next?firstReceipt:null;
+        if(!prepared) {
+          const preparePage=await fetchPage(edit.pageId,'prepare');
+          prepared=await broker({...live,action:'fence_prepare',
+            ownerProof:await ownership('prepare',batchId),page:preparePage});
+        }
+        live.ticket=prepared.ticket;
+        const authorizePage=await fetchPage(edit.pageId,'authorize');
+        await broker({...live,action:'fence_authorize',ticket:live.ticket,
+          ownerProof:await ownership('authorize',batchId),page:authorizePage});
+        // Authorization exports no request. The final source check and fresh
+        // page still run before the durable SEND_INTENT/export boundary.
+        const dispatchPage=await fetchPage(edit.pageId,'dispatch');
+        const dispatch=await broker({...live,action:'fence_dispatch',ticket:live.ticket,
+          ownerProof:await ownership('dispatch',batchId),page:dispatchPage});
+        live.dispatchId=dispatch.dispatchId;
+        const confirmed=await broker({...live,action:'fence_confirm_send',ownerProof:await ownership('send',batchId)});
+        const sent=await update(dispatch.request,provider=>broker({...live,action:'fence_observe',provider}),confirmed.permit,live);
+        await broker({...live,action:'fence_ack',provider:sent.provider});
+        let verified;
+        try {
+          verified=await broker({...live,action:'fence_verify',page:await fetchPage(edit.pageId,'verify')});
+        } catch(error) {
+          if(['INCOMPLETE_READ','FETCH_ERROR'].includes(error.code)||error.message.startsWith('FETCH_ERROR'))
+            throw Object.assign(new Error('REVISION_READ_ERROR'),{readDetail:error.readDetail??error.message});
+          throw error;
+        }
+        receipts.push({pageId:edit.pageId,...verified,snapshot:prepared.snapshot});
+      }
+    return receipts;
+  }
   async function run(batchId, edits) {
     edits=JSON.parse(JSON.stringify(edits));
-    const receipts = [];
-    let enteredRun = false;
+    const receipts=[];
+    let live=null;
     try {
       const checked=await broker({action:'validate_batch',batchId,edits});
-      if(checked.status==='COMPLETED')return {status:'COMPLETED',replayed:false,alreadyConsumed:true,receipts};
+      if(checked.status==='COMPLETED')return {status:'COMPLETED',alreadyConsumed:true,receipts};
       if(checked.status!=='READY')throw new Error('UNRESOLVED_BATCH: '+checked.status);
-      // Inspect all targets before claiming a batch or issuing its first write.
-      // Prepare/authorize repeat the same plan against fresh complete reads.
+      await ownership('preflight',batchId);
       for(let i=checked.next;i<edits.length;i++)await broker({action:'preflight',batchId,
         edit:edits[i],page:await fetchPage(edits[i].pageId,'preflight')});
-      const begin = await broker({ action: 'begin', batchId, edits });
-      if (begin.status === 'COMPLETED') return { status: 'COMPLETED', replayed: false, alreadyConsumed: true, receipts };
-      if (begin.status !== 'READY') throw new Error('UNRESOLVED_BATCH: '+begin.status);
-      enteredRun = true;
-      for (let index=begin.next; index<edits.length; index++) {
-        const edit=edits[index];
-        const prepared = await broker({ action:'prepare', batchId, page:await fetchPage(edit.pageId,'prepare') });
-        const authorized = await broker({ action:'authorize', batchId, ticket:prepared.ticket,
-          page:await fetchPage(edit.pageId,'authorize') });
-        // The caller never constructs a Notion mutation. Only the broker emits it.
-        await update(authorized.request);
-        const verified = await verifyAfterWrite(batchId,prepared.ticket,edit.pageId);
-        receipts.push({ pageId:edit.pageId, ...verified, snapshot:prepared.snapshot });
-      }
-      return { status:'COMPLETED', receipts, readDiagnostics };
-    } catch (error) {
-      // Errors before begin (e.g. PRODUCTION_HOLD) need no journal mutation.
-      // Errors after begin keep the global barrier, including ACK loss/crashes.
-      if (enteredRun) {
-        try { await broker({ action:'halt', batchId, reason:error.message,readDetail:error.readDetail }); } catch { /* Existing state remains closed. */ }
+      const begin=await broker({action:'fence_begin',batchId,edits,ownerProof:await ownership('begin',batchId)});
+      live={batchId,executor:begin.executor,planHash:begin.planHash};
+      receipts.push(...await fencedPages(live,edits,begin.next));
+      return {status:'COMPLETED',receipts,readDiagnostics};
+    } catch(error) {
+      if(live) {
+        try {error.recovery=await broker({...live,action:'fence_halt',reason:error.message,readDetail:error.readDetail});}
+        catch { /* Lost replies never permit replay or replacing the original error. */ }
       }
       throw error;
-    } finally { await close(); }
+    } finally {await close();}
   }
   async function resume(batchId, expectedPlanHash) {
-    const receipts = [];
-    let enteredRecovery = false;
+    let live=null,enteredRecovery=false;
     try {
-      const state = await broker({ action:'status', batchId:batchId??null });
-      const batch = state.batches?.[batchId];
-      if (state.active !== batchId || !batch || batch.planHash !== expectedPlanHash ||
-          batch.status !== 'HALTED' || !batch.receipt) throw new Error('RECONCILE_IDENTITY');
-      enteredRecovery = true;
-      const identity = { batchId, planHash:expectedPlanHash, expectedError:batch.error };
-      // Earlier pages already passed full preservation checks. Validate their
-      // durable receipts, then leave any subsequent worker records untouched.
-      await broker({ action:'reconcile_receipts', ...identity });
-      await broker({ action:'reconcile_unwritten', ...identity, ticket:batch.receipt.ticket,
-        page:await fetchPage(batch.edits[batch.next].pageId,'reconcile-prepared') });
-      for (let index=batch.next; index<batch.edits.length; index++) {
-        const edit=batch.edits[index];
-        // Keep the immutable pending snapshot and ticket on the first page.
-        const prepared=index===batch.next ? batch.receipt : await broker({ action:'prepare', batchId,
-          page:await fetchPage(edit.pageId,'prepare') });
-        const authorized=await broker({ action:'authorize', batchId, ticket:prepared.ticket,
-          page:await fetchPage(edit.pageId,'authorize') });
-        await update(authorized.request);
-        const verified=await verifyAfterWrite(batchId,prepared.ticket,edit.pageId);
-        receipts.push({ pageId:edit.pageId, ...verified, snapshot:prepared.snapshot });
-      }
-      return { status:'COMPLETED', resumed:true, receipts, readDiagnostics };
-    } catch (error) {
-      if (enteredRecovery) {
-        try { await broker({ action:'halt', batchId, reason:error.message,readDetail:error.readDetail }); } catch { /* Preserve HALTED. */ }
+      const state=await broker({action:'status',batchId:batchId??null}),batch=state.batches?.[batchId];
+      if(state.active!==batchId||!batch||batch.planHash!==expectedPlanHash||batch.status!=='HALTED'||!batch.receipt)
+        throw new Error('RECONCILE_IDENTITY');
+      if(batch.dispatch||config.allowLegacyRecovery!==true)throw new Error('EXPLICIT_LEGACY_RECOVERY_REQUIRED');
+      const owner=await legacyOwnership('legacy-recovery',batchId);
+      enteredRecovery=true;
+      const page=await fetchPage(batch.edits[batch.next].pageId,'reconcile-prepared');
+      const adopted=await broker({action:'fence_reconcile_prepared',batchId,planHash:expectedPlanHash,
+        expectedError:batch.error,ticket:batch.receipt.ticket,page,binding:owner,
+        ownerProof:await ownership('legacy-reconcile',batchId)});
+      live={batchId,executor:adopted.executor,planHash:adopted.planHash,ticket:batch.receipt.ticket};
+      const receipts=await fencedPages(live,batch.edits,batch.next,batch.receipt);
+      return {status:'COMPLETED',resumed:true,receipts,readDiagnostics};
+    } catch(error) {
+      if(enteredRecovery) {
+        try {await broker({...live,batchId,action:live?'fence_halt':'halt',reason:error.message,readDetail:error.readDetail});}
+        catch { /* Original state and error remain closed. */ }
       }
       throw error;
-    } finally { await close(); }
+    } finally {await close();}
   }
   async function resumeUnprepared(batchId, expectedPlanHash) {
     try {
       const state=await broker({action:'status',batchId:batchId??null}),batch=state.batches?.[batchId];
       if(state.active!==batchId||!batch||batch.planHash!==expectedPlanHash||batch.status!=='HALTED'||
           batch.haltedFrom!=='READY'||batch.receipt!==null)throw new Error('RECONCILE_IDENTITY');
+      if(batch.dispatch||config.allowLegacyRecovery!==true)throw new Error('EXPLICIT_LEGACY_RECOVERY_REQUIRED');
+      const owner=await legacyOwnership('legacy-recovery',batchId);
       const input={action:'reconcile_unprepared_read',batchId,planHash:expectedPlanHash,
         expectedError:batch.error,page:await fetchPage(batch.edits[batch.next].pageId,'reconcile-ready')};
       await broker({...input,apply:false});
+      await legacyOwnership('legacy-reconcile',batchId,owner);
       const recovered=await broker({...input,apply:true});
       // The broker restored only READY. Every remaining page still passes the
       // ordinary same-batch preflight/authorization/write/full verification.
@@ -230,9 +266,13 @@
           batch.status !== 'HALTED' || batch.error !== 'READBACK_MISMATCH' ||
           batch.edits.length !== 1 || batch.next !== 0 || !batch.receipt)
         throw new Error('RECONCILE_IDENTITY');
+      if(batch.dispatch||config.allowLegacyRecovery!==true)throw new Error('EXPLICIT_LEGACY_RECOVERY_REQUIRED');
+      const owner=await legacyOwnership('legacy-recovery',batchId);
+      const page=await fetchPage(batch.edits[0].pageId,'reconcile-autolink');
+      await legacyOwnership('legacy-reconcile',batchId,owner);
       return await broker({ action:'reconcile_autolink', batchId, planHash:expectedPlanHash,
         expectedError:'READBACK_MISMATCH', ticket:batch.receipt.ticket, snapshotHash, actualHash, actualSnapshotHash,
-        page:await fetchPage(batch.edits[0].pageId,'reconcile-autolink') });
+        page });
     } finally { await close(); }
   }
   return { run, resume, resumeUnprepared, reconcileAutolink, broker, close };

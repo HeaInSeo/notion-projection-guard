@@ -124,7 +124,7 @@ test('W02 runner uses only two exact content requests and preserves both complet
   const f=runnerFixture(t,null,{centralSections:w02Sections});
   for(const s of w02Sections) f.pages.set(s.pageId,page(s.pageId,w02Body(s)));
   const result=await f.runner.run('observation',w02Sections.map(s=>w02Edit(s)));
-  assert.equal(result.status,'COMPLETED');assert.equal(f.writes,2);assert.equal(f.fetches,8);
+  assert.equal(result.status,'COMPLETED');assert.equal(f.writes,2);assert.equal(f.fetches,10);
   for(const s of w02Sections) assert.equal(pageData(f.pages.get(s.pageId),s.pageId).body,w02Body(s,newStr));
 });
 for (const sections of [null,{},[w02Sections[0],w02Sections[0]],
@@ -237,17 +237,20 @@ test('snapshot persistence failure yields no write authorization',t=>{
 });
 
 const createRunner=vm.runInNewContext(fs.readFileSync(path.join(__dirname,'runner.js'),'utf8'),{setTimeout:(fn)=>setTimeout(fn,0)});
-function runnerFixture(t, fault, policy={}) {
+const legacyRunner=vm.runInNewContext(require('node:child_process').execFileSync('git',['show','3bcb43ebc33c6b42a8c36639f2806d61d85a9075:runner.js'],{encoding:'utf8'}),{setTimeout:(fn)=>setTimeout(fn,0)});
+function runnerFixture(t, fault, policy={}, historical=false) {
+  const factory=historical?legacyRunner:createRunner;
   const f=fixture(t,policy);let writes=0,fetches=0,closed=false,retained=null;const pages=new Map([[A,page()],[B,page(B)]]);
   const tools={
     async mcp__codex_apps__remote_desktop_commander_start_process(){return {content:[{type:'text',text:'Process started with PID 123\nNPG/1 {"ready":true}'}]};},
     async mcp__codex_apps__remote_desktop_commander_interact_with_process({input,wait_for_prompt}){
       const r=JSON.parse(input);let value;
-      if(fault==='prompt-regex' && r.action==='authorize' && wait_for_prompt!==false)
+      const logical=r.action.replace('fence_','');
+      if(fault==='prompt-regex' && logical==='authorize' && wait_for_prompt!==false)
         return {isError:true,content:[{type:'text',text:'Error interacting with process: Invalid regular expression: /^'+input.slice(0,500)}]};
       try{value={requestId:r.requestId,ok:true,result:f.b.handle(r)};}catch(e){value={requestId:r.requestId,ok:false,code:e.code,error:e.message};}
       if(r.action==='close')closed=true;
-      if(fault==='cursor' && r.action==='prepare') {retained=value;return {content:[{type:'text',text:'Input sent; read output'}]};}
+      if(fault==='cursor' && logical==='prepare') {retained=value;return {content:[{type:'text',text:'Input sent; read output'}]};}
       return {content:[{type:'text',text:'NPG/1 '+JSON.stringify(value)}]};
     },
     async mcp__codex_apps__remote_desktop_commander_read_process_output({offset}){
@@ -272,8 +275,9 @@ function runnerFixture(t, fault, policy={}) {
     },
     async mcp__codex_apps__notion_notion_get_async_task(){return {content:[{type:'text',text:'Failed'}],structuredContent:{status:'failed'}};}
   };
-  return {runner:createRunner(tools,{deviceId:'known',command:'known'}),newRunner:()=>createRunner(tools,{deviceId:'known',command:'known'}),get writes(){return writes;},get fetches(){return fetches;},get closed(){return closed;},pages,f,tools};
+  return {runner:factory(tools,{deviceId:'known',command:'known',allowLegacyRecovery:true,assertOwnership:async()=>({ownerId:'test-owner',scope:'test-scope',generation:'one',prerequisites:true,conflicts:[],evidenceHash:'a'.repeat(64),observedAt:new Date().toISOString(),validUntil:new Date(Date.now()+60000).toISOString()})}),newRunner:()=>createRunner(tools,{deviceId:'known',command:'known',allowLegacyRecovery:true,assertOwnership:async()=>({ownerId:'test-owner',scope:'test-scope',generation:'one',prerequisites:true,conflicts:[],evidenceHash:'a'.repeat(64),observedAt:new Date().toISOString(),validUntil:new Date(Date.now()+60000).toISOString()})}),get writes(){return writes;},get fetches(){return fetches;},get closed(){return closed;},pages,f,tools};
 }
+function legacyRunnerFixture(t,fault,policy={}) {return runnerFixture(t,fault,policy,true);}
 function requireScopedRecoveryStatus(f,batchId) {
   const interact=f.tools.mcp__codex_apps__remote_desktop_commander_interact_with_process;
   f.tools.mcp__codex_apps__remote_desktop_commander_interact_with_process=async input=>{
@@ -283,16 +287,16 @@ function requireScopedRecoveryStatus(f,batchId) {
 }
 test('real orchestration uses broker requests, fresh pre/post reads and sequential pages',async t=>{
   const f=runnerFixture(t);const r=await f.runner.run('observation',[edit(),edit(B)]);
-  assert.equal(r.status,'COMPLETED');assert.equal(f.writes,2);assert.equal(f.fetches,8);assert.equal(f.closed,true);
+  assert.equal(r.status,'COMPLETED');assert.equal(f.writes,2);assert.equal(f.fetches,10);assert.equal(f.closed,true);
 });
-for(const [phase,at] of [['preflight',1],['prepare',2],['authorize',3],['verify',4]])
+for(const [phase,at] of [['preflight',1],['prepare',2],['authorize',3],['dispatch',4],['verify',5]])
 test('bounded native read retries complete '+phase+' with exactly one mutation',async t=>{
  const f=runnerFixture(t),fetch=f.tools.mcp__codex_apps__notion_fetch;let calls=0;
  f.tools.mcp__codex_apps__notion_fetch=async input=>{
   calls++;if(calls===at||calls===at+1)throw new Error('native transport temporarily unavailable');return fetch(input);
  };
  const result=await f.runner.run('observation',[edit()]);
- assert.equal(result.status,'COMPLETED');assert.equal(calls,6);assert.equal(f.writes,1);
+ assert.equal(result.status,'COMPLETED');assert.equal(calls,7);assert.equal(f.writes,1);
  assert.equal(result.readDiagnostics.length,1);assert.equal(result.readDiagnostics[0].phase,phase);
  assert.equal(result.readDiagnostics[0].attempts,3);assert.equal(result.readDiagnostics[0].failures.length,2);
 });
@@ -328,11 +332,11 @@ test('completed observation replays no mutation even for prefix expansion',async
 });
 test('DC consumed cursor: retained response by exact ID avoids resend and permits verification',async t=>{
   const f=runnerFixture(t,'cursor');assert.equal((await f.runner.run('observation',[edit()])).status,'COMPLETED');
-  assert.equal(f.writes,1);assert.equal(f.fetches,4);assert.equal(f.closed,true);
+  assert.equal(f.writes,1);assert.equal(f.fetches,5);assert.equal(f.closed,true);
 });
 test('native Notion content-only JSON ACK is recognized and then fully read back',async t=>{
   const f=runnerFixture(t,'content-only');assert.equal((await f.runner.run('observation',[edit(),edit(B)])).status,'COMPLETED');
-  assert.equal(f.writes,2);assert.equal(f.fetches,8);
+  assert.equal(f.writes,2);assert.equal(f.fetches,10);
 });
 
 test('large JSON with regex metacharacters never enters DC prompt matching',async t=>{
@@ -760,7 +764,7 @@ function appliedReadbackFixture(t,remaining=false) {
  return {f,input};
 }
 test('a genuine failed pre-prepare read restores the same READY plan without acknowledging any write',async t=>{
- const f=runnerFixture(t,'read-before-prepare');await assert.rejects(f.runner.run('pre-read',[edit()]),/FETCH_ERROR/);
+ const f=legacyRunnerFixture(t,'read-before-prepare');await assert.rejects(f.runner.run('pre-read',[edit()]),/FETCH_ERROR/);
  const b=f.f.b.state.batches['pre-read'];assert.equal(f.writes,0);assert.equal(b.haltedFrom,'READY');assert.equal(b.receipt,null);
  const input={action:'reconcile_unprepared_read',batchId:'pre-read',planHash:b.planHash,expectedError:b.error,page:page(),apply:false};
  const before=fs.readFileSync(f.f.b.file,'utf8');assert.equal(f.f.b.handle(input).checkOnly,true);assert.equal(fs.readFileSync(f.f.b.file,'utf8'),before);
@@ -781,7 +785,7 @@ for(const phase of ['READY','PREPARED'])test('native-read recovery preserves a f
  assert.equal(b.next,1);
 });
 test('prepared native-read recovery retains its exact original ticket and authorizes only once',async t=>{
- const f=runnerFixture(t,'read-before-authorize');await assert.rejects(f.runner.run('prepared-read',[edit()]),/FETCH_ERROR/);
+ const f=legacyRunnerFixture(t,'read-before-authorize');await assert.rejects(f.runner.run('prepared-read',[edit()]),/FETCH_ERROR/);
  const b=f.f.b.state.batches['prepared-read'],ticket=b.receipt.ticket;assert.equal(b.haltedFrom,'PREPARED');assert.equal(f.writes,0);
  const done=await f.newRunner().resume('prepared-read',b.planHash);assert.equal(done.status,'COMPLETED');assert.equal(f.writes,1);
  const saved=JSON.parse(fs.readFileSync(f.f.b.snapshot('prepared-read',0)));assert.equal(saved.ticket,ticket);
@@ -798,7 +802,7 @@ for(const fault of ['orphan snapshot','applied text','policy','missing phase','w
  assert.equal(fs.readFileSync(f.f.b.file,'utf8'),before);assert.equal(f.writes,0);
 });
 test('prepared read recovery refuses an already-applied output instead of replaying it',async t=>{
- const f=runnerFixture(t,'read-before-authorize');await assert.rejects(f.runner.run('prepared-read',[edit()]));
+ const f=legacyRunnerFixture(t,'read-before-authorize');await assert.rejects(f.runner.run('prepared-read',[edit()]));
  const b=f.f.b.state.batches['prepared-read'];f.pages.set(A,page(A,body(newStr),undefined,'2026-10-12T00:01:00Z'));
  await assert.rejects(f.newRunner().resume('prepared-read',b.planHash),/RECONCILE_CHANGED/);assert.equal(f.writes,0);
 });
@@ -822,7 +826,7 @@ test('unprepared recovery rejects applied prefix expansion even when the old lit
  assert.equal(b.status,'HALTED');
 });
 for(const tamper of [false,true])test('unprepared recovery preserves original full prior-receipt fingerprint: '+tamper,async t=>{
- const f=runnerFixture(t,'read-after-prior'),edits=[edit(),edit(B)];await assert.rejects(f.runner.run('prior-read',edits),/FETCH_ERROR/);
+ const f=legacyRunnerFixture(t,'read-after-prior'),edits=[edit(),edit(B)];await assert.rejects(f.runner.run('prior-read',edits),/FETCH_ERROR/);
  const b=f.f.b.state.batches['prior-read'];assert.equal(b.next,1);assert.equal(f.writes,1);
  if(tamper){const file=f.f.b.snapshot('prior-read',0)+'.verified.json',v=JSON.parse(fs.readFileSync(file));delete v.at;atomic(file,v);}
  const input={action:'reconcile_unprepared_read',batchId:'prior-read',planHash:b.planHash,expectedError:b.error,page:page(B),apply:true};
@@ -830,7 +834,7 @@ for(const tamper of [false,true])test('unprepared recovery preserves original fu
  else {assert.equal(f.f.b.handle(input).status,'READY');assert.equal((await f.newRunner().run('prior-read',edits)).status,'COMPLETED');assert.equal(f.writes,2);}
 });
 for(const fault of ['revision-read','fetch-after-write'])test('real runner persists recoverable read classification only after authorized update: '+fault,async t=>{
- const f=runnerFixture(t,fault);
+ const f=legacyRunnerFixture(t,fault);
  await assert.rejects(f.runner.run('post-write-read',[edit()]),/REVISION_READ_ERROR/);
  const b=f.f.b.state.batches['post-write-read'];
  assert.equal(f.writes,1);assert.equal(b.status,'HALTED');assert.equal(b.haltedFrom,'WRITE_PENDING');
@@ -1041,7 +1045,7 @@ test('real runner resumes an exact PREPARED MCP failure with bounded status and 
  };
  const result=await f.runner.resume('observation',f.f.b.state.batches.observation.planHash);
  assert.equal(result.status,'COMPLETED');assert.equal(f.writes,1);assert.equal(f.closed,true);
- assert.equal(requests.filter(r=>r.action==='authorize').length,1);
+ assert.equal(requests.filter(r=>r.action==='fence_authorize').length,1);
  assert.equal(requests.filter(r=>r.action==='close').length,1);
  assert.equal(JSON.parse(fs.readFileSync(receipt.snapshot)).ticket,receipt.ticket);
 });

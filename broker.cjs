@@ -12,6 +12,101 @@ class GuardError extends Error {
 function fail(code, message) { throw new GuardError(code, message); }
 const hash = value => crypto.createHash('sha256').update(value, 'utf8').digest('hex');
 const clone = value => JSON.parse(JSON.stringify(value));
+function privateFileBytes(file) {
+  const st=fs.lstatSync(file);
+  if(!path.isAbsolute(file)||!st.isFile()||st.isSymbolicLink()||st.uid!==process.geteuid()||(st.mode&0o077))
+    fail('RECOVERY_EVIDENCE','Private owned absolute evidence file required');
+  return fs.readFileSync(file,'utf8');
+}
+function loadUnwrittenManifest(file,approvedHash) {
+  const bytes=privateFileBytes(file),s=JSON.parse(bytes),digest=/^[a-f0-9]{64}$/;
+  if(!digest.test(approvedHash??'')||hash(bytes)!==approvedHash)
+    fail('RECOVERY_MANIFEST_PIN','Separately approved exact private manifest bytes required');
+  if(!s||typeof s!=='object'||s.schema!=='EXACT_UNWRITTEN_CASE_V1'||s.recoveryKind!=='POST_AUTHORIZE_PRE_INVOKE_VETO'||
+      !path.isAbsolute(s.root??'')||!path.isAbsolute(s.runtime??'')||
+      !/^[A-Za-z0-9_.:-]{1,150}$/.test(s.batchId??'')||['__proto__','prototype','constructor'].includes(s.batchId)||
+      !['planHash','snapshotHash','journalHash','evidenceHash','adapterHash','installationHash'].every(k=>digest.test(s[k]??''))||
+      !/^[a-f0-9]{40}$/.test(s.sourceCommit??'')||
+      !['ticket','error','authorizationRequestId'].every(k=>typeof s[k]==='string'&&s[k].trim())||
+      !['conversationId','responseMessageId'].every(k=>typeof s.caller?.[k]==='string'&&s.caller[k].trim())||
+      Object.keys(s.pins??{}).sort().join(',')!=='approved.sha256,broker.cjs,policy.json,runner.js'||
+      !Object.values(s.pins).every(h=>digest.test(h)))
+    fail('RECOVERY_MANIFEST_PIN','Exact supported case identity, source and installed pins required');
+  for(const k of ['evidence','installation']) {
+    if(typeof s[k]!=='string'||path.isAbsolute(s[k])||path.relative(s.root,path.resolve(s.root,s[k])).startsWith('..'))
+      fail('RECOVERY_MANIFEST_PIN','Evidence must remain inside the approved canonical root');
+  }
+  return {spec:s,manifestHash:approvedHash};
+}
+function assessUnwrittenExecution(spec,input) {
+  const missing=(code,items)=>({classification:'C',code,riskObserved:false,missing:items,
+    owner:'Original Code Mode invocation/tool execution record owner',
+    next:'Obtain the scoped invocation terminal receipt and post-authorize native/transport/child-call segment; independently review its source and digest'});
+  if(typeof input.rawExecutionTrace!=='string'||!/^[a-f0-9]{64}$/.test(input.approvedEvidenceHash??''))
+    return missing('RECOVERY_EVIDENCE_MISSING',['original invocation identity/terminal receipt','post-authorize native/transport/child dispatch coverage']);
+  if(hash(input.rawExecutionTrace)!==input.approvedEvidenceHash)
+    return missing('RECOVERY_EVIDENCE_INVALID',['approved execution evidence bytes do not match']);
+  let t;try{t=JSON.parse(input.rawExecutionTrace);}catch{return missing('RECOVERY_EVIDENCE_INVALID',['invalid execution record']);}
+  if(!t||typeof t!=='object'||t.schema!=='REVIEWED_CODE_MODE_TRACE_V1'||t.purpose!=='NOTION_MUTATION'||
+      t.provenance?.layer!=='CODE_MODE_CONTROL_PLANE'||
+      typeof t.provenance?.independentReviewer!=='string'||!t.provenance.independentReviewer.trim())
+    return missing('RECOVERY_EVIDENCE_MISSING',['Code Mode control-plane provenance; broker exit or another provider is insufficient']);
+  const subject=t.subject,inv=t.invocation;
+  if(!subject||!['batchId','planHash','ticket','snapshotHash'].every(k=>subject[k]===spec[k])||
+      subject.conversationId!==spec.caller.conversationId||subject.responseMessageId!==spec.caller.responseMessageId||
+      typeof inv?.id!=='string'||!inv.id.trim()||subject.invocationId!==inv.id)
+    return missing('RECOVERY_EVIDENCE_INVALID',['original invocation/case correlation differs']);
+  const sources=t.provenance.sourceRecords;
+  if(!Array.isArray(sources)||!sources.length||sources.some(s=>!s||typeof s!=='object')||
+      new Set(sources.map(s=>s.key)).size!==sources.length||
+      sources.some(s=>typeof s.key!=='string'||!s.key||!/^[a-f0-9]{64}$/.test(s.sha256??'')||
+        typeof input.sourceRecords?.[s.key]!=='string'||hash(input.sourceRecords[s.key])!==s.sha256))
+    return missing('RECOVERY_EVIDENCE_INVALID',['pinned original source records are absent or changed']);
+  const sourceKeys=new Set(sources.map(s=>s.key)),events=t.events;
+  if(!Array.isArray(events)||!events.length||events.some(e=>!e||typeof e!=='object')||
+      new Set(events.map(e=>e.id)).size!==events.length||
+      events.some((e,i)=>typeof e.id!=='string'||!e.id||e.sequence!==i+1||e.invocationId!==inv.id||!sourceKeys.has(e.sourceRecord)))
+    return missing('RECOVERY_EVIDENCE_INVALID',['ordered, source-bound events for one invocation required']);
+  // Positive observed sends/live executions outrank incomplete negative coverage.
+  // A broker's authorize/request export is a protocol event, not a native send.
+  const routes=events.filter(e=>['NATIVE_MUTATION_INVOKED','TRANSPORT_HANDOFF','SEND_RESULT_UNKNOWN',
+    'DISPATCH_PROCESS_CREATED','ASYNC_MUTATION_CREATED','QUEUED_MUTATION','DEFERRED_MUTATION'].includes(e.kind));
+  const terminalIndex=events.findLastIndex(e=>e.kind==='INVOCATION_TERMINAL'&&
+    ['COMPLETED','FAILED','CANCELLED','TERMINATED'].includes(e.status)&&e.resumable===false&&
+    validUtcTimestamp(e.at)&&Date.parse(e.at)<=Date.now());
+  // A historical RUNNING transition is consumed by that same invocation's
+  // later terminal receipt. It is not a perpetual live-executor condition.
+  events.forEach((e,i)=>{
+    if(['EXECUTOR_RUNNING','EXECUTOR_RESUMABLE'].includes(e.kind)&&i>terminalIndex)routes.push(e);
+    if(e.kind==='INVOCATION_TERMINAL'&&e.resumable===true&&i>terminalIndex)routes.push({...e,kind:'EXECUTOR_RESUMABLE'});
+  });
+  if(['RUNNING','RESUMABLE','YIELDED'].includes(inv.status))routes.push({kind:'EXECUTOR_'+inv.status,id:inv.id});
+  if(inv.resumable===true)routes.push({kind:'EXECUTOR_RESUMABLE',id:inv.id});
+  if(routes.length)return {classification:'B',code:'RECOVERY_OBSERVED_DISPATCH_OR_EXECUTOR',riskObserved:true,
+    invocationId:inv.id,routes:routes.map(e=>Object.fromEntries(['kind','id','invocationId','providerRequestId','taskId','processRef','at']
+      .filter(k=>typeof e[k]==='string').map(k=>[k,e[k]]))),owner:'Owner of the identified invocation/provider request or dispatch task',
+    next:'Resolve only the observed route: confirm termination for the live invocation, or reconcile/cancel the correlated native request/task; retain barrier and obtain separate approval for security/permission changes'};
+  const known=new Set(['AUTHORIZE_RETURNED','PRE_INVOKE_VETO','BROKER_PROTOCOL','OWNERSHIP_CHECK','NATIVE_READ',
+    'EXECUTOR_RUNNING','EXECUTOR_RESUMABLE','INVOCATION_TERMINAL']);
+  const gaps=[];
+  if(events.some(e=>!known.has(e.kind)))gaps.push('unclassified call event');
+  if(!events.some(e=>e.kind==='AUTHORIZE_RETURNED'&&e.requestId===spec.authorizationRequestId&&e.ticket===spec.ticket))
+    gaps.push('original authorize-response correlation');
+  const coverage=t.coverage??{};
+  if(coverage.fromAuthorizationRequestId!==spec.authorizationRequestId||coverage.complete!==true||
+      !['throughTerminal','nativeMutationCalls','transportHandoffs','childDispatchRoutes'].every(k=>coverage[k]===true))
+    gaps.push('complete post-authorize native/transport/child-route span');
+  const terminal=events.at(-1);
+  if(!['COMPLETED','FAILED','CANCELLED','TERMINATED'].includes(inv.status)||inv.resumable!==false||
+      terminal.kind!=='INVOCATION_TERMINAL'||terminal.id!==inv.terminalEventId||
+      terminal.status!==inv.status||terminal.resumable!==false||!validUtcTimestamp(terminal.at)||Date.parse(terminal.at)>Date.now())
+    gaps.push('original invocation terminal/non-resumable receipt');
+  if(gaps.length)return missing('RECOVERY_EVIDENCE_MISSING',gaps);
+  return {classification:'A',code:'VERIFIED_TERMINAL_NO_SEND',riskObserved:false,invocationId:inv.id,
+    terminalEventId:terminal.id,terminalAt:terminal.at,approvedEvidenceHash:input.approvedEvidenceHash,
+    nativeMutationCalls:0,transportHandoffs:0,childDispatchRoutes:0,
+    recovery:'Exact terminal unwritten closure only; no additional hypothetical executor fencing required'};
+}
 function validUtcTimestamp(value) {
   if(typeof value!=='string'||!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/.test(value))return false;
   const stamp=Date.parse(value);
@@ -279,7 +374,7 @@ function read(file) {
 }
 
 class Broker {
-  constructor(root, policy) {
+  constructor(root, policy, options={}) {
     const centralPrefixes = ['## CURRENT CENTRAL OBSERVATION', '## CURRENT CENTRAL ACTION', '## CURRENT INCIDENT MAINTENANCE'];
     if (!policy || typeof policy.productionEnabled !== 'boolean' ||
         !Array.isArray(policy.productionPages) || !Array.isArray(policy.canaryPages) ||
@@ -302,19 +397,34 @@ class Broker {
       seen.add(section.pageId);
     }
     this.root = path.resolve(root); this.policy = policy; this.file = path.join(this.root, 'journal.json');
-    fs.mkdirSync(this.root, { recursive: true, mode: 0o700 });
+    this.executor=crypto.randomUUID();this.closed=false;
+    this.readOnly=options.readOnly===true;
+    if(!this.readOnly&&!options.existingOnly)fs.mkdirSync(this.root, { recursive: true, mode: 0o700 });
     const st = fs.lstatSync(this.root);
     if (!st.isDirectory() || st.isSymbolicLink() || (st.mode & 0o077)) fail('PERSISTENCE', 'Private state directory required');
+    if(options.existingOnly)privateFileBytes(this.file);
     // One process owns all batches. A process crash leaves this lock fail-closed.
     this.lock = path.join(this.root, 'broker.lock');
-    try { fs.writeFileSync(this.lock, JSON.stringify({ pid: process.pid, at: new Date().toISOString() }), { flag: 'wx', mode: 0o600 }); }
-    catch { fail('LOCKED', 'Existing broker lock requires owner inspection'); }
-    syncDir(this.root);
+    if(!this.readOnly) {
+      try { fs.writeFileSync(this.lock, JSON.stringify({ pid: process.pid, executor:this.executor, at: new Date().toISOString() }), { flag: 'wx', mode: 0o600 }); }
+      catch { fail('LOCKED', 'Existing broker lock requires owner inspection'); }
+      syncDir(this.root);
+    }
     this.state = fs.existsSync(this.file) ? read(this.file) : { version: 1, batches: {}, active: null };
     this.recovery = null;
+    this.fencedInternal = false;
   }
-  close() { fs.unlinkSync(this.lock); syncDir(this.root); }
-  save() { atomic(this.file, this.state); }
+  assertLock() {
+    if(this.closed||this.readOnly)fail('EXECUTOR_FENCED','Executor is closed or read-only');
+    const lock=read(this.lock);
+    if(lock.pid!==process.pid||lock.executor!==this.executor)fail('EXECUTOR_FENCED','Canonical executor lock changed');
+  }
+  close() {
+    if(this.closed)return;
+    if(!this.readOnly){this.assertLock();fs.unlinkSync(this.lock);syncDir(this.root);}
+    this.closed=true;
+  }
+  save() { if(this.readOnly)fail('READ_ONLY','Diagnostic broker cannot persist');this.assertLock();atomic(this.file, this.state); }
   current(batchId) {
     const b = this.state.batches[batchId];
     if (!b || this.state.active !== batchId) fail('BATCH', 'Batch is not current');
@@ -322,6 +432,302 @@ class Broker {
     return b;
   }
   snapshot(batchId, n) { return path.join(this.root, hash(batchId) + '-' + n + '.json'); }
+  // Fenced runners retain this canonical process lock through send/ACK/verify.
+  // All participating central ownership transfers MUST take the same lock.
+  // It cannot revoke a request already exported to an old/nonparticipating client.
+  ownerProof(proof, binding) {
+    if (!proof || proof.prerequisites !== true || !Array.isArray(proof.conflicts) || proof.conflicts.length !== 0 ||
+        !['ownerId','scope','generation'].every(k => typeof proof[k] === 'string' && proof[k].trim().length > 0) ||
+        !/^[a-f0-9]{64}$/.test(proof.evidenceHash ?? '') ||
+        !validUtcTimestamp(proof.observedAt) || !validUtcTimestamp(proof.validUntil) ||
+        Date.parse(proof.observedAt) > Date.now() || Date.now()-Date.parse(proof.observedAt) > 30000 ||
+        Date.parse(proof.validUntil) <= Date.now() ||
+        (binding && ['ownerId','scope','generation'].some(k => proof[k] !== binding[k])))
+      fail('OWNERSHIP_FENCE', 'Fresh same-generation scoped ownership and all prerequisites required');
+    return clone(proof);
+  }
+  fencedIdentity(input, requireProof=true) {
+    this.assertLock();
+    const b=this.state.batches[input.batchId],d=b?.dispatch;
+    if(this.state.active!==input.batchId || !d || d.version!==1 ||
+        d.executor!==this.executor || input.executor!==d.executor ||
+        b.planHash!==input.planHash || (b.receipt && input.ticket!==b.receipt.ticket))
+      fail('EXECUTOR_FENCED', 'Original live executor, immutable plan and ticket required; no restart replay');
+    if(requireProof)this.ownerProof(input.ownerProof,d.owner);
+    if(JSON.stringify(read(this.file))!==JSON.stringify(this.state))
+      fail('PERSISTENCE','Canonical journal changed outside its executor lock');
+    return b;
+  }
+  fencedLegacy(input) {
+    this.fencedInternal=true;
+    try{return this.handle(input);}finally{this.fencedInternal=false;}
+  }
+  fencedHandle(input) {
+    this.assertLock();
+    const {action,batchId}=input;
+    if(!['fence_begin','fence_recover_unsent','fence_reconcile_prepared','fence_late_observation','fence_halt',
+        'fence_prepare','fence_authorize','fence_dispatch','fence_confirm_send','fence_observe','fence_ack','fence_verify'].includes(action))
+      fail('ACTION','Unknown fenced action; unsent recovery requires explicit check-only/apply');
+    if(action==='fence_begin') {
+      const owner=this.ownerProof(input.ownerProof);
+      const checked=this.handle({action:'validate_batch',batchId,edits:input.edits});
+      const previous=checked.reused?this.state.batches[batchId]:null;
+      if(checked.status!=='READY'||previous?.dispatch||previous?.receipt)
+        fail('FENCED_REPLAY','Use an explicit same-state recovery; never repeat begin');
+      // An existing reconciled legacy READY plan has no pending exported ticket.
+      // Adopt that same plan/progress, preserving every historical receipt/error.
+      const b=previous??{planHash:hash(JSON.stringify(input.edits)),edits:clone(input.edits),next:0,status:'READY',receipt:null};
+      b.dispatch={version:1,owner,executor:this.executor,phase:'UNSENT',attempts:[]};
+      this.state.batches[batchId]=b;this.state.active=batchId;this.save();
+      return {status:'READY',next:b.next,executor:this.executor,planHash:b.planHash};
+    }
+    if(action==='fence_reconcile_prepared') {
+      const owner=this.ownerProof(input.ownerProof,input.binding);
+      if(this.state.batches[batchId]?.dispatch)fail('FENCED_PROTOCOL_REQUIRED','Legacy recovery cannot consume a fenced transaction');
+      // The supported no-send proof is checked before the same journal commit
+      // installs the fenced executor. No legacy request is exported in between.
+      this.reconcile({...input,action:'reconcile_receipts'});
+      return this.reconcile({...input,action:'reconcile_unwritten',adoptFencedOwner:owner});
+    }
+    if(action==='fence_recover_unsent') {
+      const b=this.state.batches[batchId],d=b?.dispatch;
+      this.ownerProof(input.ownerProof);
+      if(typeof input.apply!=='boolean'||this.state.active!==batchId||!d||
+          input.ownerProof.scope!==d.owner.scope||input.planHash!==b.planHash||
+          input.ticket!==(b.receipt?.ticket??null)||input.snapshotHash!==(b.receipt?.snapshotHash??null)||
+          input.expectedError!==(b.error??null)||input.expectedPhase!==d.phase||
+          hash(fs.readFileSync(this.file,'utf8'))!==input.journalHash||
+          JSON.stringify(read(this.file))!==JSON.stringify(this.state)||
+          hash(JSON.stringify(b.edits))!==b.planHash)
+        fail('RECONCILE_IDENTITY','Exact original halted state and fresh recovery owner required');
+      if(b.next!==0||!['UNSENT','PREPARED','AUTHORIZED'].includes(d.phase)||d.attempts.length!==0)
+        fail('SEND_UNCERTAIN','Request export cannot be excluded; retain barrier and observe original dispatch');
+      // A new process never accepts the old executor token. All exported-request
+      // phases are excluded before a fresh executor may revoke an unsent ticket.
+      const saved=d.executor;d.executor=this.executor;
+      try {
+        const check=this.fencedCloseUnsent({...input,executor:this.executor},false);
+        if(!input.apply)return {...check,checkOnly:true};
+        return this.fencedCloseUnsent({...input,executor:this.executor},true);
+      } finally {if(this.state.active===batchId)d.executor=saved;}
+    }
+    if(action==='fence_late_observation') {
+      const b=this.state.batches[batchId],d=b?.dispatch,a=d?.attempts.at(-1);
+      this.ownerProof(input.ownerProof);
+      if(typeof input.apply!=='boolean'||this.state.active!==batchId||!d||!a||
+          !['SEND_INTENT','ACKNOWLEDGED'].includes(d.phase)||input.planHash!==b.planHash||
+          input.ticket!==b.receipt?.ticket||input.dispatchId!==a.dispatchId||
+          input.ownerProof.scope!==d.owner.scope||JSON.stringify(read(this.file))!==JSON.stringify(this.state)||
+          !input.provider||input.provider.pageId!==b.edits[b.next].pageId||
+          !['PENDING','SUCCEEDED','FAILED','UNKNOWN'].includes(input.provider.status)||
+          (d.provider?.taskId&&d.provider.taskId!==input.provider.taskId))
+        fail('DISPATCH_IDENTITY','Fresh scoped observation must bind the original provider correlation');
+      const observed={provider:clone(input.provider),at:new Date().toISOString(),owner:input.ownerProof.ownerId,
+        dispatchId:a.dispatchId,sourceHash:input.sourceHash};
+      if(!/^[a-f0-9]{64}$/.test(input.sourceHash??''))fail('DISPATCH_IDENTITY','Raw provider observation digest required');
+      const duplicate=d.observations?.some(x=>x.sourceHash===input.sourceHash&&
+        JSON.stringify(x.provider)===JSON.stringify(input.provider));
+      if(input.apply&&!duplicate){d.observations=[...(d.observations??[]),observed];this.save();}
+      return {status:b.status,phase:d.phase,checkOnly:!input.apply,alreadyObserved:!!duplicate,
+        recoveryOwner:input.ownerProof.ownerId,
+        next:'Retain barrier; compare attributed terminal result plus complete page with an independently reviewed applied-result recovery. Never resend.'};
+    }
+    const noProof=['fence_halt','fence_ack','fence_observe','fence_verify'].includes(action);
+    const b=this.fencedIdentity(input,!noProof),d=b.dispatch;
+    if(action==='fence_halt') {
+      if(b.status!=='HALTED') {
+        b.haltedFrom=b.status;b.error=String(input.reason??'Fenced runner failed').slice(0,1000);
+        if(input.readDetail!==undefined)b.readDetail=String(input.readDetail).slice(0,1000);
+      }
+      b.status='HALTED';
+      d.failure={phase:d.phase,at:new Date().toISOString(),owner:d.owner.ownerId,
+        next:d.phase==='SEND_INTENT'?'Observe original provider request/task and late results; never resend':
+          d.phase==='ACKNOWLEDGED'?'Read full page and use reviewed applied-result reconciliation; never resend':
+          'Fresh full preimage and explicit unsent closure; never reuse revoked ticket',
+        provider:clone(input.provider??d.provider??null)};
+      this.save();return {status:b.status,phase:d.phase,recovery:d.failure};
+    }
+    if(b.status==='HALTED')fail('HALTED','Preserve the original failure; use explicit supported recovery');
+    if(action==='fence_prepare') {
+      if(d.phase!=='UNSENT')fail('PAGE_BARRIER','Prior dispatch is unresolved');
+      const r=this.fencedLegacy({...input,action:'prepare'});d.phase='PREPARED';this.save();return r;
+    }
+    const s=read(b.receipt?.snapshot??'');
+    if(hash(JSON.stringify(s))!==b.receipt.snapshotHash||s.ticket!==input.ticket)
+      fail('PERSISTENCE','Immutable snapshot changed');
+    if(action==='fence_authorize'||action==='fence_dispatch') {
+      const p=pageData(input.page,b.edits[b.next].pageId);
+      if(p.body!==s.page.body||p.properties!==s.page.properties||p.revision!==s.page.revision)
+        fail('CONCURRENT_CHANGE','Fresh page differs from the prepared preimage');
+      validateScope(b.edits[b.next],this.policy);stableNewText(b.edits[b.next]);
+      const generated=plan(p,b.edits[b.next]);
+      if(generated.expected!==s.expected)fail('PLAN_DRIFT','Immutable plan changed');
+      if(action==='fence_authorize') {
+        if(b.status!=='PREPARED'||d.phase!=='PREPARED')fail('PAGE_BARRIER','Authorization is single-use');
+        b.status='WRITE_PENDING';d.phase='AUTHORIZED';this.save();
+        return {status:b.status,ticket:s.ticket,requestExported:false};
+      }
+      if(b.status!=='WRITE_PENDING'||d.phase!=='AUTHORIZED')fail('PAGE_BARRIER','Dispatch is single-use');
+      // From this durable boundary onward, even a lost broker reply is uncertain.
+      const attempt={index:b.next,ticket:s.ticket,dispatchId:crypto.randomUUID(),
+        requestHash:hash(JSON.stringify(generated.request)),at:new Date().toISOString(),phase:'SEND_INTENT'};
+      d.phase='SEND_INTENT';d.provider=null;d.attempts.push(attempt);this.save();
+      return {status:'SEND_INTENT',dispatchId:attempt.dispatchId,request:generated.request};
+    }
+    const attempt=d.attempts.at(-1);
+    if(!attempt||attempt.ticket!==input.ticket||attempt.dispatchId!==input.dispatchId)
+      fail('DISPATCH_IDENTITY','Original dispatch correlation required');
+    if(action==='fence_confirm_send') {
+      if(d.phase!=='SEND_INTENT'||attempt.sendPermit)fail('PAGE_BARRIER','Send confirmation is single-use');
+      const owner=this.ownerProof(input.ownerProof,d.owner);
+      const permit={dispatchId:attempt.dispatchId,executor:this.executor,pageId:b.edits[b.next].pageId,
+        ownerId:owner.ownerId,scope:owner.scope,generation:owner.generation,
+        observedAt:owner.observedAt,validUntil:owner.validUntil};
+      attempt.sendPermit=permit;this.save();return {status:'SEND_INTENT',permit};
+    }
+    if(action==='fence_observe') {
+      if(d.phase!=='SEND_INTENT'||!attempt.sendPermit||input.provider?.status!=='PENDING'||
+          typeof input.provider.taskId!=='string'||!input.provider.taskId||
+          (d.provider?.taskId&&d.provider.taskId!==input.provider.taskId))
+        fail('DISPATCH_IDENTITY','Original pending provider task required');
+      d.provider=clone(input.provider);attempt.provider=clone(input.provider);this.save();return {status:'SEND_INTENT',provider:d.provider};
+    }
+    if(action==='fence_ack') {
+      if(d.phase!=='SEND_INTENT'||!attempt.sendPermit||!input.provider||input.provider.status!=='SUCCEEDED'||
+          input.provider.pageId!==b.edits[b.next].pageId||
+          (d.provider?.taskId&&d.provider.taskId!==input.provider.taskId))
+        fail('ACK_REQUIRED','One actual terminal provider result required');
+      d.phase='ACKNOWLEDGED';d.provider=clone(input.provider);attempt.provider=clone(input.provider);attempt.phase=d.phase;this.save();
+      return {status:'ACKNOWLEDGED'};
+    }
+    if(action==='fence_verify') {
+      if(d.phase!=='ACKNOWLEDGED')fail('ACK_REQUIRED','Uncertain send cannot be verified as an ACK');
+      const r=this.fencedLegacy({...input,action:'verify'});
+      d.phase=r.status==='COMPLETED'?'VERIFIED':'UNSENT';this.save();return r;
+    }
+    fail('ACTION','Unknown fenced action');
+  }
+  fencedCloseUnsent(input,apply) {
+      const b=this.state.batches[input.batchId],d=b.dispatch;
+      this.ownerProof(input.ownerProof);
+      if(input.ownerProof.scope!==d.owner.scope)fail('OWNERSHIP_FENCE','Same scoped recovery owner required');
+      if(b.next!==0||d.attempts.length!==0||!['UNSENT','PREPARED','AUTHORIZED'].includes(d.phase)||
+          !['READY','PREPARED','WRITE_PENDING','HALTED'].includes(b.status)||
+          d.attempts.some(a=>a.index===b.next))
+        fail('SEND_UNCERTAIN','A request may have escaped; no unsent closure or replay');
+      let preserved;
+      if(b.receipt) {
+        const s=read(b.receipt.snapshot),p=pageData(input.page,b.edits[b.next].pageId);
+        if(hash(JSON.stringify(s))!==b.receipt.snapshotHash||s.ticket!==b.receipt.ticket||
+            s.batchId!==input.batchId||s.index!==b.next||JSON.stringify(s.edit)!==JSON.stringify(b.edits[b.next])||
+            p.body!==s.page.body||p.properties!==s.page.properties||p.revision!==s.page.revision)
+          fail('RECONCILE_CHANGED','Exact ticket/snapshot and fresh full preimage/revision required');
+        preserved={bodyHash:hash(p.body),propertiesHash:hash(p.properties),revision:p.revision};
+      }
+      const audit={kind:'FENCED_UNSENT_TERMINAL',at:new Date().toISOString(),phase:d.phase,
+        planHash:b.planHash,ticket:b.receipt?.ticket??null,next:b.next,notionWrites:0,
+        reason:b.error??String(input.reason??'Pre-send gate rejected'),preserved};
+      if(!apply)return {status:b.status,active:this.state.active,audit};
+      // Terminal, never an ACK or applied COMPLETED. Preserve plan/error/receipt/progress.
+      d.revoked=true;d.phase='REVOKED_UNSENT';b.status='ABORTED_UNWRITTEN';
+      b.reconciliations=[...(b.reconciliations??[]),audit];this.state.active=null;this.save();
+      return {status:b.status,active:null,audit};
+  }
+  reconcileVerifiedUnsent(input) {
+    const loaded=loadUnwrittenManifest(input.manifestPath,input.approvedManifestHash),spec=loaded.spec;
+    const requireFact=(ok,code,message)=>{if(!ok)fail(code,message);};
+    const privateBytes=file=>{
+      const st=fs.lstatSync(file);
+      requireFact(st.isFile()&&!st.isSymbolicLink()&&st.uid===process.geteuid()&&!(st.mode&0o077),
+        'RECOVERY_EVIDENCE','Private owned regular evidence required');
+      return fs.readFileSync(file,'utf8');
+    };
+    requireFact(typeof input.apply==='boolean'&&(!this.readOnly||!input.apply),'READ_ONLY','Explicit check-only/apply required');
+    requireFact(this.root===spec.root&&input.batchId===spec.batchId,'RECONCILE_IDENTITY','Exact canonical incident required');
+    if(this.readOnly)requireFact(!fs.existsSync(this.lock),'LOCKED','A current recovery executor is present');
+    else this.assertLock();
+    this.ownerProof(input.ownerProof);
+    requireFact(input.ownerProof.scope===spec.batchId,'OWNERSHIP_FENCE','Exact incident recovery scope required');
+    for(const [name,pin] of Object.entries(spec.pins)) {
+      const file=path.join(spec.runtime,name),st=fs.lstatSync(file);
+      requireFact(st.isFile()&&!st.isSymbolicLink()&&st.uid===process.geteuid()&&
+        hash(fs.readFileSync(file,'utf8'))===pin,'INSTALLATION_PIN','Original installed bytes changed');
+    }
+    const installation=privateBytes(path.join(this.root,spec.installation)),installed=JSON.parse(installation);
+    requireFact(hash(installation)===spec.installationHash&&installed.sourceCommit===spec.sourceCommit&&
+      installed.policyChanged===false&&installed.workerServicesChanged===false&&
+      Object.entries(spec.pins).filter(([n])=>n!=='approved.sha256').every(([n,h])=>installed.after?.[n]===h),
+      'INSTALLATION_PIN','Original installation receipt required');
+    const before=privateBytes(this.file),current=JSON.parse(before),b=current.batches[spec.batchId];
+    requireFact(JSON.stringify(current)===JSON.stringify(this.state),'PERSISTENCE','Canonical memory/disk differs');
+    const auditFile=path.join(this.root,hash(spec.batchId)+'.verified-unsent-closure.json');
+    const auditBytes=fs.existsSync(auditFile)?privateBytes(auditFile):null;
+    const existing=auditBytes?JSON.parse(auditBytes):null;
+    const assessment=assessUnwrittenExecution(spec,input);
+    if(assessment.classification!=='A') {
+      const error=new GuardError(assessment.code,assessment.classification==='B'
+        ? 'Observed dispatch/executor requires route-specific reconciliation; no unsent closure'
+        : 'Execution records are missing, incomplete or invalid; no risk assertion and no unsent closure');
+      error.assessment=assessment;throw error;
+    }
+    const original=existing?.journalBefore??current,originalBatch=original.batches[spec.batchId];
+    requireFact(hash(JSON.stringify(original))===spec.journalHash&&original.active===spec.batchId&&
+      originalBatch?.status==='HALTED'&&originalBatch.haltedFrom==='WRITE_PENDING'&&
+      originalBatch.error===spec.error&&originalBatch.next===0&&originalBatch.edits?.length===1&&
+      originalBatch.planHash===spec.planHash&&hash(JSON.stringify(originalBatch.edits))===spec.planHash&&
+      originalBatch.receipt?.ticket===spec.ticket&&originalBatch.receipt.snapshotHash===spec.snapshotHash&&
+      originalBatch.receipt.snapshot===this.snapshot(spec.batchId,0)&&!originalBatch.dispatch&&
+      !originalBatch.reconciliations&&!originalBatch.verifications&&!originalBatch.readDetail,
+      'RECONCILE_IDENTITY','Original plan/error/ticket/position and complete journal must be preserved');
+    const evidenceBytes=privateBytes(path.join(this.root,spec.evidence)),evidence=JSON.parse(evidenceBytes);
+    requireFact(hash(evidenceBytes)===spec.evidenceHash&&hash(evidence.adapterSource)===spec.adapterHash&&
+      evidence.incident===spec.batchId&&evidence.facts?.notionMutationInvoked===false,
+      'RECOVERY_EVIDENCE','Original no-send attestation/control-flow evidence changed');
+    const s=JSON.parse(privateBytes(originalBatch.receipt.snapshot)),edit=originalBatch.edits[0];
+    validateScope(edit,this.policy);const pre=pageData(s.page.raw,edit.pageId),fresh=pageData(input.page,edit.pageId),generated=plan(pre,edit);
+    requireFact(hash(JSON.stringify(s))===spec.snapshotHash&&s.ticket===spec.ticket&&s.batchId===spec.batchId&&s.index===0&&
+      JSON.stringify(s.edit)===JSON.stringify(edit)&&s.bodyHash===hash(s.page.body)&&s.expectedHash===hash(s.expected)&&
+      s.propertiesHash===hash(s.page.properties)&&pre.body===s.page.body&&pre.properties===s.page.properties&&
+      pre.revision===s.page.revision&&generated.expected===s.expected&&generated.beforeHash===s.beforeHash&&
+      generated.afterHash===s.afterHash&&fresh.body===pre.body&&fresh.properties===pre.properties&&fresh.revision===pre.revision,
+      'RECONCILE_CHANGED','Exact snapshot and full fresh body/properties/revision required');
+    const prefix=hash(spec.batchId)+'-';
+    requireFact(fs.readdirSync(this.root).filter(n=>n.startsWith(prefix)).every(n=>n===prefix+'0.json'),
+      'SEND_UNCERTAIN','Unexpected applied/readback/future evidence exists');
+    const audit={kind:'EXACT_VERIFIED_NO_SEND',batchId:spec.batchId,planHash:spec.planHash,
+      ticket:spec.ticket,snapshotHash:spec.snapshotHash,journalBeforeHash:spec.journalHash,
+      originalError:spec.error,haltedFrom:'WRITE_PENDING',next:0,notionWrites:0,pageAdvances:0,
+      approvedManifestHash:loaded.manifestHash,approvedEvidenceHash:input.approvedEvidenceHash,
+      execution:assessment,ticketRevoked:true,at:existing?.audit?.at??new Date().toISOString()};
+    requireFact(validUtcTimestamp(audit.at)&&Date.parse(audit.at)<=Date.now()&&
+      (!existing||(JSON.stringify(existing.audit)===JSON.stringify(audit)&&
+        existing.manifestBytes===privateFileBytes(input.manifestPath)&&
+        JSON.stringify(assessUnwrittenExecution(spec,{rawExecutionTrace:existing.rawExecutionTrace,
+          sourceRecords:existing.sourceRecords,approvedEvidenceHash:input.approvedEvidenceHash}))===JSON.stringify(assessment)&&
+        pageData(existing.freshPage,edit.pageId).body===pre.body&&
+        pageData(existing.freshPage,edit.pageId).properties===pre.properties&&
+        pageData(existing.freshPage,edit.pageId).revision===pre.revision)),
+      'RECOVERY_EVIDENCE','Existing closure approval/drain differs');
+    const expected=clone(original),closed=expected.batches[spec.batchId];
+    closed.status='ABORTED_UNWRITTEN';closed.reconciliations=[audit];
+    closed.ticketDisposition={ticket:spec.ticket,status:'REVOKED_UNSENT',executionEvidenceHash:input.approvedEvidenceHash};expected.active=null;
+    if(b?.status==='ABORTED_UNWRITTEN') {
+      requireFact(existing&&JSON.stringify(expected)===before,'PERSISTENCE','Terminal closure/audit differs');
+      return {status:b.status,active:current.active,alreadyConsumed:true,checkOnly:!input.apply,auditFile};
+    }
+    requireFact(hash(before)===spec.journalHash,'RECONCILE_IDENTITY','Canonical state changed before closure');
+    requireFact(privateBytes(this.file)===before&&(!this.readOnly||!fs.existsSync(this.lock)),
+      'PERSISTENCE','State/owner changed during inspection');
+    if(!input.apply)return {status:'HALTED',active:current.active,checkOnly:true,audit,assessment,eligible:true};
+    // The broker API owns this transition. Audit first, original journal intact.
+    // A crash between these writes resumes from the same audit with no deletion.
+    if(!existing)atomic(auditFile,{audit,journalBefore:original,manifestBytes:privateFileBytes(input.manifestPath),
+      rawExecutionTrace:input.rawExecutionTrace,sourceRecords:input.sourceRecords,freshPage:input.page});
+    requireFact(privateBytes(this.file)===before,'PERSISTENCE','Canonical state changed before commit');
+    atomic(this.file,expected);this.state=read(this.file);
+    requireFact(JSON.stringify(this.state)===JSON.stringify(expected),'PERSISTENCE','Terminal readback differs');
+    return {status:closed.status,active:null,checkOnly:false,auditFile,audit,journalAfterHash:hash(privateBytes(this.file))};
+  }
   reconcileAutolink(input) {
     return this.reconcileRendering(input, 'package');
   }
@@ -648,6 +1054,7 @@ class Broker {
     if (page.body !== snapshot.page.body || page.properties !== snapshot.page.properties ||
         page.revision !== snapshot.page.revision)
       fail('RECONCILE_CHANGED', 'Pending page must still equal its full preimage; no write is acknowledged');
+    const fencedOwner=input.adoptFencedOwner?this.ownerProof(input.adoptFencedOwner):null;
     // Persist an audit trail. Do not advance next, invent a verified receipt,
     // remove snapshots, change edits, or accept an already-written output.
     b.reconciliations = [...(b.reconciliations ?? []), {
@@ -657,12 +1064,23 @@ class Broker {
       mode:this.recovery?.mode ?? 'FRESH_PRIOR_PAGES', verifiedReceipts:this.recovery?.receipts ?? []
     }];
     b.status = 'PREPARED';
+    if(fencedOwner)b.dispatch={version:1,owner:fencedOwner,executor:this.executor,phase:'PREPARED',attempts:[]};
     if(preparedUnwritten){delete b.error;delete b.haltedFrom;}
     this.recovery = null;
     this.save();
-    return { status:'PREPARED', next:b.next, ticket:input.ticket, protectedContent:'UNCHANGED' };
+    return { status:'PREPARED', next:b.next, ticket:input.ticket, protectedContent:'UNCHANGED',
+      ...(fencedOwner?{executor:this.executor,planHash:b.planHash}:{}) };
   }
   handle(input) {
+    if(this.readOnly&&!(input.action==='status'||input.action==='close'||input.action==='validate_owner_proof'||
+        (input.action==='reconcile_verified_unsent'&&input.apply===false)))
+      fail('READ_ONLY','Read-only diagnostics cannot mutate canonical state');
+    if(input.action==='reconcile_verified_unsent')return this.reconcileVerifiedUnsent(input);
+    if(input.action==='validate_owner_proof')return this.ownerProof(input.ownerProof,input.binding);
+    if(typeof input?.action==='string'&&input.action.startsWith('fence_'))return this.fencedHandle(input);
+    if(!this.fencedInternal&&this.state.batches[input?.batchId]?.dispatch&&
+        !['status','close','validate_batch','preflight','begin'].includes(input.action))
+      fail('FENCED_PROTOCOL_REQUIRED','Fenced transactions cannot use legacy actions or recovery');
     const { action, batchId } = input;
     if (action === 'status' && !Object.hasOwn(input, 'batchId')) return clone(this.state);
     if (action === 'close') return { status: 'CLOSED' };
@@ -671,7 +1089,7 @@ class Broker {
     if (action === 'status') {
       if (!Object.hasOwn(this.state.batches, batchId)) fail('BATCH', 'Selected batch does not exist');
       const selected=this.state.batches[batchId],batch={};
-      for(const field of ['planHash','edits','next','status','receipt','error','haltedFrom'])
+      for(const field of ['planHash','edits','next','status','receipt','error','haltedFrom','dispatch'])
         if(Object.hasOwn(selected,field))batch[field]=selected[field];
       return { version:this.state.version, active:this.state.active,
         batches:{ [batchId]:clone(batch) } };
@@ -804,4 +1222,4 @@ if (require.main === module) {
   rl.on('close', close); process.on('exit', close);
   for (const signal of ['SIGTERM','SIGINT','SIGHUP']) process.on(signal, () => { close(); process.exit(0); });
 }
-module.exports = { Broker, GuardError, hash, pageData, plan, validateEdit, atomic };
+module.exports = { Broker, GuardError, hash, pageData, plan, validateEdit, atomic, loadUnwrittenManifest, assessUnwrittenExecution };
