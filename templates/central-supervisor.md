@@ -21,6 +21,13 @@
    쓰기에는 이후 본문 쓰기와 외부 후속을 멈추고 동일 원본 증거를 보존한다.
 3. 같은 고정 커밋의 `runner.js`와 `complete_projection.js`를 해시로 확인하고
    기존 authenticated connector와 승인 broker command를 사용한다. 토큰을 추출하지 않는다.
+   새 fenced runner에는 실제 중앙 실행·한정 소유권·필수조건을 새로 읽는
+   `assertOwnership({phase,batchId})`가 필수다. `begin/prepare/authorize/dispatch`
+   각각에서 같은 scope·generation과 유효 lease를 검증한다. 소유권 이전과 native
+   중앙 갱신도 같은 canonical broker lock에 참여해야 한다. 비참여 실행자가 있으면
+   이 경로를 운영 채택한 것으로 선언하지 않는다. 검사 함수를 update callback에
+   끼워 넣지 않는다. authorize는 request를 내보내지 않고, SEND_INTENT 뒤에만
+   dispatch가 한 번 내보낸다. 이 이후 응답 유실은 발송 불확실이며 재송신 금지다.
 4. 저장소마다 complete entry를 따로 실행한다. NodeKit은 `repositories:['nodekit']`
    (body 6/native 2), Sori는 `repositories:['sori']`(body 8/native 2), BORI는
    `repositories:['bori']`(shared body 5/native 원본2)다. 각 실행은
@@ -36,6 +43,16 @@
    매 페이지 prepare/authorize/전체 readback을 따른다.
 6. 사전검사 거부는 실제 미기록·0 writes를 확인한 뒤 계획을 보정한다. 미확정 batch를
    새 ID/state나 raw write로 우회하지 않는다. 복구 helper를 자동 호출하지 않는다.
+   status는 읽기 전용이며 `runner.resume`은 실제 write 경로다. 미지원 중단은
+   [복구 경계표](../UNWRITTEN_RECOVERY.md)의 원본 phase·소유자·필요 증거·다음
+   행동을 남긴다. A는 원래 Code Mode invocation의 mutation 미호출·확정 종료·별도
+   발송경로 없음이 실제 증거로 결속된 경우다. A의 사건 한정 종결에 추가 가상 실행자
+   fencing 구축을 요구하지 않는다. B는 실제 발송·전송 불명·재개 가능 실행·별도
+   발송경로가 확인된 경우이며 그 경로만 대조·종료한다. C는 필요한 원시 기록이
+   없는 경우로, 위험이 존재한다고 단정하지 않고 누락 자료·제공 제어면·대체 접근
+   경로를 남긴다. 현재 페이지 동일성·서버 broker 종료·다른 provider 검토 상태나
+   시간 경과는 원래 Code Mode 호출 증거를 대신하지 않는다. 일반 경쟁 상태·fencing
+   설계 검수와 이번 사건의 A/B/C 종결 판정을 분리한다.
 7. 전체 body·property 보존을 검증한 complete entry의 `COMPLETE`만 현재 동기화
    완료로 보고한다. 파일 해시 MATCH·부분 batch COMPLETED·프롬프트 수정은 별도 사실이다.
 8. 현재 head의 결과를 수신한 뒤 같은 원본 task/PR로 보정을 연결하고 기존 독립

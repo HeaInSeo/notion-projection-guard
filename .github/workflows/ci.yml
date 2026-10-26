@@ -25,7 +25,7 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
       - name: Guard and installed-runtime regressions
-        run: node --test test_guard.cjs test_runtime.cjs test_revision.cjs supervision_gate_cases.cjs serialized_format_cases.cjs test_nodekit_pointer_partial.cjs review_timeout_policy_cases.cjs review_timeout_ledger_cases.cjs review_timeout_operational_cases.cjs
+        run: node --test test_guard.cjs test_runtime.cjs test_revision.cjs supervision_gate_cases.cjs serialized_format_cases.cjs test_nodekit_pointer_partial.cjs review_timeout_policy_cases.cjs review_timeout_ledger_cases.cjs review_timeout_operational_cases.cjs test_fenced_dispatch.cjs test_unwritten_recovery.cjs test_case_exception.cjs
       - name: Verify local review-timeout candidate pins
         run: node verify_review_timeout_candidate.cjs
       - name: Verify operational review-timeout candidate pins
