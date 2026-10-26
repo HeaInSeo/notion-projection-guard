@@ -78,6 +78,9 @@ verify source-backed runtime probes, then check-only against fresh originals.
 Apply writes the full audit before a single canonical commit. An audit-first
 failure leaves the old barrier and resumes from the same validated audit. A
 journal failure cannot publish a grant or relax exclusivity only in memory.
+An intake-observation-first failure resumes from that exact saved native source
+using its freshness at the saved observation, while current owner/conflict
+checks remain fresh. It never fabricates a newer CLAIM to finish the retry.
 Retries validate the exact original fields, approval bytes and preservation
 readback; they never clear a newer active batch. Do not roll back to a runtime
 which cannot enforce a committed retirement. On a post-closure failure retain

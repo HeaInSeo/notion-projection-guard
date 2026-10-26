@@ -273,4 +273,15 @@ for(const target of ['plan','packet','completed-edits'])test('canonical permit r
   if(target==='completed-edits')f.b.state.batches['synthetic-admission'].edits[0].newStr='state=OTHER';
   f.b.save();assert.throws(()=>permit(f.c,f.configHash,'operator'),e=>['CASE_CONTROL_INVALID','CASE_PERMIT_INVALID'].includes(e.code));
 });
+test('saved intake observation resumes after its original freshness window without fabricating a new CLAIM',t=>{
+  const f=fixture(t);close(f);installSyntheticAdmission(f);const source=claimPage(f),rename=fs.renameSync;
+  fs.renameSync=(a,b)=>{if(b===f.b.file)throw Error('synthetic release journal failure');return rename(a,b);};
+  try{assert.throws(()=>f.b.handle({action:'release_case_owner',ownerProof:f.proof(),page:source}));}finally{fs.renameSync=rename;}
+  f.restart();const now=Date.now,advanced=now()+600001;Date.now=()=>advanced;
+  try{
+    const proof={...f.proof(),observedAt:new Date(advanced).toISOString(),validUntil:new Date(advanced+60000).toISOString()};
+    const result=f.b.handle({action:'release_case_owner',ownerProof:proof,page:source});assert.equal(result.released,true);
+    assert.equal(f.b.state.caseExceptionControl.actualIntakeObservation.sourceHash,hash(JSON.stringify(source)));
+  }finally{Date.now=now;}
+});
 module.exports={fixture,close,installSyntheticAdmission};

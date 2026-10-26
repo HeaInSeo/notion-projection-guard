@@ -232,6 +232,12 @@ function release(b,input) {
   const next=clone(b.state),c=next.caseExceptionControl;
   need(c?.admission&&next.active===null&&input.ownerProof.ownerId===c.authority.ownerId&&
     input.ownerProof.generation===c.authority.generation&&input.ownerProof.scope===c.batchId,'CASE_OWNER_CONFLICT');
+  const observationFile=path.join(b.root,digest(c.batchId)+'.intake-observation.json');
+  const previous=fs.existsSync(observationFile)?JSON.parse(bytes(observationFile)):null;
+  const reference=previous?Date.parse(previous.observation?.observedAt):Date.now();
+  need(Number.isFinite(reference)&&reference<=Date.now()&&(!previous||
+    (previous.manifestHash===c.manifestHash&&digest(JSON.stringify(input.page))===previous.observation?.sourceHash)),
+    'CASE_CONTROL_INVALID');
   const p=pageData(input.page,c.worker.originalPageId),props=JSON.parse(p.properties);
   const candidates=[];
   for(const block of p.body.matchAll(/```(?:json)?\n([\s\S]*?)\n```/g)) {
@@ -241,11 +247,9 @@ function release(b,input) {
   need(e?.kind==='CLAIM'&&e.task_id===c.worker.taskId&&e.role===c.worker.role&&
     Number.isSafeInteger(e.version)&&e.version>c.worker.sourceVersion&&
     typeof e.session_id==='string'&&e.session_id===props['세션 ID']&&e.lease_state==='CLAIM_HELD'&&
-    Number.isFinite(Date.parse(e.event_at_utc))&&Date.parse(e.event_at_utc)<=Date.now()&&
-    Date.now()-Date.parse(e.event_at_utc)<300000,'CASE_OWN_CLAIM_REQUIRED');
+    Number.isFinite(Date.parse(e.event_at_utc))&&Date.parse(e.event_at_utc)<=reference&&
+    reference-Date.parse(e.event_at_utc)<300000,'CASE_OWN_CLAIM_REQUIRED');
   if(c.exclusive===false)return {alreadyReleased:true,ownClaimEventId:e.event_id};
-  const observationFile=path.join(b.root,digest(c.batchId)+'.intake-observation.json');
-  const previous=fs.existsSync(observationFile)?JSON.parse(bytes(observationFile)):null;
   c.exclusive=false;c.actualIntakeObservation={eventId:e.event_id,version:e.version,sessionId:e.session_id,
     sourceHash:digest(JSON.stringify(input.page)),observedAt:previous?.observation?.observedAt??new Date().toISOString()};
   const observation={manifestHash:c.manifestHash,observation:c.actualIntakeObservation,source:input.page};
