@@ -372,14 +372,14 @@ function createBridge({readOnly=true,liveProviderPath,liveProviderHash}={}){
       brokerPid:process.pid,canonical:clone(b.state.caseExceptionControl)});
     need(!closed,'CASE_LIVE_EXECUTOR_CLOSED');b.assertLock();scope({allowAdmission:admin});
     need(hash(bytes(liveProviderPath,false))===liveProviderHash,'CASE_LIVE_PROVIDER_PIN');
-    if(b.state.batches[CONFIG.batchId])unpreparedHistory(b.state.batches[CONFIG.batchId]);
+    if(b.state.batches[CONFIG.batchId])history(b.state.batches[CONFIG.batchId]);
     return admin?b.handle({...operation,ownerProof}):handle({...operation,ownerProof});
   }
   function handle(input){
     need(!closed,'CASE_LIVE_EXECUTOR_CLOSED');
     if(input.action==='close')return b.handle(input);
     if(['case_admin_authority','case_stage_release','case_live_admit','case_consume_live_release'].includes(input.action)){
-      scope({allowAdmission:true});if(b.state.batches[CONFIG.batchId])unpreparedHistory(b.state.batches[CONFIG.batchId]);
+      scope({allowAdmission:true});if(b.state.batches[CONFIG.batchId])history(b.state.batches[CONFIG.batchId]);
       if(input.action==='case_admin_authority')return clone(b.state.caseExceptionControl);
       if(input.action!=='case_stage_release')return liveOperation(input);
       need(input.batchId===CONFIG.caseId&&!staged&&input.operation?.action==='release_case_owner'&&
@@ -388,7 +388,7 @@ function createBridge({readOnly=true,liveProviderPath,liveProviderHash}={}){
       staged={stageId,inputHash,operation,executor:b.executor,scope:CONFIG.caseId};return {stageId,inputHash};
     }
     scope();
-    if(b.state.batches[CONFIG.batchId])unpreparedHistory(b.state.batches[CONFIG.batchId]);
+    if(b.state.batches[CONFIG.batchId])history(b.state.batches[CONFIG.batchId]);
     if(input.action==='case_consume_live'||input.action==='case_live_send')return liveOperation(input);
     if(input.action==='case_stage_input'){
       need(input.batchId===CONFIG.batchId&&input.operation?.batchId===CONFIG.batchId&&

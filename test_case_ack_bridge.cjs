@@ -451,3 +451,12 @@ test('fresh local send conflict blocks every native call without reissuing a dis
   await assert.rejects(io.runner().resumeCaseUnprepared(batchId,f.ctx.planHash,true),/OWNERSHIP_FENCE/);
   assert.equal(io.writes,0);assert.equal(journal(f).batches[batchId].dispatch.attempts.length,1);
 });
+for(const change of ['missing','changed'])test('live administration requires every committed ACK recovery audit '+change,async t=>{
+  const f=fixture(t,{index:1});f.bridge.handle(f.input(true));liveProvider(f);
+  const file=path.join(f.root,hash(batchId)+'.ack-recovery-1.json');
+  if(change==='missing')fs.unlinkSync(file);else fs.appendFileSync(file,' ');
+  const before=inventory(f.root),root=f.spec.batchId;
+  assert.throws(()=>f.bridge.handle({action:'case_live_admit',batchId:root,operation:{action:'record_case_admission',batchIds:[batchId]},
+    liveSource:{proof:{...f.ownerProof(),scope:root}}}));
+  assert.deepEqual(inventory(f.root),before);assert.equal(journal(f).caseExceptionControl.admission,null);
+});

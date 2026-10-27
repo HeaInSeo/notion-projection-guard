@@ -131,6 +131,12 @@ replace the genuine-CLAIM/lease checks. These paths do not create worker proof.
 Commands are serialized while live facts are pending. Closing the executor
 prevents any later awaited proof from performing an operation. A stage is
 consumed once even when proof collection fails, and no mutation is retried.
+EOF, signals and direct executor close fence pending proofs. A queued protocol
+`close` drains the preceding request before acknowledging closure; sending that
+command is not evidence of cancellation. After successful owner release, close
+the helper and use the pinned normal read-only Broker or an exact canonical
+read to confirm `exclusive=false` and the saved intake observation. The case
+helper deliberately refuses further operations after exclusivity ends.
 
 An audit/receipt/journal save failure leaves the old progress barrier and the
 private files in place. An exact new-process reconciliation can finish the saved
