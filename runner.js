@@ -342,6 +342,29 @@
       return {...await run(batchId,batch.edits),resumed:true,recoveryAudit:recovered.audit};
     } finally {await close();}
   }
+  async function resumeCasePrepared(batchId,expectedPlanHash,apply=false){
+    let live=null;
+    try{
+      if(config.caseAckBridge!==true||config.casePageStaging!==true||typeof apply!=='boolean')
+        throw new Error('EXPLICIT_CASE_PREPARED_RECOVERY_REQUIRED');
+      const state=await broker({action:'case_recovery_status',batchId}),batch=state.batches?.[batchId];
+      if(state.active!==batchId||batch?.planHash!==expectedPlanHash||!batch.receipt||
+        !['PREPARED','AUTHORIZED'].includes(batch.dispatch?.phase))throw new Error('RECONCILE_IDENTITY');
+      const priorPages=[];
+      for(let index=0;index<batch.next;index++)priorPages.push(await fetchPage(batch.edits[index].pageId,'case-prepared-prior'));
+      const page=await fetchPage(batch.edits[batch.next].pageId,'case-prepared-pending');
+      const adopted=await ownedPage({action:'case_restore_prepared',batchId,planHash:expectedPlanHash,
+        journalHash:state.journalHash,expectedError:batch.error,ticket:batch.receipt.ticket,
+        snapshotHash:batch.receipt.snapshotHash,priorPages,page,apply},'case-prepared');
+      if(!apply)return adopted;
+      live={batchId,executor:adopted.executor,planHash:adopted.planHash};
+      const receipts=await fencedPages(live,batch.edits,adopted.next,adopted);
+      return {status:'COMPLETED',resumed:true,receipts,readDiagnostics};
+    }catch(error){
+      if(live)try{await broker({...live,action:'fence_halt',reason:error.message,readDetail:error.readDetail});}catch{}
+      throw error;
+    }finally{await close();}
+  }
   async function reconcileAutolink(batchId, expectedPlanHash, snapshotHash, actualHash, actualSnapshotHash) {
     try {
       const state = await broker({ action:'status', batchId:batchId??null });
@@ -359,5 +382,5 @@
         page });
     } finally { await close(); }
   }
-  return { run, resume, resumeUnprepared, resumeCaseUnprepared, reconcileAutolink, reconcileAcknowledged, continueVerifiedCase, broker, close };
+  return { run, resume, resumeUnprepared, resumeCaseUnprepared, resumeCasePrepared, reconcileAutolink, reconcileAcknowledged, continueVerifiedCase, broker, close };
 })
