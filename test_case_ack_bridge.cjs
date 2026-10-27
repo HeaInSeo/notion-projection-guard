@@ -206,6 +206,33 @@ test('past provider tampering stays rejected while a new pending ACK is being in
   x.batches[batchId].dispatch.attempts[0].provider.status='FAILED';fs.writeFileSync(file,JSON.stringify(x));f.restart();
   unchanged(f,{action:'case_recovery_status',batchId},'CASE_ACK_AUDIT');assert.equal(journal(f).batches[batchId].next,1);
 });
+for(const change of ['delete','alter'])test('continuation intent remains required after subsequent ordinary progress '+change,t=>{
+  const f=fixture(t);secondAckFailure(f);
+  const file=fs.readdirSync(f.root).find(n=>n.includes('.verified-continuation-'));
+  if(change==='delete')fs.unlinkSync(path.join(f.root,file));else fs.appendFileSync(path.join(f.root,file),' ');
+  f.restart();unchanged(f,{action:'case_recovery_status',batchId});assert.equal(journal(f).batches[batchId].next,1);
+});
+for(const stage of ['fsync','partial-write'])test('incomplete temporary verified receipt is preserved, pinned and never used as success proof '+stage,t=>{
+  const f=fixture(t),originalSync=fs.fsyncSync,originalWrite=fs.writeFileSync;
+  const isVerified=fd=>typeof fd==='number'&&fs.readlinkSync('/proc/self/fd/'+fd).includes('.json.verified.json.');
+  if(stage==='fsync')fs.fsyncSync=fd=>{if(isVerified(fd))throw Error('synthetic fsync');return originalSync(fd);};
+  else fs.writeFileSync=(fd,data,...args)=>{if(isVerified(fd)){
+    const raw=Buffer.from(data),cut=raw.indexOf(Buffer.from('·'))+1;originalWrite(fd,raw.subarray(0,Math.max(1,cut)));throw Error('synthetic partial write');
+  }return originalWrite(fd,data,...args);};
+  try{assert.throws(()=>f.bridge.handle(f.input(true)));}finally{fs.fsyncSync=originalSync;fs.writeFileSync=originalWrite;}
+  const name=fs.readdirSync(f.root).find(n=>n.includes('.json.verified.json.')&&n.endsWith('.tmp')),file=path.join(f.root,name),old=fs.readFileSync(file);
+  assert.equal(journal(f).batches[batchId].next,0);f.restart();const q=f.input(true);
+  assert.equal(f.bridge.handle(q).next,1);assert.deepEqual(fs.readFileSync(file),old);
+  const ref=journal(f).batches[batchId].ackRecoveries[0];assert.equal(ref.temporaryReceipts[0].sha256,hash(old));
+  assert.equal(f.bridge.handle(f.continuation(f.bridge.handle({action:'case_recovery_status',batchId}).restoration)).status,'READY');
+});
+test('contradictory temporary verified bytes are refused without deleting them',t=>{
+  const f=fixture(t),sync=fs.fsyncSync;
+  fs.fsyncSync=fd=>{if(fs.readlinkSync('/proc/self/fd/'+fd).includes('.json.verified.json.'))throw Error('synthetic fsync');return sync(fd);};
+  try{assert.throws(()=>f.bridge.handle(f.input(true)));}finally{fs.fsyncSync=sync;}
+  const name=fs.readdirSync(f.root).find(n=>n.includes('.json.verified.json.')&&n.endsWith('.tmp'));
+  fs.appendFileSync(path.join(f.root,name),Buffer.from([255]));f.restart();unchanged(f,f.input(true),'CASE_ACK_TEMPORARY');
+});
 const createRunner=vm.runInNewContext(fs.readFileSync(path.join(__dirname,'runner.js'),'utf8'),{setTimeout:fn=>setTimeout(fn,0)});
 function transport(f,{loseRecoveryReply=false,ownerFault}={}){
   const pages=new Map([[A,after(A)],[B,before(B)]]),events=[];let writes=0,sequence=0;

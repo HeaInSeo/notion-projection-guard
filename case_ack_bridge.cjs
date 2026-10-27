@@ -70,25 +70,48 @@ function createBridge({readOnly=true}={}){
       return fingerprint;
     });
   }
-  function inventory(batch,pending){
+  const temporaryPattern=index=>new RegExp('^'+prefix+'-'+index+'\\.json\\.verified\\.json\\.[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}\\.tmp$');
+  function temporaryEvidence(evidence,verified,index){
+    need(Array.isArray(evidence),'CASE_ACK_TEMPORARY');
+    const expected=Buffer.from(JSON.stringify(verified));
+    for(const item of evidence){
+      need(typeof item.name==='string'&&temporaryPattern(index).test(item.name),'CASE_ACK_TEMPORARY');
+      const file=path.join(b.root,item.name);bytes(file);
+      const raw=fs.readFileSync(file);
+      need(raw.length===item.size&&hash(raw)===item.sha256&&raw.length<=expected.length&&
+        raw.equals(expected.subarray(0,raw.length)),'CASE_ACK_TEMPORARY');
+    }
+  }
+  function inventory(batch,pending,expectedTemporary=null){
     const allowed=new Set();for(let i=0;i<batch.next+(pending?1:0);i++){
       allowed.add(prefix+'-'+i+'.json');allowed.add(prefix+'-'+i+'.json.verified.json');
     }
-    for(const name of fs.readdirSync(b.root))if(name.startsWith(prefix+'-'))
-      need(allowed.has(name),'CASE_ACK_ORPHAN','Unexpected or contradictory page evidence');
+    for(const ref of batch.ackRecoveries??[]){
+      const saved=read(auditFile(ref.index));temporaryEvidence(ref.temporaryReceipts??[],saved.verified,ref.index);
+      for(const item of ref.temporaryReceipts??[])allowed.add(item.name);
+    }
+    const found=[],pattern=temporaryPattern(batch.next);
+    for(const name of fs.readdirSync(b.root))if(name.startsWith(prefix+'-')&&!allowed.has(name)){
+      need(pending&&expectedTemporary&&pattern.test(name),'CASE_ACK_ORPHAN','Unexpected or contradictory page evidence');
+      const file=path.join(b.root,name);bytes(file);const raw=fs.readFileSync(file);
+      found.push({name,size:raw.length,sha256:hash(raw)});
+    }
+    found.sort((a,b)=>a.name.localeCompare(b.name));
+    if(found.length)temporaryEvidence(found,expectedTemporary,batch.next);
+    return found;
   }
   function fullPage(value,id,expected){
     need(value&&JSON.stringify(pageData(value.raw,id))===JSON.stringify(value)&&
       value.body===expected.body&&value.properties===expected.properties&&value.revision===expected.revision,'CASE_ACK_AUDIT');
   }
-  function recoveredState(record,recordHash){
+  function recoveredState(record,recordHash,temporaryReceipts=[]){
     const next=clone(record.journalBefore),out=next.batches[CONFIG.batchId],a=record.audit,index=a.index;
     need(a.kind==='SCOPED_CASE_SAVED_ACK_VERIFICATION'&&a.caseId===CONFIG.caseId&&a.batchId===CONFIG.batchId&&
       a.planHash===CONFIG.planHash&&out?.next===index&&out.receipt?.ticket===a.ticket&&
       hash(JSON.stringify(record.journalBefore))===a.journalHash,'CASE_ACK_AUDIT');
     out.verifications=[...(out.verifications??[]),{index,snapshotHash:a.snapshotHash,verifiedHash:hash(JSON.stringify(record.verified))}];
     out.reconciliations=[...(out.reconciliations??[]),a];
-    out.ackRecoveries=[...(out.ackRecoveries??[]),{index,recordHash}];
+    out.ackRecoveries=[...(out.ackRecoveries??[]),{index,recordHash,...(temporaryReceipts.length?{temporaryReceipts}:{} )}];
     out.next++;out.receipt=null;out.status=out.next===out.edits.length?'COMPLETED':'READY';
     out.dispatch.phase=out.status==='COMPLETED'?'VERIFIED':'VERIFIED_STOPPED';
     if(out.status==='COMPLETED')next.active=null;
@@ -100,6 +123,7 @@ function createBridge({readOnly=true}={}){
     for(const ref of refs){
       const raw=bytes(auditFile(ref.index));need(hash(raw)===ref.recordHash,'CASE_ACK_AUDIT');
       const saved=JSON.parse(raw),a=saved.audit,original=saved.journalBefore?.batches?.[CONFIG.batchId];
+      temporaryEvidence(ref.temporaryReceipts??[],saved.verified,ref.index);
       need(Number.isInteger(ref.index)&&ref.index>=0&&ref.index<x.next&&a?.index===ref.index&&
         a.kind==='SCOPED_CASE_SAVED_ACK_VERIFICATION'&&a.batchId===CONFIG.batchId&&a.planHash===CONFIG.planHash&&
         original?.next===ref.index&&hash(JSON.stringify(saved.journalBefore))===a.journalHash&&
@@ -110,11 +134,23 @@ function createBridge({readOnly=true}={}){
       need(JSON.stringify(verified)===JSON.stringify(saved.verified)&&s.ticket===a.ticket,'CASE_ACK_AUDIT');
       b.verifiedFingerprint(s,verified,x,ref.index);
     }
+    const continuations=x.caseContinuations??[];
+    need(new Set(continuations.map(v=>v.executor)).size===continuations.length&&
+      continuations.length===(x.reconciliations??[]).filter(v=>v.kind==='SCOPED_CASE_VERIFIED_CONTINUATION').length,'CASE_ACK_AUDIT');
+    for(const ref of continuations){
+      const matches=x.reconciliations.filter(v=>v.kind==='SCOPED_CASE_VERIFIED_CONTINUATION'&&v.newExecutor===ref.executor);
+      need(matches.length===1,'CASE_ACK_AUDIT');const a=matches[0];
+      const file=path.join(b.root,prefix+'.verified-continuation-'+a.journalHash+'-'+a.newExecutor+'.json'),raw=bytes(file),intent=JSON.parse(raw);
+      need(hash(raw)===ref.recordHash&&JSON.stringify(intent.audit)===JSON.stringify(a)&&
+        hash(JSON.stringify(intent.journalBefore))===a.journalHash,'CASE_ACK_AUDIT');
+      committedRecovery(a.index-1,intent.journalBefore);
+    }
   }
-  function committedRecovery(index){
-    const x=b.state.batches[CONFIG.batchId],refs=x.ackRecoveries?.filter(v=>v.index===index),file=auditFile(index),raw=bytes(file);
+  function committedRecovery(index,state=b.state){
+    const x=state.batches[CONFIG.batchId],refs=x.ackRecoveries?.filter(v=>v.index===index),file=auditFile(index),raw=bytes(file);
     need(refs?.length===1&&refs[0].recordHash===hash(raw),'CASE_ACK_AUDIT');
-    const saved=JSON.parse(raw),projected=recoveredState(saved,hash(raw)),out=projected.batches[CONFIG.batchId];
+    const saved=JSON.parse(raw);temporaryEvidence(refs[0].temporaryReceipts??[],saved.verified,index);
+    const projected=recoveredState(saved,hash(raw),refs[0].temporaryReceipts??[]),out=projected.batches[CONFIG.batchId];
     // Reconstruct the only permitted changes since the pinned recovery record.
     // Re-hashing a modified live journal must never make it valid evidence.
     const suffix=(x.reconciliations??[]).slice(out.reconciliations.length);
@@ -128,7 +164,7 @@ function createBridge({readOnly=true}={}){
       out.reconciliations=[...out.reconciliations,a];
       out.caseContinuations=[...(out.caseContinuations??[]),{recordHash:hash(intent),executor:a.newExecutor}];
     }
-    need(JSON.stringify(projected)===JSON.stringify(b.state),'CASE_ACK_AUDIT','Canonical state differs from the saved ACK recovery and committed continuation records');
+    need(JSON.stringify(projected)===JSON.stringify(state),'CASE_ACK_AUDIT','Canonical state differs from the saved ACK recovery and committed continuation records');
     return {saved,recordHash:hash(raw)};
   }
   function reconcile(input){
@@ -154,7 +190,7 @@ function createBridge({readOnly=true}={}){
       // The pinned owner factory bounds send authority to 15s from its return
       // and 30s from that source read; historical permit span may exceed 15s.
       Date.parse(permit.validUntil)-Date.parse(permit.observedAt)<=30000,'CASE_ACK_ATTRIBUTION');
-    inventory(x,true);const receipts=prior(x,input.priorPages),page=pageData(input.page,s.edit.pageId);
+    const receipts=prior(x,input.priorPages),page=pageData(input.page,s.edit.pageId);
     need(page.body===s.expected&&page.properties===s.page.properties&&Date.parse(page.revision)>Date.parse(s.page.revision),
       'CASE_ACK_CHANGED','Entire expected output, unchanged properties and a later revision required');
     const file=auditFile(index),saved=fs.existsSync(file)?read(file):null;
@@ -166,7 +202,7 @@ function createBridge({readOnly=true}={}){
     if(saved){
       fullPage(saved.freshPage,s.edit.pageId,page);
       fullPage(saved.verified?.page,s.edit.pageId,page);
-      need(saved.verified.bodyHash===hash(page.body)&&stamp(saved.verified.at),'CASE_ACK_AUDIT');
+      need(saved.verified.bodyHash===hash(page.body)&&stamp(saved.verified.at)&&saved.verified.at===saved.audit.at,'CASE_ACK_AUDIT');
     }
     const audit={kind:'SCOPED_CASE_SAVED_ACK_VERIFICATION',at:saved?.audit.at??existing?.at??new Date().toISOString(),
       caseId:CONFIG.caseId,batchId:CONFIG.batchId,planHash:CONFIG.planHash,index,ticket:s.ticket,
@@ -179,11 +215,13 @@ function createBridge({readOnly=true}={}){
     const verified=existing??saved?.verified??{page,bodyHash:audit.bodyHash,at:audit.at};
     const record={audit,journalBefore:JSON.parse(raw),freshPage:saved?.freshPage??page,verified};
     if(saved)need(JSON.stringify(saved)===JSON.stringify(record),'CASE_ACK_AUDIT');
-    if(!input.apply)return {checkOnly:true,status:x.status,next:index,audit};
+    const temporaryReceipts=inventory(x,true,saved?.verified??null);
+    if(!input.apply)return {checkOnly:true,status:x.status,next:index,audit,temporaryReceipts};
     b.assertLock();pins();need(bytes(b.file)===raw,'PERSISTENCE');
     if(!saved)atomic(file,record); // Audit, then receipt, then canonical progress.
     if(!existing)atomic(verifiedFile,verified);
-    const next=recoveredState(record,hash(bytes(file))),out=next.batches[CONFIG.batchId];
+    temporaryEvidence(temporaryReceipts,verified,index);
+    const next=recoveredState(record,hash(bytes(file)),temporaryReceipts),out=next.batches[CONFIG.batchId];
     // Preserve the original failure verbatim; this is verified application of
     // this successor page, never proof of non-application of the original case.
     need(bytes(b.file)===raw,'PERSISTENCE');atomic(b.file,next);b.state=read(b.file);

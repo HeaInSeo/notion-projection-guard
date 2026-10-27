@@ -59,6 +59,8 @@ explicit operating approval, not this helper.
    ticket, request hash, original failure or record is refused rather than given
    a newly trusted journal hash. Saved full-page evidence is also checked after
    an interrupted commit, including raw/body/property/revision consistency.
+   Committed continuation records and their digests stay required after later
+   ordinary page progress; a missing or changed intent also blocks a later ACK recovery.
    Do not resend the missing mutation/recovery request as a polling technique.
 5. `continueVerifiedCase(batchId, planHash, restoration)` is a separate deliberate
    invocation. It freshly checks all prior receipts/pages and remaining preflight
@@ -76,6 +78,13 @@ continuation save preserves its uncommitted intent; a new locked process may
 explicitly adopt only the still-unprepared next index after all checks, with a new
 intent. Never delete either audit to retry, edit the journal, reset state, clear
 the original error, acknowledge an uncertain send or automatically roll back data.
+If receipt write/fsync fails before rename, only an owned private temporary file
+with the exact current ticket-index name and a UUIDv4 suffix may be retained as
+an incomplete write. Its bytes must be an exact UTF-8 byte prefix of the verified
+receipt already present in the immutable audit. No audit, different bytes or
+another index rejects it. The original file stays in place; its size and digest
+are linked to canonical recovery progress and checked again later. It never
+becomes the verified receipt or independent proof of successful application.
 This helper is not a recovery for every possible failure phase. A different
 phase/error, prepared future ticket, changed source/data or uncertain send stops
 at that exact point for a scoped decision; no fallback resend is available.
