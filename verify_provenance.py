@@ -47,8 +47,8 @@ FINDING = "https://github.com/HeaInSeo/notion-projection-guard/pull/1#discussion
 # Reviewed operational source updates are separate from the immutable import
 # and correction commit. Never obtain these pins from a mutable manifest.
 SOURCE_UPDATES = {
-    "test_case_ack_bridge.cjs": "f6487afa54cc6f0f879dd9c1b232e31808088d29",
-    "case_ack_bridge.cjs": "c257b8afe5a2fae8c272781075873c27e7db5c74",
+    "test_case_ack_bridge.cjs": "7e03c5fe247fe553059378533ed457c408ffad6f",
+    "case_ack_bridge.cjs": "e5a889ac2dc428759623e7b29ccf244bc7e35f75",
     "test-fixtures/case_mcp_stub.cjs": "b57e2bd4ead7d83d47d2cefa552da4fb1796541b",
     "test_case_exception.cjs": "5d6cde3738513d3aab987b721721e8b570ea682d",
     "recover_exception.cjs": "77266614a91d5c9779ebe72ab129dfb38b89055a",
@@ -67,7 +67,7 @@ SOURCE_UPDATES = {
     "transport_preprepare_cases.cjs": "4f1737873592c57e07f1dd1a676587319ae1182b",
     "router_stale_prewrite_cases.cjs": "6914f417d20f590c12c7ffaf1b2df122cefc5dd5",
     "broker.cjs": "fc3eb87b17c5a0f6808e558d1e0c694ded092894",
-    "runner.js": "fd90a2d12ad222aaebdc2e033fc2d2fef4d7228f",
+    "runner.js": "ed85b27bc194e3d52df8f6a882279198716dda5a",
     "test_guard.cjs": "79fafd8a8a2062d7e3064842bb06d002956138ab",
     "reconcile_claim40_superseded.cjs": "562fa5e9988cfc2f7d73e4c46f035f9e89830678",
     "claim40_closure_cases.cjs": "c7b5973e74bd3a75b46cacc770e984bf0c1ae5ce",

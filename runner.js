@@ -4,7 +4,8 @@
   const deviceId = config.deviceId;
   const command = config.command;
   const metadataActions=new Set(['case_authority','validate_owner_proof','fence_confirm_send',
-    'close','fence_ack','fence_observe','fence_halt']);
+    'close','fence_ack','fence_observe','fence_halt','case_consume_input','case_consume_live','case_live_send',
+    'case_live_admit','case_consume_live_release','case_admin_authority']);
   let pid, sequence = 0, closed = false;
   function textOf(result) { return (result?.content ?? []).filter(x => x.type === 'text').map(x => x.text).join('\n'); }
   async function settled(value) {
@@ -166,6 +167,24 @@
     return await broker({action:'validate_owner_proof',batchId,
       ownerProof:await ownership(phase,batchId),binding});
   }
+  async function ownedPage(request,phase) {
+    if(config.casePageStaging===true) {
+      if(config.caseAckBridge!==true)throw new Error('EXPLICIT_CASE_ACK_BRIDGE_REQUIRED');
+      // Transfer the immutable full input before observing the short-lived
+      // authority. The stage is process-local data, never a write permit.
+      const staged=await broker({action:'case_stage_input',batchId:request.batchId,operation:request});
+      if(config.caseLiveOwnership===true) {
+        if(typeof config.collectLiveOwnership!=='function')throw new Error('LIVE_OWNERSHIP_CAPABILITY_REQUIRED');
+        return await broker({action:'case_consume_live',batchId:request.batchId,
+          stageId:staged.stageId,inputHash:staged.inputHash,
+          liveSource:await config.collectLiveOwnership({phase,batchId:request.batchId})});
+      }
+      return await broker({action:'case_consume_input',batchId:request.batchId,
+        stageId:staged.stageId,inputHash:staged.inputHash,
+        ownerProof:await ownership(phase,request.batchId)});
+    }
+    return await broker({...request,ownerProof:await ownership(phase,request.batchId)});
+  }
   async function fencedPages(live,edits,next,firstReceipt=null) {
     const receipts=[],batchId=live.batchId;
     for(let index=next;index<edits.length;index++) {
@@ -173,20 +192,20 @@
         let prepared=firstReceipt&&index===next?firstReceipt:null;
         if(!prepared) {
           const preparePage=await fetchPage(edit.pageId,'prepare');
-          prepared=await broker({...live,action:'fence_prepare',
-            ownerProof:await ownership('prepare',batchId),page:preparePage});
+          prepared=await ownedPage({...live,action:'fence_prepare',page:preparePage},'prepare');
         }
         live.ticket=prepared.ticket;
         const authorizePage=await fetchPage(edit.pageId,'authorize');
-        await broker({...live,action:'fence_authorize',ticket:live.ticket,
-          ownerProof:await ownership('authorize',batchId),page:authorizePage});
+        await ownedPage({...live,action:'fence_authorize',ticket:live.ticket,page:authorizePage},'authorize');
         // Authorization exports no request. The final source check and fresh
         // page still run before the durable SEND_INTENT/export boundary.
         const dispatchPage=await fetchPage(edit.pageId,'dispatch');
-        const dispatch=await broker({...live,action:'fence_dispatch',ticket:live.ticket,
-          ownerProof:await ownership('dispatch',batchId),page:dispatchPage});
+        const dispatch=await ownedPage({...live,action:'fence_dispatch',ticket:live.ticket,page:dispatchPage},'dispatch');
         live.dispatchId=dispatch.dispatchId;
-        const confirmed=await broker({...live,action:'fence_confirm_send',ownerProof:await ownership('send',batchId)});
+        const confirmed=config.caseLiveOwnership===true
+          ?await broker({action:'case_live_send',batchId,operation:{...live,action:'fence_confirm_send'},
+            liveSource:await config.collectLiveOwnership({phase:'send',batchId})})
+          :await broker({...live,action:'fence_confirm_send',ownerProof:await ownership('send',batchId)});
         const sent=await update(dispatch.request,provider=>broker({...live,action:'fence_observe',provider}),confirmed.permit,live);
         await broker({...live,action:'fence_ack',provider:sent.provider});
         let verified;
@@ -258,10 +277,10 @@
       for(let index=0;index<batch.next;index++)priorPages.push(await fetchPage(batch.edits[index].pageId,'ack-prior'));
       const page=await fetchPage(batch.edits[batch.next].pageId,'ack-full-readback');
       // No update, ACK or ordinary resume is called here, even on a lost reply.
-      return await broker({action:'case_reconcile_acknowledged',batchId,planHash:expectedPlanHash,apply,
+      return await ownedPage({action:'case_reconcile_acknowledged',batchId,planHash:expectedPlanHash,apply,
         journalHash:state.journalHash,expectedError:batch.error,ticket:batch.receipt.ticket,
         snapshotHash:batch.receipt.snapshotHash,dispatchId:batch.dispatch?.attempts?.at(-1)?.dispatchId,
-        priorPages,page,ownerProof:await ownership('ack-reconciliation',batchId)});
+        priorPages,page},'ack-reconciliation');
     } finally {await close();}
   }
   async function continueVerifiedCase(batchId, expectedPlanHash, restoration) {
@@ -276,10 +295,29 @@
         const page=await fetchPage(batch.edits[index].pageId,'verified-continuation');
         (index<batch.next?priorPages:remainingPages).push(page);
       }
-      const adopted=await broker({action:'case_continue_verified',batchId,planHash:expectedPlanHash,
-        journalHash:state.journalHash,restoration,priorPages,remainingPages,
-        ownerProof:await ownership('verified-continuation',batchId)});
+      const adopted=await ownedPage({action:'case_continue_verified',batchId,planHash:expectedPlanHash,
+        journalHash:state.journalHash,restoration,priorPages,remainingPages},'verified-continuation');
       live={batchId,planHash:adopted.planHash,executor:adopted.executor};
+      const receipts=await fencedPages(live,batch.edits,adopted.next);
+      return {status:'COMPLETED',resumed:true,receipts,readDiagnostics};
+    } catch(error) {
+      if(live)try{await broker({...live,action:'fence_halt',reason:error.message,readDetail:error.readDetail});}catch{}
+      throw error;
+    } finally {await close();}
+  }
+  async function resumeCaseUnprepared(batchId,expectedPlanHash,apply=false) {
+    let live=null;
+    try {
+      if(config.caseAckBridge!==true||config.casePageStaging!==true||typeof apply!=='boolean')
+        throw new Error('EXPLICIT_CASE_UNPREPARED_RECOVERY_REQUIRED');
+      const state=await broker({action:'case_recovery_status',batchId}),batch=state.batches?.[batchId];
+      if(state.active!==batchId||batch?.planHash!==expectedPlanHash)throw new Error('RECONCILE_IDENTITY');
+      const pages=[];
+      for(const edit of batch.edits)pages.push(await fetchPage(edit.pageId,'case-unprepared'));
+      const adopted=await ownedPage({action:'case_restore_unprepared',batchId,planHash:expectedPlanHash,
+        journalHash:state.journalHash,expectedError:batch.error,pages,apply},'case-unprepared');
+      if(!apply)return adopted;
+      live={batchId,executor:adopted.executor,planHash:adopted.planHash};
       const receipts=await fencedPages(live,batch.edits,adopted.next);
       return {status:'COMPLETED',resumed:true,receipts,readDiagnostics};
     } catch(error) {
@@ -321,5 +359,5 @@
         page });
     } finally { await close(); }
   }
-  return { run, resume, resumeUnprepared, reconcileAutolink, reconcileAcknowledged, continueVerifiedCase, broker, close };
+  return { run, resume, resumeUnprepared, resumeCaseUnprepared, reconcileAutolink, reconcileAcknowledged, continueVerifiedCase, broker, close };
 })
