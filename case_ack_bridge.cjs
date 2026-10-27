@@ -6,6 +6,12 @@ const fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypt
 const CONFIG={root:'/home/heain/.local/state/notion-projection-guard',runtime:'/home/heain/.local/share/notion-projection-guard',
   caseId:'SORI-ADMIN-ADMIT-20261026-6c2a084f-OWNERSHIP',batchId:'SORI-CASE-CB729C5-ADMISSION-20261027',
   planHash:'a2f8d657dc45154aaee6441b51fd0f6629903a66f86db2ba3a0d640314314eea',
+  initialJournalHash:'5fbe608bcdaec9cb60c95c3559787dce3e4a3beba38749149e4a1be4a62f3dd5',
+  initialExecutorHash:'0648a69845e5c55b6a67236846d0d92199b1f24f0bfc0349391d6f5a8f48db10',
+  preimages:[
+    ['3bf86e6dd1d18110938bc358e17c779e','ae543e858db2861344679330bcfcb13518869c21cb40defe6fb03ca5b60dbe68','8aebc7243e0302fa640e6b9940334062747f5884948c8df75eb503df61fd66ab','2026-10-25T19:57:04.822Z'],
+    ['3f586e6dd1d181ebb43dd7de62aa2ca4','0aac07bb6d92a4c37ddefa66f3d01f2177110c112dea50e6e56082f901eb5a25','9d04c6c01db0369aa70f9f6a9013b64d34ffb9108cfed18131553123e8dbcfa9','2026-10-25T19:53:02.734Z'],
+    ['3b286e6dd1d1817aa093fca807659f07','d8e3eeea723b56c19b87317dde99abb5674f4b388d07c0e19eecbf30fec66e0a','3c0d97a8eebc20b18daca05d63bafc3816fcdb805bfe44678d2f56c54bac4463','2026-10-25T21:22:17.343Z']],
   installedHead:'cb729c57093c7bbea27139e7e4be130a0fe8e064',pins:{
     'broker.cjs':'e03728e3a66c9ad479738491346592b9478e4f10f4fc24b7ef03f99f4879e05d',
     'runner.js':'e37d7675e5d2645764421bb1877ddf4c9aeba8ae5d0b2bab1c568059c6c4148f',
@@ -32,6 +38,9 @@ function createBridge({readOnly=true}={}){
   const control=require(path.join(CONFIG.runtime,'case_exception.cjs'));
   const b=new Broker(CONFIG.root,JSON.parse(bytes(path.join(CONFIG.runtime,'policy.json'),false)),{existingOnly:true,readOnly});
   const prefix=hash(CONFIG.batchId),auditFile=index=>path.join(CONFIG.root,prefix+'.ack-recovery-'+index+'.json');
+  let staged=null;
+  const stagedActions=new Set(['fence_prepare','fence_authorize','fence_dispatch',
+    'case_reconcile_acknowledged','case_continue_verified','case_restore_unprepared']);
   function scope(){
     pins();const m=control.validateControl(b.root,b.state),c=b.state.caseExceptionControl;
     need(c?.batchId===CONFIG.caseId&&c.exclusive===true&&c.admission===null&&
@@ -118,6 +127,7 @@ function createBridge({readOnly=true}={}){
     return next;
   }
   function history(x){
+    unpreparedHistory(x);
     const refs=x.ackRecoveries??[];
     need(new Set(refs.map(v=>v.index)).size===refs.length,'CASE_ACK_AUDIT');
     for(const ref of refs){
@@ -255,9 +265,102 @@ function createBridge({readOnly=true}={}){
     pins();need(bytes(b.file)===raw,'PERSISTENCE');atomic(b.file,next);b.state=read(b.file);
     return {status:'READY',next:out.next,executor:b.executor,planHash:out.planHash};
   }
+  function unsent(x,checkInventory=true){
+    need(x.next===0&&x.receipt===null&&x.dispatch?.version===1&&x.dispatch.phase==='UNSENT'&&
+      x.dispatch.attempts.length===0&&!x.dispatch.revoked&&!x.dispatch.provider&&
+      !(x.verifications?.length)&&!(x.ackRecoveries?.length),'CASE_UNPREPARED_SEND_UNCERTAIN');
+    if(checkInventory)inventory(x,false);
+  }
+  function preimages(pages,edits){
+    need(Array.isArray(pages)&&pages.length===CONFIG.preimages.length&&pages.length===edits.length,'CASE_UNPREPARED_PAGES');
+    return pages.map((raw,index)=>{
+      const [id,bodyHash,propertiesHash,revision]=CONFIG.preimages[index],p=pageData(raw,id);
+      need(edits[index].pageId===id&&hash(p.body)===bodyHash&&hash(p.properties)===propertiesHash&&
+        p.revision===revision,'CASE_UNPREPARED_CHANGED');
+      return p;
+    });
+  }
+  function unpreparedHistory(x){
+    const refs=x.unpreparedContinuations??[],events=(x.reconciliations??[]).filter(v=>v.kind==='SCOPED_CASE_UNPREPARED_CONTINUATION');
+    need(refs.length===events.length&&new Set(refs.map(v=>v.executor)).size===refs.length,'CASE_UNPREPARED_AUDIT');
+    for(const [index,ref] of refs.entries()){
+      const a=events[index];
+      need(a&&a.newExecutor===ref.executor&&a.batchId===CONFIG.batchId&&a.planHash===CONFIG.planHash&&
+        /^[a-f0-9]{64}$/.test(a.journalHash)&&/^[a-f0-9-]{36}$/.test(a.newExecutor),'CASE_UNPREPARED_AUDIT');
+      const file=path.join(b.root,prefix+'.unprepared-continuation-'+a.journalHash+'-'+a.newExecutor+'.json'),raw=bytes(file),record=JSON.parse(raw);
+      need(hash(raw)===ref.recordHash&&JSON.stringify(record.audit)===JSON.stringify(a)&&
+        hash(JSON.stringify(record.journalBefore))===a.journalHash&&a.notionWrites===0&&
+        a.ticketsCreated===0&&a.pageAdvances===0,'CASE_UNPREPARED_AUDIT');
+      const old=record.journalBefore.batches[CONFIG.batchId];unsent(old,false);
+      need(old.error==='OWNERSHIP_FENCE: Fresh same-generation scoped ownership and all prerequisites required'&&
+        old.haltedFrom==='READY'&&JSON.stringify(old.edits)===JSON.stringify(x.edits)&&a.oldExecutor===old.dispatch.executor&&
+        JSON.stringify(old.unpreparedContinuations??[])===JSON.stringify(refs.slice(0,index))&&
+        JSON.stringify((old.reconciliations??[]).filter(v=>v.kind===a.kind))===JSON.stringify(events.slice(0,index)),
+        'CASE_UNPREPARED_AUDIT');
+      preimages(record.pages.map(p=>p.raw),old.edits);
+      record.pages.forEach((p,i)=>need(JSON.stringify(pageData(p.raw,old.edits[i].pageId))===JSON.stringify(p),'CASE_UNPREPARED_AUDIT'));
+    }
+    // The exact zero-history executor and first halted preimage are fixed for
+    // this incident. A later HALT cannot impersonate the initial entry after
+    // removal of all adoption references, events and files.
+    let tip=CONFIG.initialExecutorHash;
+    for(const a of x.reconciliations??[]){
+      if(a.kind==='SCOPED_CASE_UNPREPARED_CONTINUATION'||a.kind==='SCOPED_CASE_VERIFIED_CONTINUATION'){
+        need(hash(a.oldExecutor??'')===tip,'CASE_UNPREPARED_AUDIT');
+        if(a.kind==='SCOPED_CASE_VERIFIED_CONTINUATION'){
+          const matches=(x.caseContinuations??[]).filter(v=>v.executor===a.newExecutor);
+          const file=path.join(b.root,prefix+'.verified-continuation-'+a.journalHash+'-'+a.newExecutor+'.json'),raw=bytes(file),record=JSON.parse(raw);
+          need(matches.length===1&&hash(raw)===matches[0].recordHash&&JSON.stringify(record.audit)===JSON.stringify(a)&&
+            hash(JSON.stringify(record.journalBefore))===a.journalHash,'CASE_UNPREPARED_AUDIT');
+        }
+        tip=hash(a.newExecutor??'');
+      }else if(a.kind==='SCOPED_CASE_SAVED_ACK_VERIFICATION')need(hash(a.oldExecutor??'')===tip,'CASE_UNPREPARED_AUDIT');
+    }
+    need(hash(x.dispatch.executor)===tip,'CASE_UNPREPARED_AUDIT');
+    if(refs.length===0&&x.next===0&&x.receipt===null&&x.dispatch.phase==='UNSENT')
+      need(hash(bytes(b.file))===CONFIG.initialJournalHash,'CASE_UNPREPARED_AUDIT');
+  }
+  function restoreUnprepared(input){
+    need(typeof input.apply==='boolean'&&(!readOnly||!input.apply),'READ_ONLY');
+    const {raw,batch:x}=current(input);unsent(x);unpreparedHistory(x);
+    need(input.expectedError===x.error&&x.error==='OWNERSHIP_FENCE: Fresh same-generation scoped ownership and all prerequisites required'&&
+      x.haltedFrom==='READY'&&((x.status==='HALTED'&&x.dispatch.failure?.phase==='UNSENT')||
+      (x.status==='READY'&&x.unpreparedContinuations?.length>0&&x.dispatch.executor!==b.executor)),
+      'CASE_UNPREPARED_IDENTITY');
+    const pages=preimages(input.pages,x.edits);
+    const audit={kind:'SCOPED_CASE_UNPREPARED_CONTINUATION',at:new Date().toISOString(),batchId:CONFIG.batchId,
+      planHash:CONFIG.planHash,journalHash:hash(raw),oldExecutor:x.dispatch.executor,newExecutor:b.executor,
+      owner:clone(input.ownerProof),notionWrites:0,ticketsCreated:0,pageAdvances:0};
+    if(!input.apply)return {checkOnly:true,status:x.status,next:0,audit};
+    const file=path.join(b.root,prefix+'.unprepared-continuation-'+hash(raw)+'-'+b.executor+'.json');
+    need(!fs.existsSync(file),'CASE_UNPREPARED_AUDIT');
+    const record={audit,journalBefore:JSON.parse(raw),pages};atomic(file,record);
+    const next=JSON.parse(raw),out=next.batches[CONFIG.batchId];
+    out.status='READY';out.dispatch.executor=b.executor;out.dispatch.owner=clone(input.ownerProof);
+    out.reconciliations=[...(out.reconciliations??[]),audit];
+    out.unpreparedContinuations=[...(out.unpreparedContinuations??[]),{executor:b.executor,recordHash:hash(bytes(file))}];
+    pins();need(bytes(b.file)===raw,'PERSISTENCE');atomic(b.file,next);b.state=read(b.file);
+    return {status:'READY',next:0,executor:b.executor,planHash:out.planHash,notionWrites:0};
+  }
   function handle(input){
     if(input.action==='close')return b.handle(input);
     scope();
+    if(b.state.batches[CONFIG.batchId])unpreparedHistory(b.state.batches[CONFIG.batchId]);
+    if(input.action==='case_stage_input'){
+      need(input.batchId===CONFIG.batchId&&input.operation?.batchId===CONFIG.batchId&&
+        stagedActions.has(input.operation.action)&&!Object.hasOwn(input.operation,'ownerProof')&&!staged,'CASE_STAGE_INPUT');
+      const operation=clone(input.operation),stageId=crypto.randomUUID(),inputHash=hash(JSON.stringify(operation));
+      staged={stageId,inputHash,operation,executor:b.executor};
+      return {stageId,inputHash};
+    }
+    if(input.action==='case_consume_input'){
+      need(input.batchId===CONFIG.batchId&&staged&&input.stageId===staged.stageId&&input.inputHash===staged.inputHash&&
+        staged.executor===b.executor,'CASE_STAGE_IDENTITY');
+      const operation=staged.operation;staged=null;
+      // Consume exactly once and run the original action's fresh owner and
+      // snapshot checks synchronously. Staging itself grants no authority.
+      return handle({...operation,ownerProof:input.ownerProof});
+    }
     if(input.action==='case_recovery_status'){
       need(input.batchId===CONFIG.batchId,'CASE_ACK_SCOPE');
       const raw=bytes(b.file);need(raw===JSON.stringify(b.state),'PERSISTENCE');
@@ -273,6 +376,7 @@ function createBridge({readOnly=true}={}){
     }
     if(input.action==='case_reconcile_acknowledged')return reconcile(input);
     if(input.action==='case_continue_verified')return continueVerified(input);
+    if(input.action==='case_restore_unprepared')return restoreUnprepared(input);
     if(readOnly)need(['status','case_authority','validate_owner_proof','validate_batch','preflight'].includes(input.action),'READ_ONLY');
     need(['case_authority','validate_owner_proof'].includes(input.action)||input.batchId===CONFIG.batchId,'CASE_ACK_SCOPE');
     need(['status','case_authority','validate_owner_proof','validate_batch','preflight','fence_begin',

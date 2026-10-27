@@ -69,6 +69,37 @@ explicit operating approval, not this helper.
    Completed tickets are never reused. No grant is created by a matching page or
    the restoration receipt alone.
 
+## Unprepared successor and staged full inputs
+
+The second, separate path handles only this successor halted from READY at index
+zero with no receipt/ticket, an empty UNSENT attempt list and the exact
+`OWNERSHIP_FENCE` failure. It requires the three fixed complete preimages,
+including properties and revision. Any prepared ticket or attempted export
+rejects this path. The original uncertain incident is not its input.
+
+Use a new runner **and a new prerequisite callback factory for each invocation**,
+with `caseAckBridge: true` and `casePageStaging: true`. Bootstrap references are
+bound to that runner's live broker PID/executor and cannot be shared with a later
+runner. With the real private collector, even semantic check-only uses
+`--stdio --apply` to hold the canonical process lock; its method's `apply: false`
+keeps canonical files and native pages unchanged. Process-level read-only
+(`--stdio` without `--apply`) does not hold the required collector lock.
+
+- `resumeCaseUnprepared(batchId, planHash, false)` checks the exact halted state
+  and all original preimages, without an adoption, ticket or native request.
+- `resumeCaseUnprepared(batchId, planHash, true)` explicitly saves the unprepared
+  adoption audit and **immediately continues normal gated page writes**. It may
+  create tickets and send the planned remaining mutations. This caller differs
+  from ACK reconciliation, whose apply remains zero-native and whose continuation
+  is a separate call. Do not use the `true` method as a status/check-only call.
+
+`ownedPage` transfers a single immutable operation to the current bridge before
+fresh ownership observation. Single-use metadata consumption invokes the pinned
+Broker's unchanged checks synchronously. A stage is no grant and cannot extend
+an expired permit, survive restart, bypass a changed snapshot or authorize send
+confirmation. Lost replies are inspected on the same journal before any explicit
+recovery; no staging token, ticket or uncertain mutation is blindly replayed.
+
 ## Failure handling and actual completion
 
 An audit/receipt/journal save failure leaves the old progress barrier and the
