@@ -133,6 +133,13 @@ status, further recovery and admission. Saved-ACK verification remains a
 separate zero-native recovery if the final send succeeds and verification
 later fails. No original failure or uncertain external request is reclassified.
 
+The installed Broker saves complete verified progress before separately saving
+its dispatch phase. If only that second save fails, `COMPLETED/ACKNOWLEDGED`
+is accepted with active=null, the full final successful attempt/permit/provider
+and all immutable verified fingerprints, including the later final revision.
+It requires no native replay or invented ACK and can use normal admission.
+Missing final attribution still rejects this intermediate commit.
+
 This is new source after the explicitly approved PR14 head. PR14's one-head
 Codex exception is not an approval for this delta or its operation. Review,
 exact-head CI, real MCP check-only/rehearsal and the corresponding operating

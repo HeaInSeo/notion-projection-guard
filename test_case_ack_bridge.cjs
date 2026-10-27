@@ -610,3 +610,15 @@ test('prepared adoption rejects an owner evidence digest that its retained audit
   const f=fixture(t,{index:1,prepared:true}),q=f.preparedInput(true);q.ownerProof.evidenceHash='0'.repeat(64);
   unchanged(f,q,'CASE_PREPARED_OWNER');
 });
+test('final verification second-save failure retains completed attributed progress for normal admission',async t=>{
+  const f=fixture(t,{index:1,prepared:true}),r=f.bridge.handle(f.preparedInput(true)),live=preparedDispatch(f,r,{verify:false});
+  const file=path.join(f.root,'journal.json'),rename=fs.renameSync;let writes=0;
+  fs.renameSync=(a,b)=>{if(b===file&&++writes===2)throw Error('synthetic final phase save');return rename(a,b);};
+  try{assert.throws(()=>f.bridge.handle({...live,action:'fence_verify',page:after(B)}));}finally{fs.renameSync=rename;}
+  f.restart();const s=f.bridge.handle({action:'case_recovery_status',batchId});
+  assert.equal(s.active,null);assert.equal(s.batches[batchId].status,'COMPLETED');assert.equal(s.batches[batchId].dispatch.phase,'ACKNOWLEDGED');
+  liveProvider(f);const root=f.spec.batchId;
+  const admitted=await f.bridge.handle({action:'case_live_admit',batchId:root,operation:{action:'record_case_admission',batchIds:[batchId]},
+    liveSource:{proof:{...f.ownerProof(),scope:root}}});
+  assert.equal(admitted.admitted,true);assert.equal(admitted.workerClaimCreated,false);assert.equal(journal(f).batches[batchId].dispatch.attempts.length,2);
+});

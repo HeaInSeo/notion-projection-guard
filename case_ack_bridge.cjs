@@ -420,7 +420,8 @@ function createBridge({readOnly=true,liveProviderPath,liveProviderHash}={}){
         ['SEND_INTENT','ACKNOWLEDGED'].includes(a.phase),'CASE_PREPARED_AUDIT');
       need(x.next===o.index&&['WRITE_PENDING','HALTED'].includes(x.status)&&
           ['SEND_INTENT','ACKNOWLEDGED'].includes(x.dispatch.phase)&&a.phase===x.dispatch.phase||
-        x.next===o.index+1&&x.status==='COMPLETED'&&x.receipt===null&&x.dispatch.phase==='VERIFIED'&&a.phase==='ACKNOWLEDGED',
+        x.next===o.index+1&&x.status==='COMPLETED'&&x.receipt===null&&b.state.active===null&&
+          ['VERIFIED','ACKNOWLEDGED'].includes(x.dispatch.phase)&&a.phase==='ACKNOWLEDGED',
         'CASE_PREPARED_AUDIT');
       if(permit)need(permit.executor===x.dispatch.executor&&permit.dispatchId===a.dispatchId&&
         permit.pageId===x.edits[o.index].pageId&&permit.ownerId===x.dispatch.owner.ownerId&&
@@ -432,7 +433,9 @@ function createBridge({readOnly=true,liveProviderPath,liveProviderHash}={}){
         a.provider.pageId===x.edits[o.index].pageId&&JSON.stringify(a.provider)===JSON.stringify(x.dispatch.provider),'CASE_PREPARED_AUDIT');
       if(x.next===o.index+1){
         need(x.verifications?.length===o.index+1,'CASE_PREPARED_AUDIT');
-        b.verifiedFingerprint(s,read(b.snapshot(CONFIG.batchId,o.index)+'.verified.json'),x,o.index);
+        const verified=read(b.snapshot(CONFIG.batchId,o.index)+'.verified.json');
+        b.verifiedFingerprint(s,verified,x,o.index);
+        need(stamp(verified.page.revision)&&Date.parse(verified.page.revision)>Date.parse(s.page.revision),'CASE_PREPARED_AUDIT');
       }
     }
   }
