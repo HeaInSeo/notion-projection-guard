@@ -102,6 +102,36 @@ recovery; no staging token, ticket or uncertain mutation is blindly replayed.
 
 ## Failure handling and actual completion
 
+### Actual operating path with local live facts
+
+The real operating collector can also run through an explicitly reviewed,
+owned, hash-pinned private module supplied as `--live-provider PATH
+--live-provider-sha256 SHA256`. These options select only the reviewed proof
+provider; production roots, case, successor, plan and installed pins stay fixed.
+The module is checked before import and on both sides of each awaited call.
+
+Set `caseLiveOwnership: true` and supply `collectLiveOwnership` in addition to
+the two case flags. The approved caller first establishes a full immutable
+authority reference under this broker PID/executor. For every operation it
+fetches and compares all three full current authority pages and observes the
+paused central task's actual terminal run. Those observations travel as data,
+not a grant. After receiving them, the pinned module collects current server
+facts locally, retains the earliest native/central/server observation, and
+immediately executes the ordinary Broker ownership check and operation. This
+removes the grant's extra cloud return trip. All 30-second source and 15-second
+send bounds remain. `case_live_send` invokes only the ordinary single-use send
+confirmation for an already existing dispatch. The caller still performs its
+final synchronous permit check before the actual native tool invocation.
+
+The same locked module can call `case_live_admit` for only the existing completed
+successor's normal `record_case_admission`. After observing the actual worker's
+fresh own CLAIM, `case_stage_release` and `case_consume_live_release` delegate
+only to normal `release_case_owner`; matching bodies or a module response cannot
+replace the genuine-CLAIM/lease checks. These paths do not create worker proof.
+Commands are serialized while live facts are pending. Closing the executor
+prevents any later awaited proof from performing an operation. A stage is
+consumed once even when proof collection fails, and no mutation is retried.
+
 An audit/receipt/journal save failure leaves the old progress barrier and the
 private files in place. An exact new-process reconciliation can finish the saved
 audit after all evidence is rechecked. Changed evidence rejects. A failed

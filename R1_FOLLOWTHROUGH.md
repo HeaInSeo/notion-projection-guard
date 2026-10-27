@@ -28,6 +28,16 @@ The bounded delta keeps installed runtime/control pins and the successor ID:
   source bound and 15-second send bound stay unchanged. No old observation is
   relabelled as current and no original control is overwritten.
 
+The first staged full-size rehearsal still exceeded a short grant during its
+cloud return trip. The actual operating path therefore supplies a separately
+reviewed hash-pinned local proof provider: after fresh full native/central
+observations arrive, it gathers server facts and invokes the unchanged Broker
+check locally. Only the resulting operation reply crosses MCP. The explicit
+same-case admission and genuine-CLAIM release also use that locked local fact
+path; their original Broker acceptance conditions stay unchanged. Native Notion
+mutations remain in the caller behind its final permit check. Closure fences
+pending asynchronous proofs; CLI commands are serialized.
+
 Acceptance requires source regressions, current-head independent delta review,
 normal CI/Codex/expected-head landing, and an actual large-MCP rehearsal of this
 order with zero production writes. Production then uses check-only followed by

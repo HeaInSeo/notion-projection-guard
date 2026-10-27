@@ -4,7 +4,8 @@
   const deviceId = config.deviceId;
   const command = config.command;
   const metadataActions=new Set(['case_authority','validate_owner_proof','fence_confirm_send',
-    'close','fence_ack','fence_observe','fence_halt','case_consume_input']);
+    'close','fence_ack','fence_observe','fence_halt','case_consume_input','case_consume_live','case_live_send',
+    'case_live_admit','case_consume_live_release','case_admin_authority']);
   let pid, sequence = 0, closed = false;
   function textOf(result) { return (result?.content ?? []).filter(x => x.type === 'text').map(x => x.text).join('\n'); }
   async function settled(value) {
@@ -172,6 +173,12 @@
       // Transfer the immutable full input before observing the short-lived
       // authority. The stage is process-local data, never a write permit.
       const staged=await broker({action:'case_stage_input',batchId:request.batchId,operation:request});
+      if(config.caseLiveOwnership===true) {
+        if(typeof config.collectLiveOwnership!=='function')throw new Error('LIVE_OWNERSHIP_CAPABILITY_REQUIRED');
+        return await broker({action:'case_consume_live',batchId:request.batchId,
+          stageId:staged.stageId,inputHash:staged.inputHash,
+          liveSource:await config.collectLiveOwnership({phase,batchId:request.batchId})});
+      }
       return await broker({action:'case_consume_input',batchId:request.batchId,
         stageId:staged.stageId,inputHash:staged.inputHash,
         ownerProof:await ownership(phase,request.batchId)});
@@ -195,7 +202,10 @@
         const dispatchPage=await fetchPage(edit.pageId,'dispatch');
         const dispatch=await ownedPage({...live,action:'fence_dispatch',ticket:live.ticket,page:dispatchPage},'dispatch');
         live.dispatchId=dispatch.dispatchId;
-        const confirmed=await broker({...live,action:'fence_confirm_send',ownerProof:await ownership('send',batchId)});
+        const confirmed=config.caseLiveOwnership===true
+          ?await broker({action:'case_live_send',batchId,operation:{...live,action:'fence_confirm_send'},
+            liveSource:await config.collectLiveOwnership({phase:'send',batchId})})
+          :await broker({...live,action:'fence_confirm_send',ownerProof:await ownership('send',batchId)});
         const sent=await update(dispatch.request,provider=>broker({...live,action:'fence_observe',provider}),confirmed.permit,live);
         await broker({...live,action:'fence_ack',provider:sent.provider});
         let verified;

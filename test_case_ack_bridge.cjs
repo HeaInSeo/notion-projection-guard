@@ -45,7 +45,7 @@ function fixture(t,{index=0,ack=true,unsent=false}={}){
   bridge=mod.exports.createBridge({readOnly:false});
   const result={...f,edits,ctx,ownerProof,config,get bridge(){return bridge;},
     createAnother:options=>mod.exports.createBridge(options),
-    restart(readOnly=false){bridge.close();bridge=mod.exports.createBridge({readOnly});return bridge;},
+    restart(readOnly=false,extra={}){bridge.close();bridge=mod.exports.createBridge({readOnly,...extra});return bridge;},
     input(apply=false){const s=bridge.handle({action:'case_recovery_status',batchId}),x=s.batches[batchId];
       return {action:'case_reconcile_acknowledged',batchId,planHash:x.planHash,journalHash:s.journalHash,
         ticket:x.receipt?.ticket,snapshotHash:x.receipt?.snapshotHash,dispatchId:x.dispatch?.attempts.at(-1)?.dispatchId,
@@ -239,13 +239,13 @@ test('contradictory temporary verified bytes are refused without deleting them',
   fs.appendFileSync(path.join(f.root,name),Buffer.from([255]));f.restart();unchanged(f,f.input(true),'CASE_ACK_TEMPORARY');
 });
 const createRunner=vm.runInNewContext(fs.readFileSync(path.join(__dirname,'runner.js'),'utf8'),{setTimeout:fn=>setTimeout(fn,0)});
-function transport(f,{loseRecoveryReply=false,ownerFault,staging=false,unprepared=false}={}){
+function transport(f,{loseRecoveryReply=false,ownerFault,staging=false,unprepared=false,live=false,providerOptions={}}={}){
   const pages=new Map([[A,unprepared?before(A):after(A)],[B,before(B)]]),events=[];let writes=0,sequence=0;
   const tools={
-    async mcp__codex_apps__remote_desktop_commander_start_process(){f.restart();return {content:[{type:'text',text:'PID '+(++sequence)+'\nNPG/1 {"ready":true}'}]};},
+    async mcp__codex_apps__remote_desktop_commander_start_process(){f.restart(false,providerOptions);return {content:[{type:'text',text:'PID '+(++sequence)+'\nNPG/1 {"ready":true}'}]};},
     async mcp__codex_apps__remote_desktop_commander_interact_with_process({input}){
       const q=JSON.parse(input);events.push(q.action);let r;
-      try{r={ok:true,requestId:q.requestId,result:f.bridge.handle(q)};}catch(e){r={ok:false,requestId:q.requestId,code:e.code,error:e.message};}
+      try{r={ok:true,requestId:q.requestId,result:await f.bridge.handle(q)};}catch(e){r={ok:false,requestId:q.requestId,code:e.code,error:e.message};}
       if(q.action==='close')f.bridge.close();
       if(loseRecoveryReply&&q.action==='case_reconcile_acknowledged')return {content:[]};
       return {content:[{type:'text',text:'NPG/1 '+JSON.stringify(r)}]};
@@ -255,7 +255,8 @@ function transport(f,{loseRecoveryReply=false,ownerFault,staging=false,unprepare
     async mcp__codex_apps__notion_notion_update_page(request){writes++;events.push('native:'+request.page_id);
       pages.set(request.page_id,after(request.page_id));return {structuredContent:{page_id:request.page_id}};}
   };
-  return {events,get writes(){return writes;},runner:()=>createRunner(tools,{deviceId:'synthetic',command:'synthetic incident bridge',caseAckBridge:true,casePageStaging:staging,
+  return {events,get writes(){return writes;},runner:()=>createRunner(tools,{deviceId:'synthetic',command:'synthetic incident bridge',caseAckBridge:true,casePageStaging:staging,caseLiveOwnership:live,
+    collectLiveOwnership:async({phase})=>{events.push('live-source:'+phase);return {proof:{...f.ownerProof(),...(phase===ownerFault?{conflicts:['other-writer']}:{})}};},
     assertOwnership:async({phase})=>{events.push('owner:'+phase);return {...f.ownerProof(),...(phase===ownerFault?{conflicts:['other-writer']}:{} )};}})};
 }
 test('runner verifies the existing ACK with zero sends, then explicitly continues only the remaining target',async t=>{
@@ -386,4 +387,67 @@ test('runner restores this unsent case then stages before each fresh owner and s
     assert.match(events[i+1],/^owner:/);assert.equal(events[i+2],'case_consume_input');
   }
   assert.equal(journal(f).batches[batchId].dispatch.attempts.length,2);
+});
+function liveProvider(f,source='module.exports=async({input})=>input.proof;'){
+  const file=path.join(f.dir,'synthetic-live-provider.cjs');fs.writeFileSync(file,source,{mode:0o600});
+  const options={liveProviderPath:file,liveProviderHash:hash(source)};f.restart(false,options);return options;
+}
+test('pinned local live provider consumes a stage with actual source bounds and no exported proof round trip',async t=>{
+  const f=fixture(t,{unsent:true});liveProvider(f);
+  const operation=f.unprepared(true);delete operation.ownerProof;
+  const staged=f.bridge.handle({action:'case_stage_input',batchId,operation});
+  const r=await f.bridge.handle({action:'case_consume_live',batchId,...staged,liveSource:{proof:f.ownerProof()}});
+  assert.equal(r.status,'READY');assert.equal(journal(f).batches[batchId].dispatch.attempts.length,0);
+  await assert.rejects(f.bridge.handle({action:'case_consume_live',batchId,...staged,liveSource:{proof:f.ownerProof()}}),/CASE_STAGE_IDENTITY/);
+});
+test('live provider path/hash are verified before import and before every use',async t=>{
+  const f=fixture(t,{unsent:true}),options=liveProvider(f),operation=f.unprepared(true);delete operation.ownerProof;
+  const staged=f.bridge.handle({action:'case_stage_input',batchId,operation}),before=inventory(f.root);
+  fs.appendFileSync(options.liveProviderPath,'\n');
+  await assert.rejects(f.bridge.handle({action:'case_consume_live',batchId,...staged,liveSource:{proof:f.ownerProof()}}),/CASE_LIVE_PROVIDER_PIN/);
+  assert.deepEqual(inventory(f.root),before);
+});
+test('closing the broker while live facts are pending prevents the later action',async t=>{
+  const f=fixture(t,{unsent:true});liveProvider(f,'module.exports=async({input})=>{await new Promise(r=>setTimeout(r,20));return input.proof;};');
+  const operation=f.unprepared(true);delete operation.ownerProof;const staged=f.bridge.handle({action:'case_stage_input',batchId,operation}),old=journal(f);
+  const pending=f.bridge.handle({action:'case_consume_live',batchId,...staged,liveSource:{proof:f.ownerProof()}});f.bridge.close();
+  await assert.rejects(pending,/CASE_LIVE_EXECUTOR_CLOSED/);assert.deepEqual(journal(f),old);
+});
+test('live proof still rejects expired owners and cannot use its metadata action for arbitrary commands',async t=>{
+  const f=fixture(t,{unsent:true});liveProvider(f);const operation=f.unprepared(true);delete operation.ownerProof;
+  const s=f.bridge.handle({action:'case_stage_input',batchId,operation}),before=inventory(f.root);
+  await assert.rejects(f.bridge.handle({action:'case_consume_live',batchId,...s,liveSource:{proof:{...f.ownerProof(),validUntil:'2020-01-01T00:00:00Z'}}}),e=>e.code==='OWNERSHIP_FENCE');
+  await assert.rejects(f.bridge.handle({action:'case_live_send',batchId,operation:{action:'fence_begin',batchId},liveSource:{proof:f.ownerProof()}}),/CASE_LIVE_SEND_SCOPE/);
+  assert.deepEqual(inventory(f.root),before);
+});
+test('live send confirmation remains tied to one existing dispatch and cannot create one',async t=>{
+  const f=fixture(t,{unsent:true});liveProvider(f);const adopted=f.bridge.handle(f.unprepared(true));
+  const operation={action:'fence_confirm_send',batchId,executor:adopted.executor,planHash:adopted.planHash};
+  await assert.rejects(f.bridge.handle({action:'case_live_send',batchId,operation,liveSource:{proof:f.ownerProof()}}));
+  assert.equal(journal(f).batches[batchId].dispatch.attempts.length,0);
+});
+test('local live administrative proof uses unchanged admission and genuine-CLAIM release checks',async t=>{
+  const f=fixture(t,{index:1});f.bridge.handle(f.input(true));liveProvider(f);
+  const root=f.spec.batchId,proof=()=>({...f.ownerProof(),scope:root});
+  const admitted=await f.bridge.handle({action:'case_live_admit',batchId:root,operation:{action:'record_case_admission',batchIds:[batchId]},liveSource:{proof:proof()}});
+  assert.equal(admitted.admitted,true);assert.equal(admitted.workerClaimCreated,false);
+  let s=f.bridge.handle({action:'case_stage_release',batchId:root,operation:{action:'release_case_owner',page:before(A)}});
+  await assert.rejects(f.bridge.handle({action:'case_consume_live_release',batchId:root,...s,liveSource:{proof:proof()}}),/CASE_OWN_CLAIM_REQUIRED/);
+  assert.equal(journal(f).caseExceptionControl.exclusive,true);
+  const e={event_id:'synthetic-only-own-claim',task_id:f.c.taskId,role:'operator',version:81,kind:'CLAIM',session_id:'synthetic-new-worker',
+    lease_state:'HELD until '+new Date(Date.now()+60000).toISOString(),event_at_utc:new Date().toISOString()};
+  const page={structuredContent:{id:A,page_last_edited_at:new Date().toISOString(),text:'<properties>\n'+JSON.stringify({'이벤트 ID':e.event_id,'체크포인트 버전':81,'세션 ID':e.session_id})+'\n</properties>\n<content>\n```json\n'+JSON.stringify({QUEUE_EVENT_V1:e})+'\n```\n</content>'}};
+  s=f.bridge.handle({action:'case_stage_release',batchId:root,operation:{action:'release_case_owner',page}});
+  const released=await f.bridge.handle({action:'case_consume_live_release',batchId:root,...s,liveSource:{proof:proof()}});
+  assert.equal(journal(f).caseExceptionControl.exclusive,false);assert.equal(released.ownClaimEventId,e.event_id);
+});
+test('runner live-source path performs full staged continuation and confirms send locally',async t=>{
+  const f=fixture(t,{unsent:true}),providerOptions=liveProvider(f),io=transport(f,{staging:true,unprepared:true,live:true,providerOptions});
+  const r=await io.runner().resumeCaseUnprepared(batchId,f.ctx.planHash,true);assert.equal(r.status,'COMPLETED');assert.equal(io.writes,2);
+  assert.equal(io.events.filter(v=>v==='case_live_send').length,2);assert.equal(io.events.includes('owner:send'),false);
+});
+test('fresh local send conflict blocks every native call without reissuing a dispatch',async t=>{
+  const f=fixture(t,{unsent:true}),providerOptions=liveProvider(f),io=transport(f,{staging:true,unprepared:true,live:true,providerOptions,ownerFault:'send'});
+  await assert.rejects(io.runner().resumeCaseUnprepared(batchId,f.ctx.planHash,true),/OWNERSHIP_FENCE/);
+  assert.equal(io.writes,0);assert.equal(journal(f).batches[batchId].dispatch.attempts.length,1);
 });

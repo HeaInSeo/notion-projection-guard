@@ -32,8 +32,15 @@ const read=file=>JSON.parse(bytes(file));
 const stamp=x=>typeof x==='string'&&Number.isFinite(Date.parse(x))&&/Z$/.test(x);
 function pins(){for(const [name,pin] of Object.entries(CONFIG.pins))
   need(hash(bytes(path.join(CONFIG.runtime,name),false))===pin,'CASE_ACK_RUNTIME',name+' changed');}
-function createBridge({readOnly=true}={}){
+function createBridge({readOnly=true,liveProviderPath,liveProviderHash}={}){
   pins(); // Before importing any installed executable.
+  let liveProvider=null,closed=false;
+  if(liveProviderPath!==undefined||liveProviderHash!==undefined){
+    need(path.isAbsolute(liveProviderPath??'')&&/^[a-f0-9]{64}$/.test(liveProviderHash??'')&&
+      hash(bytes(liveProviderPath,false))===liveProviderHash,'CASE_LIVE_PROVIDER_PIN');
+    delete require.cache[require.resolve(liveProviderPath)];liveProvider=require(liveProviderPath);
+    need(typeof liveProvider==='function','CASE_LIVE_PROVIDER_SCHEMA');
+  }
   const {Broker,pageData,plan,validateEdit,atomic}=require(path.join(CONFIG.runtime,'broker.cjs'));
   const control=require(path.join(CONFIG.runtime,'case_exception.cjs'));
   const b=new Broker(CONFIG.root,JSON.parse(bytes(path.join(CONFIG.runtime,'policy.json'),false)),{existingOnly:true,readOnly});
@@ -41,9 +48,9 @@ function createBridge({readOnly=true}={}){
   let staged=null;
   const stagedActions=new Set(['fence_prepare','fence_authorize','fence_dispatch',
     'case_reconcile_acknowledged','case_continue_verified','case_restore_unprepared']);
-  function scope(){
+  function scope({allowAdmission=false}={}){
     pins();const m=control.validateControl(b.root,b.state),c=b.state.caseExceptionControl;
-    need(c?.batchId===CONFIG.caseId&&c.exclusive===true&&c.admission===null&&
+    need(c?.batchId===CONFIG.caseId&&c.exclusive===true&&(allowAdmission||c.admission===null)&&
       m?.sourceHead===CONFIG.installedHead&&m.admissionBatchIds?.length===1&&
       m.admissionBatchIds[0]===CONFIG.batchId&&m.admissionPlanHashes[CONFIG.batchId]===CONFIG.planHash,'CASE_ACK_SCOPE');
     control.controls(m);return c;
@@ -342,15 +349,52 @@ function createBridge({readOnly=true}={}){
     pins();need(bytes(b.file)===raw,'PERSISTENCE');atomic(b.file,next);b.state=read(b.file);
     return {status:'READY',next:0,executor:b.executor,planHash:out.planHash,notionWrites:0};
   }
+  async function liveOperation(input){
+    need(!readOnly&&liveProvider&&!closed,'CASE_LIVE_PROVIDER_REQUIRED');b.assertLock();
+    need(hash(bytes(liveProviderPath,false))===liveProviderHash,'CASE_LIVE_PROVIDER_PIN');
+    const admin=['case_live_admit','case_consume_live_release'].includes(input.action),batchId=admin?CONFIG.caseId:CONFIG.batchId;
+    let operation;
+    if(input.action==='case_consume_live'||input.action==='case_consume_live_release'){
+      need(input.batchId===batchId&&staged&&staged.scope===batchId&&input.stageId===staged.stageId&&
+        input.inputHash===staged.inputHash&&staged.executor===b.executor,'CASE_STAGE_IDENTITY');
+      operation=staged.operation;staged=null;
+    }else{
+      need(input.batchId===batchId&&input.operation&&
+        (admin?input.operation.action==='record_case_admission'&&
+          JSON.stringify(input.operation.batchIds)===JSON.stringify([CONFIG.batchId]):
+          input.operation.batchId===CONFIG.batchId&&input.operation.action==='fence_confirm_send')&&
+        !Object.hasOwn(input.operation,'ownerProof')&&!staged,
+        'CASE_LIVE_SEND_SCOPE');operation=clone(input.operation);
+    }
+    // The reviewed, hash-pinned operating module verifies actual observations
+    // locally. No grant travels out and back through the slow MCP transport.
+    const ownerProof=await liveProvider({input:input.liveSource,batchId,
+      brokerPid:process.pid,canonical:clone(b.state.caseExceptionControl)});
+    need(!closed,'CASE_LIVE_EXECUTOR_CLOSED');b.assertLock();scope({allowAdmission:admin});
+    need(hash(bytes(liveProviderPath,false))===liveProviderHash,'CASE_LIVE_PROVIDER_PIN');
+    if(b.state.batches[CONFIG.batchId])unpreparedHistory(b.state.batches[CONFIG.batchId]);
+    return admin?b.handle({...operation,ownerProof}):handle({...operation,ownerProof});
+  }
   function handle(input){
+    need(!closed,'CASE_LIVE_EXECUTOR_CLOSED');
     if(input.action==='close')return b.handle(input);
+    if(['case_admin_authority','case_stage_release','case_live_admit','case_consume_live_release'].includes(input.action)){
+      scope({allowAdmission:true});if(b.state.batches[CONFIG.batchId])unpreparedHistory(b.state.batches[CONFIG.batchId]);
+      if(input.action==='case_admin_authority')return clone(b.state.caseExceptionControl);
+      if(input.action!=='case_stage_release')return liveOperation(input);
+      need(input.batchId===CONFIG.caseId&&!staged&&input.operation?.action==='release_case_owner'&&
+        input.operation.page&&!Object.hasOwn(input.operation,'ownerProof'),'CASE_STAGE_INPUT');
+      const operation=clone(input.operation),stageId=crypto.randomUUID(),inputHash=hash(JSON.stringify(operation));
+      staged={stageId,inputHash,operation,executor:b.executor,scope:CONFIG.caseId};return {stageId,inputHash};
+    }
     scope();
     if(b.state.batches[CONFIG.batchId])unpreparedHistory(b.state.batches[CONFIG.batchId]);
+    if(input.action==='case_consume_live'||input.action==='case_live_send')return liveOperation(input);
     if(input.action==='case_stage_input'){
       need(input.batchId===CONFIG.batchId&&input.operation?.batchId===CONFIG.batchId&&
         stagedActions.has(input.operation.action)&&!Object.hasOwn(input.operation,'ownerProof')&&!staged,'CASE_STAGE_INPUT');
       const operation=clone(input.operation),stageId=crypto.randomUUID(),inputHash=hash(JSON.stringify(operation));
-      staged={stageId,inputHash,operation,executor:b.executor};
+      staged={stageId,inputHash,operation,executor:b.executor,scope:CONFIG.batchId};
       return {stageId,inputHash};
     }
     if(input.action==='case_consume_input'){
@@ -384,21 +428,28 @@ function createBridge({readOnly=true}={}){
       'CASE_ACK_ACTION');
     return b.handle(input);
   }
-  return {handle,close:()=>b.close()};
+  return {handle,close:()=>{closed=true;b.close();}};
 }
 if(require.main===module){
   const args=process.argv.slice(2);
-  if(!args.includes('--stdio')||args.some(v=>!['--stdio','--apply'].includes(v))){
-    process.stderr.write('Usage: case_ack_bridge.cjs --stdio [--apply]\n');process.exit(2);
+  const options={},flags=new Set();let invalid=false;
+  for(let i=0;i<args.length;i++){
+    const a=args[i];if(flags.has(a)){invalid=true;break;}flags.add(a);
+    if(a==='--stdio'||a==='--apply')continue;
+    if(!['--live-provider','--live-provider-sha256'].includes(a)||!args[i+1]){invalid=true;break;}
+    options[a]=args[++i];
   }
-  let bridge;try{bridge=createBridge({readOnly:!args.includes('--apply')});}
+  if(!flags.has('--stdio')||invalid){process.stderr.write('Usage: case_ack_bridge.cjs --stdio [--apply] [--live-provider PATH --live-provider-sha256 SHA256]\n');process.exit(2);}
+  let bridge;try{bridge=createBridge({readOnly:flags.has('--apply')===false,
+    liveProviderPath:options['--live-provider'],liveProviderHash:options['--live-provider-sha256']});}
   catch(e){process.stdout.write('NPG/1 '+JSON.stringify({code:e.code??'ERROR',error:e.message})+'\n');process.exit(1);}
   const rl=require('node:readline').createInterface({input:process.stdin,crlfDelay:Infinity});
   process.stdout.write('NPG/1 {"ready":true}\n');
-  rl.on('line',line=>{let q;try{q=JSON.parse(line);const result=bridge.handle(q);
+  let queue=Promise.resolve();
+  rl.on('line',line=>{queue=queue.then(async()=>{let q;try{q=JSON.parse(line);const result=await bridge.handle(q);
     process.stdout.write('NPG/1 '+JSON.stringify({requestId:q.requestId,ok:true,result})+'\n',()=>{
       if(q.action==='close'){rl.close();process.stdin.destroy();process.exit(0);}
-    });}catch(e){process.stdout.write('NPG/1 '+JSON.stringify({requestId:q?.requestId,ok:false,code:e.code??'ERROR',error:e.message})+'\n');}});
+    });}catch(e){process.stdout.write('NPG/1 '+JSON.stringify({requestId:q?.requestId,ok:false,code:e.code??'ERROR',error:e.message})+'\n');}});});
   rl.on('close',()=>bridge.close());process.on('exit',()=>bridge.close());
   for(const signal of ['SIGINT','SIGTERM','SIGHUP'])process.on(signal,()=>{bridge.close();process.exit(0);});
 }
