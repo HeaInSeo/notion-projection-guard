@@ -248,6 +248,45 @@
       throw error;
     } finally {await close();}
   }
+  async function reconcileAcknowledged(batchId, expectedPlanHash, apply=false) {
+    try {
+      if(config.caseAckBridge!==true||typeof apply!=='boolean')throw new Error('EXPLICIT_CASE_ACK_BRIDGE_REQUIRED');
+      const state=await broker({action:'case_recovery_status',batchId}),batch=state.batches?.[batchId];
+      if(state.active!==batchId||batch?.planHash!==expectedPlanHash||batch.status!=='HALTED'||!batch.receipt)
+        throw new Error('RECONCILE_IDENTITY');
+      const priorPages=[];
+      for(let index=0;index<batch.next;index++)priorPages.push(await fetchPage(batch.edits[index].pageId,'ack-prior'));
+      const page=await fetchPage(batch.edits[batch.next].pageId,'ack-full-readback');
+      // No update, ACK or ordinary resume is called here, even on a lost reply.
+      return await broker({action:'case_reconcile_acknowledged',batchId,planHash:expectedPlanHash,apply,
+        journalHash:state.journalHash,expectedError:batch.error,ticket:batch.receipt.ticket,
+        snapshotHash:batch.receipt.snapshotHash,dispatchId:batch.dispatch?.attempts?.at(-1)?.dispatchId,
+        priorPages,page,ownerProof:await ownership('ack-reconciliation',batchId)});
+    } finally {await close();}
+  }
+  async function continueVerifiedCase(batchId, expectedPlanHash, restoration) {
+    let live=null;
+    try {
+      if(config.caseAckBridge!==true)throw new Error('EXPLICIT_CASE_ACK_BRIDGE_REQUIRED');
+      const state=await broker({action:'case_recovery_status',batchId}),batch=state.batches?.[batchId];
+      if(state.active!==batchId||batch?.planHash!==expectedPlanHash||batch.status!=='READY'||batch.receipt!==null)
+        throw new Error('RECONCILE_IDENTITY');
+      const priorPages=[],remainingPages=[];
+      for(let index=0;index<batch.edits.length;index++){
+        const page=await fetchPage(batch.edits[index].pageId,'verified-continuation');
+        (index<batch.next?priorPages:remainingPages).push(page);
+      }
+      const adopted=await broker({action:'case_continue_verified',batchId,planHash:expectedPlanHash,
+        journalHash:state.journalHash,restoration,priorPages,remainingPages,
+        ownerProof:await ownership('verified-continuation',batchId)});
+      live={batchId,planHash:adopted.planHash,executor:adopted.executor};
+      const receipts=await fencedPages(live,batch.edits,adopted.next);
+      return {status:'COMPLETED',resumed:true,receipts,readDiagnostics};
+    } catch(error) {
+      if(live)try{await broker({...live,action:'fence_halt',reason:error.message,readDetail:error.readDetail});}catch{}
+      throw error;
+    } finally {await close();}
+  }
   async function resumeUnprepared(batchId, expectedPlanHash) {
     try {
       const state=await broker({action:'status',batchId:batchId??null}),batch=state.batches?.[batchId];
@@ -282,5 +321,5 @@
         page });
     } finally { await close(); }
   }
-  return { run, resume, resumeUnprepared, reconcileAutolink, broker, close };
+  return { run, resume, resumeUnprepared, reconcileAutolink, reconcileAcknowledged, continueVerifiedCase, broker, close };
 })
