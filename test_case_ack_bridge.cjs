@@ -9,7 +9,7 @@ const helper=path.join(__dirname,'case_ack_bridge.cjs');
 const page=(pageId=A,value='BEFORE',revision='2026-10-26T00:00:00Z',props={title:'Synthetic'})=>({structuredContent:{id:pageId,page_last_edited_at:revision,
   text:'<properties>\n'+JSON.stringify(props)+'\n</properties>\n<content>\n## CURRENT CENTRAL OBSERVATION · synthetic\nstate='+value+'\n## WORKER PROOF\nkeep\n</content>'}});
 const before=id=>page(id),after=id=>page(id,'ADMITTED','2026-10-26T00:00:01Z');
-function fixture(t,{index=0,ack=true,unsent=false}={}){
+function fixture(t,{index=0,ack=true,unsent=false,prepared=false,authorized=false}={}){
   let bridge;
   t.after(()=>bridge?.close());
   // Reuse only the synthetic fixture definitions, without registering their
@@ -22,13 +22,15 @@ function fixture(t,{index=0,ack=true,unsent=false}={}){
   vm.runInNewContext(fixtureSource,{module:fixtureModule,__dirname,__filename:path.join(__dirname,'test_case_exception.cjs'),process,Buffer,
     require:n=>n==='node:test'?{test:()=>{}}:localRequire(n)});
   const f=fixtureModule.exports.fixture(t);fixtureModule.exports.close(f);
-  const edits=[f.admissionEdit,{...f.admissionEdit,pageId:B}],ownerProof=()=>({...f.proof(),scope:batchId,
+  const edits=[f.admissionEdit,{...f.admissionEdit,pageId:B}],ownerProof=()=>({...f.proof(),scope:batchId,evidenceHash:f.input.approvedManifestHash,
     validUntil:new Date(Date.now()+15000).toISOString()});
   const started=f.b.handle({action:'fence_begin',batchId,edits,ownerProof:ownerProof()});
   let ctx={batchId,planHash:started.planHash,executor:started.executor};
   for(let i=0;!unsent&&i<=index;i++){
     const id=edits[i].pageId,r=f.b.handle({...ctx,action:'fence_prepare',page:before(id),ownerProof:ownerProof()});ctx.ticket=r.ticket;
+    if(prepared&&i===index&&!authorized)break;
     f.b.handle({...ctx,action:'fence_authorize',page:before(id),ownerProof:ownerProof()});
+    if(prepared&&i===index)break;
     const d=f.b.handle({...ctx,action:'fence_dispatch',page:before(id),ownerProof:ownerProof()});ctx.dispatchId=d.dispatchId;
     f.b.handle({...ctx,action:'fence_confirm_send',ownerProof:ownerProof()});
     if(i<index||ack)f.b.handle({...ctx,action:'fence_ack',provider:{status:'SUCCEEDED',pageId:id,taskId:null}});
@@ -37,6 +39,8 @@ function fixture(t,{index=0,ack=true,unsent=false}={}){
   f.b.handle({...ctx,action:'fence_halt',reason:unsent?'OWNERSHIP_FENCE: Fresh same-generation scoped ownership and all prerequisites required':failure});f.b.close();
   const config={root:f.root,runtime:f.runtime,caseId:f.m.risk?f.spec.batchId:null,batchId,planHash:started.planHash,installedHead:f.m.sourceHead,
     initialJournalHash:hash(fs.readFileSync(f.b.file)),initialExecutorHash:hash(ctx.executor),
+    ...(prepared?{preparedOrigin:{journalHash:hash(fs.readFileSync(f.b.file)),executor:ctx.executor,index,
+      ticket:ctx.ticket,snapshotHash:JSON.parse(fs.readFileSync(f.b.file)).batches[batchId].receipt.snapshotHash}}:{}),
     preimages:edits.map(e=>{const p=localRequire('./broker.cjs').pageData(before(e.pageId),e.pageId);return [e.pageId,hash(p.body),hash(p.properties),p.revision];}),
     pins:Object.fromEntries(fs.readdirSync(f.runtime).map(n=>[n,hash(fs.readFileSync(path.join(f.runtime,n)))]))};
   const mod={exports:{}};
@@ -53,6 +57,10 @@ function fixture(t,{index=0,ack=true,unsent=false}={}){
     unprepared(apply=false){const s=bridge.handle({action:'case_recovery_status',batchId}),x=s.batches[batchId];
       return {action:'case_restore_unprepared',batchId,planHash:x.planHash,journalHash:s.journalHash,
         expectedError:x.error,pages:edits.map(e=>before(e.pageId)),ownerProof:ownerProof(),apply};},
+    preparedInput(apply=false){const s=bridge.handle({action:'case_recovery_status',batchId}),x=s.batches[batchId];
+      return {action:'case_restore_prepared',batchId,planHash:x.planHash,journalHash:s.journalHash,
+        expectedError:x.error,ticket:x.receipt?.ticket,snapshotHash:x.receipt?.snapshotHash,
+        priorPages:edits.slice(0,x.next).map(e=>after(e.pageId)),page:before(edits[x.next].pageId),ownerProof:ownerProof(),apply};},
     continuation(restoration){const s=bridge.handle({action:'case_recovery_status',batchId}),x=s.batches[batchId];
       return {action:'case_continue_verified',batchId,planHash:x.planHash,journalHash:s.journalHash,restoration,
         priorPages:edits.slice(0,x.next).map(e=>after(e.pageId)),remainingPages:edits.slice(x.next).map(e=>before(e.pageId)),ownerProof:ownerProof()};}
@@ -459,4 +467,158 @@ for(const change of ['missing','changed'])test('live administration requires eve
   assert.throws(()=>f.bridge.handle({action:'case_live_admit',batchId:root,operation:{action:'record_case_admission',batchIds:[batchId]},
     liveSource:{proof:{...f.ownerProof(),scope:root}}}));
   assert.deepEqual(inventory(f.root),before);assert.equal(journal(f).caseExceptionControl.admission,null);
+});
+function preparedDispatch(f,adopted,{ack=true,verify=true}={}){
+  const live={batchId,planHash:adopted.planHash,executor:adopted.executor,ticket:adopted.ticket};
+  f.bridge.handle({...live,action:'fence_authorize',page:before(B),ownerProof:f.ownerProof()});
+  const d=f.bridge.handle({...live,action:'fence_dispatch',page:before(B),ownerProof:f.ownerProof()});live.dispatchId=d.dispatchId;
+  f.bridge.handle({...live,action:'fence_confirm_send',ownerProof:f.ownerProof()});
+  if(ack)f.bridge.handle({...live,action:'fence_ack',provider:{status:'SUCCEEDED',pageId:B,taskId:null}});
+  if(verify)f.bridge.handle({...live,action:'fence_verify',page:after(B)});
+  return live;
+}
+test('prepared check-only and adoption preserve completed pages, pending ticket and original failure',t=>{
+  const f=fixture(t,{index:1,prepared:true}),old=journal(f),files=inventory(f.root),runtime=inventory(f.runtime);
+  const checked=f.bridge.handle(f.preparedInput());assert.equal(checked.checkOnly,true);assert.deepEqual(inventory(f.root),files);
+  const r=f.bridge.handle(f.preparedInput(true)),now=journal(f),out=now.batches[batchId];
+  assert.equal(r.status,'PREPARED');assert.equal(r.notionWrites,0);assert.equal(r.ticketsCreated,0);assert.equal(r.pageAdvances,0);
+  for(const k of ['next','receipt','error','haltedFrom','edits','planHash','verifications'])assert.deepEqual(out[k],old.batches[batchId][k]);
+  assert.deepEqual(out.dispatch.attempts,old.batches[batchId].dispatch.attempts);assert.notEqual(out.dispatch.executor,f.ctx.executor);
+  assert.deepEqual(now.batches[f.spec.batchId],old.batches[f.spec.batchId]);assert.deepEqual(now.caseExceptionControl,old.caseExceptionControl);
+  assert.deepEqual(inventory(f.runtime),runtime);
+  unchanged(f,{...f.ctx,action:'fence_authorize',page:before(B),ownerProof:f.ownerProof()},'EXECUTOR_FENCED');
+  preparedDispatch(f,r);assert.equal(journal(f).batches[batchId].status,'COMPLETED');assert.equal(journal(f).batches[batchId].dispatch.attempts.length,2);
+  f.restart();assert.equal(f.bridge.handle({action:'case_admin_authority'}).admission,null);
+});
+test('unexported authorization is deliberately rechecked under a newly adopted executor',t=>{
+  const f=fixture(t,{index:1,prepared:true,authorized:true}),old=journal(f),r=f.bridge.handle(f.preparedInput(true));
+  assert.equal(old.batches[batchId].dispatch.phase,'AUTHORIZED');assert.equal(journal(f).batches[batchId].dispatch.phase,'PREPARED');
+  assert.equal(journal(f).batches[batchId].reconciliations.at(-1).fromPhase,'AUTHORIZED');
+  preparedDispatch(f,r);assert.equal(journal(f).batches[batchId].next,2);
+});
+test('prepared caller check-only sends nothing, then live continuation sends only the final target',async t=>{
+  const f=fixture(t,{index:1,prepared:true}),providerOptions=liveProvider(f),io=transport(f,{staging:true,live:true,providerOptions});
+  assert.equal((await io.runner().resumeCasePrepared(batchId,f.ctx.planHash,false)).checkOnly,true);assert.equal(io.writes,0);
+  const result=await io.runner().resumeCasePrepared(batchId,f.ctx.planHash,true);
+  assert.equal(result.status,'COMPLETED');assert.equal(io.writes,1);assert.equal(result.receipts[0].pageId,B);
+  assert.equal(io.events.filter(v=>v==='fence_prepare').length,0);assert.equal(journal(f).batches[batchId].dispatch.attempts.length,2);
+});
+for(const key of ['batchId','planHash','journalHash','ticket','snapshotHash','expectedError'])
+test('prepared continuation refuses changed identity '+key,t=>{
+  const f=fixture(t,{index:1,prepared:true});unchanged(f,{...f.preparedInput(true),[key]:'wrong'});
+});
+for(const bad of [{generation:'wrong'},{conflicts:['other-writer']},{validUntil:'2020-01-01T00:00:00Z'}])
+test('prepared continuation requires actual same-scope fresh authority '+JSON.stringify(bad),t=>{
+  const f=fixture(t,{index:1,prepared:true}),q=f.preparedInput(true);unchanged(f,{...q,ownerProof:{...q.ownerProof,...bad}});
+});
+for(const target of ['prior-body','prior-properties','prior-revision','pending-body','pending-properties','pending-revision'])
+test('prepared continuation requires complete fresh matching pages '+target,t=>{
+  const f=fixture(t,{index:1,prepared:true}),q=f.preparedInput(true),id=target.startsWith('prior')?A:B;
+  const bad=page(id,target.endsWith('body')?'CHANGED':id===A?'ADMITTED':'BEFORE',
+    target.endsWith('revision')?'2026-10-26T00:00:02Z':id===A?'2026-10-26T00:00:01Z':'2026-10-26T00:00:00Z',
+    target.endsWith('properties')?{title:'changed'}:{title:'Synthetic'});
+  if(id===A)q.priorPages=[bad];else q.page=bad;unchanged(f,q);
+});
+test('an exported current request remains uncertain even with an unchanged pending page',t=>{
+  const f=fixture(t,{index:1,prepared:true}),r=f.bridge.handle(f.preparedInput(true)),live=preparedDispatch(f,r,{ack:false,verify:false});
+  f.bridge.handle({...live,action:'fence_halt',reason:failure});f.restart();
+  unchanged(f,f.preparedInput(true),'CASE_PREPARED_UNEXPORTED');
+});
+for(const where of ['audit','journal'])test('prepared '+where+' save interruption retains the full old boundary and audits',t=>{
+  const f=fixture(t,{index:1,prepared:true}),q=f.preparedInput(true),file=path.join(f.root,'journal.json'),old=fs.readFileSync(file),rename=fs.renameSync;
+  fs.renameSync=(from,to)=>{if(where==='journal'&&to===file||where==='audit'&&to.includes('.prepared-continuation-'))throw Error('synthetic prepared save');return rename(from,to);};
+  try{assert.throws(()=>f.bridge.handle(q));}finally{fs.renameSync=rename;}
+  assert.deepEqual(fs.readFileSync(file),old);f.restart();assert.equal(f.bridge.handle(f.preparedInput(true)).status,'PREPARED');
+  assert.equal(journal(f).batches[batchId].dispatch.attempts.length,1);
+});
+test('a lost prepared-adoption reply can be explicitly adopted again without a send or new ticket',t=>{
+  const f=fixture(t,{index:1,prepared:true}),first=f.bridge.handle(f.preparedInput(true));f.restart();
+  const second=f.bridge.handle(f.preparedInput(true));assert.notEqual(first.executor,second.executor);
+  const x=journal(f).batches[batchId];assert.equal(x.casePreparedContinuations.length,2);assert.equal(x.receipt.ticket,first.ticket);
+  assert.equal(x.dispatch.attempts.length,1);preparedDispatch(f,second);f.restart();
+  assert.equal(f.bridge.handle({action:'case_recovery_status',batchId}).batches[batchId].status,'COMPLETED');
+});
+test('a later pre-export authorization transport failure remains recoverable with all prior adoptions',t=>{
+  const f=fixture(t,{index:1,prepared:true}),r=f.bridge.handle(f.preparedInput(true));
+  const live={batchId,executor:r.executor,planHash:r.planHash,ticket:r.ticket};
+  f.bridge.handle({...live,action:'fence_authorize',page:before(B),ownerProof:f.ownerProof()});
+  f.bridge.handle({...live,action:'fence_halt',reason:failure});f.restart();
+  const second=f.bridge.handle(f.preparedInput(true));assert.equal(journal(f).batches[batchId].casePreparedContinuations.length,2);
+  preparedDispatch(f,second);assert.equal(journal(f).batches[batchId].status,'COMPLETED');
+});
+test('removing a prepared-adoption suffix cannot reassign a completed send to an older executor',t=>{
+  const f=fixture(t,{index:1,prepared:true});f.bridge.handle(f.preparedInput(true));f.restart();
+  const second=f.bridge.handle(f.preparedInput(true));preparedDispatch(f,second);
+  const file=path.join(f.root,'journal.json'),x=journal(f),b=x.batches[batchId],events=b.reconciliations.filter(a=>a.kind==='SCOPED_CASE_PREPARED_CONTINUATION');
+  const last=events[1],removed=path.join(f.root,hash(batchId)+'.prepared-continuation-'+last.journalHash+'-'+last.newExecutor+'.json');
+  b.casePreparedContinuations.pop();b.reconciliations=b.reconciliations.filter(a=>a.newExecutor!==last.newExecutor);
+  b.dispatch.executor=events[0].newExecutor;b.dispatch.owner=events[0].owner;fs.unlinkSync(removed);
+  fs.writeFileSync(file,JSON.stringify(x));f.restart();unchanged(f,{action:'case_admin_authority'});
+});
+for(const target of ['prior-evidence','pending-evidence','owner','missing','all-history-and-executor'])
+test('committed prepared history remains required through final progress '+target,t=>{
+  const f=fixture(t,{index:1,prepared:true}),r=f.bridge.handle(f.preparedInput(true));preparedDispatch(f,r);
+  const file=path.join(f.root,'journal.json'),x=journal(f),b=x.batches[batchId],a=b.reconciliations.find(v=>v.kind==='SCOPED_CASE_PREPARED_CONTINUATION');
+  const savedFile=path.join(f.root,hash(batchId)+'.prepared-continuation-'+a.journalHash+'-'+a.newExecutor+'.json');
+  if(target==='all-history-and-executor'){
+    b.reconciliations=b.reconciliations.filter(v=>v.kind!==a.kind);b.casePreparedContinuations=[];b.dispatch.executor=f.ctx.executor;fs.unlinkSync(savedFile);
+  }else if(target==='missing')fs.unlinkSync(savedFile);
+  else{
+    const record=JSON.parse(fs.readFileSync(savedFile));
+    if(target==='prior-evidence')record.priorPages[0].body='changed';
+    if(target==='pending-evidence')record.page.body='changed';
+    if(target==='owner'){record.audit.owner.generation='changed';a.owner.generation='changed';}
+    fs.writeFileSync(savedFile,JSON.stringify(record));b.casePreparedContinuations[0].recordHash=hash(fs.readFileSync(savedFile));
+  }
+  fs.writeFileSync(file,JSON.stringify(x));f.restart();unchanged(f,{action:'case_recovery_status',batchId});
+  unchanged(f,{action:'case_admin_authority'});
+});
+test('saved ACK verification remains available after final prepared continuation without retransmission',t=>{
+  const f=fixture(t,{index:1,prepared:true}),r=f.bridge.handle(f.preparedInput(true)),live=preparedDispatch(f,r,{verify:false});
+  f.bridge.handle({...live,action:'fence_halt',reason:failure});f.restart();
+  assert.equal(f.bridge.handle(f.input()).checkOnly,true);assert.equal(f.bridge.handle(f.input(true)).status,'COMPLETED');f.restart();
+  assert.equal(f.bridge.handle({action:'case_admin_authority'}).admission,null);
+});
+for(const target of ['attempt','permit','provider','verified'])test('completed prepared progress requires its final send attribution '+target,t=>{
+  const f=fixture(t,{index:1,prepared:true}),r=f.bridge.handle(f.preparedInput(true));preparedDispatch(f,r);liveProvider(f);
+  const file=path.join(f.root,'journal.json'),x=journal(f),b=x.batches[batchId];
+  if(target==='attempt')b.dispatch.attempts.pop();
+  if(target==='permit')delete b.dispatch.attempts.at(-1).sendPermit;
+  if(target==='provider')b.dispatch.attempts.at(-1).provider.status='UNKNOWN';
+  if(target==='verified')b.verifications.pop();
+  fs.writeFileSync(file,JSON.stringify(x));f.restart();const files=inventory(f.root);
+  unchanged(f,{action:'case_recovery_status',batchId});unchanged(f,{action:'case_admin_authority'});
+  unchanged(f,{action:'case_live_admit',batchId:f.spec.batchId,operation:{action:'record_case_admission',batchIds:[batchId]},
+    liveSource:{proof:{...f.ownerProof(),scope:f.spec.batchId}}});assert.deepEqual(inventory(f.root),files);
+});
+test('ownership expiry during full prepared evidence checks cannot commit adoption',t=>{
+  const f=fixture(t,{index:1,prepared:true}),q=f.preparedInput(true),file=path.join(f.root,'journal.json'),before=fs.readFileSync(file),read=fs.readFileSync;
+  q.ownerProof.validUntil=new Date(Date.now()+40).toISOString();let delayed=false;
+  fs.readFileSync=(p,...args)=>{if(!delayed&&String(p)===path.join(f.root,hash(batchId)+'-0.json')){delayed=true;Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,80);}return read(p,...args);};
+  try{assert.throws(()=>f.bridge.handle(q),e=>e.code==='OWNERSHIP_FENCE');}finally{fs.readFileSync=read;}
+  assert.deepEqual(fs.readFileSync(file),before);assert.equal(journal(f).batches[batchId].dispatch.attempts.length,1);
+});
+test('ownership expiry while persisting the prepared audit leaves canonical unchanged and keeps the intent',t=>{
+  const f=fixture(t,{index:1,prepared:true}),q=f.preparedInput(true),file=path.join(f.root,'journal.json'),before=fs.readFileSync(file),rename=fs.renameSync;
+  q.ownerProof.validUntil=new Date(Date.now()+60).toISOString();
+  fs.renameSync=(a,b)=>{if(String(b).includes('.prepared-continuation-'))Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,100);return rename(a,b);};
+  try{assert.throws(()=>f.bridge.handle(q),e=>e.code==='OWNERSHIP_FENCE');}finally{fs.renameSync=rename;}
+  assert.deepEqual(fs.readFileSync(file),before);assert.ok(fs.readdirSync(f.root).some(n=>n.includes('.prepared-continuation-')));
+  f.restart();assert.equal(f.bridge.handle(f.preparedInput(true)).status,'PREPARED');
+});
+test('prepared adoption rejects an owner evidence digest that its retained audit would reject',t=>{
+  const f=fixture(t,{index:1,prepared:true}),q=f.preparedInput(true);q.ownerProof.evidenceHash='0'.repeat(64);
+  unchanged(f,q,'CASE_PREPARED_OWNER');
+});
+test('final verification second-save failure retains completed attributed progress for normal admission',async t=>{
+  const f=fixture(t,{index:1,prepared:true}),r=f.bridge.handle(f.preparedInput(true)),live=preparedDispatch(f,r,{verify:false});
+  const file=path.join(f.root,'journal.json'),rename=fs.renameSync;let writes=0;
+  fs.renameSync=(a,b)=>{if(b===file&&++writes===2)throw Error('synthetic final phase save');return rename(a,b);};
+  try{assert.throws(()=>f.bridge.handle({...live,action:'fence_verify',page:after(B)}));}finally{fs.renameSync=rename;}
+  f.restart();const s=f.bridge.handle({action:'case_recovery_status',batchId});
+  assert.equal(s.active,null);assert.equal(s.batches[batchId].status,'COMPLETED');assert.equal(s.batches[batchId].dispatch.phase,'ACKNOWLEDGED');
+  liveProvider(f);const root=f.spec.batchId;
+  const admitted=await f.bridge.handle({action:'case_live_admit',batchId:root,operation:{action:'record_case_admission',batchIds:[batchId]},
+    liveSource:{proof:{...f.ownerProof(),scope:root}}});
+  assert.equal(admitted.admitted,true);assert.equal(admitted.workerClaimCreated,false);assert.equal(journal(f).batches[batchId].dispatch.attempts.length,2);
 });

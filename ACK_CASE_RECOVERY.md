@@ -102,6 +102,49 @@ recovery; no staging token, ticket or uncertain mutation is blindly replayed.
 
 ## Failure handling and actual completion
 
+### Final prepared page after the two actual verified writes
+
+The PR14 execution actually verified Router and the Sori task, then stopped
+before authorizing the Operator queue page when MCP returned its uninitialized
+session error. The new source pins that exact halted journal, executor, third
+ticket and snapshot. It is intended for that boundary onward; earlier source
+and its original zero-history authorization remain preserved.
+
+`resumeCasePrepared(batchId, planHash, false)` checks the saved PREPARED or
+unexported AUTHORIZED boundary, all prior full verified pages and the complete
+pending preimage under fresh same-generation ownership. It does not write
+native content, create a ticket or advance progress. Only the final index is
+supported, and its dispatch-attempt count must equal the two prior pages.
+SEND_INTENT or any current-index export, unknown ACK, changed protected page,
+snapshot, control or history rejects even if the pending page looks unchanged.
+
+The explicit `true` caller first records a full digest-linked adoption audit
+and takes a new executor. The original pending ticket and snapshot remain;
+an AUTHORIZED-but-unexported operation returns to PREPARED for ordinary fresh
+authorization. No earlier page is prepared or sent again. The caller then
+performs the final page's normal authorize/dispatch/send/ACK/full verification.
+Source30s/send15s and all native prerequisite gates are unchanged.
+
+A lost adoption response requires a new caller and new prerequisite factory.
+Only a still-unexported final prepared boundary can be adopted again, retaining
+every committed audit and its prefix. Missing or rehashed page evidence, a
+truncated chain, changed owner/executor tip or reassigned final send blocks
+status, further recovery and admission. Saved-ACK verification remains a
+separate zero-native recovery if the final send succeeds and verification
+later fails. No original failure or uncertain external request is reclassified.
+
+The installed Broker saves complete verified progress before separately saving
+its dispatch phase. If only that second save fails, `COMPLETED/ACKNOWLEDGED`
+is accepted with active=null, the full final successful attempt/permit/provider
+and all immutable verified fingerprints, including the later final revision.
+It requires no native replay or invented ACK and can use normal admission.
+Missing final attribution still rejects this intermediate commit.
+
+This is new source after the explicitly approved PR14 head. PR14's one-head
+Codex exception is not an approval for this delta or its operation. Review,
+exact-head CI, real MCP check-only/rehearsal and the corresponding operating
+decision remain separate from source implementation.
+
 ### Actual operating path with local live facts
 
 The real operating collector can also run through an explicitly reviewed,

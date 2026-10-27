@@ -3,8 +3,10 @@
 PR13 was merged at `cca2220`, with the reviewed tree and main CI passing.
 The first actual successor execution failed at `fence_prepare`: its real
 prerequisite observation expired while the full Router page crossed MCP.
-No provider call was issued. The same successor is HALTED from READY at index
-zero, with no receipt, no ticket and an empty UNSENT dispatch-attempt list.
+No provider call was issued. At that first interruption the same successor was
+HALTED from READY at index zero, with no receipt, no ticket and an empty UNSENT
+dispatch-attempt list. The later current boundary is recorded below under
+“Actual PR14 landing and final prepared interruption”.
 This is separate from the original uncertain ownership transaction, which
 remains CLOSED_EXCEPTION_UNCONFIRMED and is not reclassified.
 
@@ -46,6 +48,29 @@ admission, the rightful existing writer's own CLAIM and canonical owner release.
 The sprint restart/wiki pilot remains the subsequent R1.3/R1.4 work, not a new
 precondition for recovery. NodeKit PR149 and its spent replacement budget stay
 outside this delta.
+
+## Actual PR14 landing and final prepared interruption
+
+The user explicitly approved the one-head Codex-completion exception for
+3aaef6b, normally merged as4a713906cfcc84fc6db99e1c93dd9d199d40a452;
+the reviewed tree matched and main CI40505166333 passed. Codex was still
+uncompleted, not clean or cancelled. Production then made exactly two native
+calls: Router and the Sori original both received successful ACKs and full
+protected-page verification. At index2 the third page was prepared, then the
+page-staging RPC failed with the MCP uninitialized-session error. No current
+index dispatch/export or third native call occurred. The executor was closed.
+
+The halted journal9abccbc5ba51f9602eddaeede4dfc50460e63716cde5f28a80b829003875abb7
+pins the boundary. The bounded follow-up adopts only its final prepared ticket
+after fresh prior receipts/pages, pending full preimage and exact ownership.
+It retains all preceding errors, audits, successful dispatches and verifications;
+audit-first adoption creates no ticket, ACK or page advancement. Normal final
+authorization/send/verification follows only an explicit caller invocation.
+Unexported authorization can be freshly reauthorized; current-index export
+remains an uncertainty barrier. The earlier helper is not repurposed by editing
+the production journal or replacing the installed runtime. New source review,
+tests/actual transport acceptance and an exact operating decision are required;
+the3aaef6b exception does not automatically extend to another head.
 
 At source preparation this delta has not passed operational acceptance. The
 central automation is paused under the current execution authorization. Existing

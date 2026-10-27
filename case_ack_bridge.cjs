@@ -8,6 +8,10 @@ const CONFIG={root:'/home/heain/.local/state/notion-projection-guard',runtime:'/
   planHash:'a2f8d657dc45154aaee6441b51fd0f6629903a66f86db2ba3a0d640314314eea',
   initialJournalHash:'5fbe608bcdaec9cb60c95c3559787dce3e4a3beba38749149e4a1be4a62f3dd5',
   initialExecutorHash:'0648a69845e5c55b6a67236846d0d92199b1f24f0bfc0349391d6f5a8f48db10',
+  preparedOrigin:{journalHash:'9abccbc5ba51f9602eddaeede4dfc50460e63716cde5f28a80b829003875abb7',
+    executor:'db0a982a-d687-4581-af86-24d4614b01eb',index:2,
+    ticket:'bf5ed380-f89d-4678-8108-5331e11f0782',
+    snapshotHash:'d18ebc4c198bc3a490f1d52c672c6d53b183e58493f7e0fe1924fa761f38a6ed'},
   preimages:[
     ['3bf86e6dd1d18110938bc358e17c779e','ae543e858db2861344679330bcfcb13518869c21cb40defe6fb03ca5b60dbe68','8aebc7243e0302fa640e6b9940334062747f5884948c8df75eb503df61fd66ab','2026-10-25T19:57:04.822Z'],
     ['3f586e6dd1d181ebb43dd7de62aa2ca4','0aac07bb6d92a4c37ddefa66f3d01f2177110c112dea50e6e56082f901eb5a25','9d04c6c01db0369aa70f9f6a9013b64d34ffb9108cfed18131553123e8dbcfa9','2026-10-25T19:53:02.734Z'],
@@ -47,7 +51,7 @@ function createBridge({readOnly=true,liveProviderPath,liveProviderHash}={}){
   const prefix=hash(CONFIG.batchId),auditFile=index=>path.join(CONFIG.root,prefix+'.ack-recovery-'+index+'.json');
   let staged=null;
   const stagedActions=new Set(['fence_prepare','fence_authorize','fence_dispatch',
-    'case_reconcile_acknowledged','case_continue_verified','case_restore_unprepared']);
+    'case_reconcile_acknowledged','case_continue_verified','case_restore_unprepared','case_restore_prepared']);
   function scope({allowAdmission=false}={}){
     pins();const m=control.validateControl(b.root,b.state),c=b.state.caseExceptionControl;
     need(c?.batchId===CONFIG.caseId&&c.exclusive===true&&(allowAdmission||c.admission===null)&&
@@ -135,6 +139,7 @@ function createBridge({readOnly=true,liveProviderPath,liveProviderHash}={}){
   }
   function history(x){
     unpreparedHistory(x);
+    preparedHistory(x);
     const refs=x.ackRecoveries??[];
     need(new Set(refs.map(v=>v.index)).size===refs.length,'CASE_ACK_AUDIT');
     for(const ref of refs){
@@ -312,7 +317,7 @@ function createBridge({readOnly=true,liveProviderPath,liveProviderHash}={}){
     // removal of all adoption references, events and files.
     let tip=CONFIG.initialExecutorHash;
     for(const a of x.reconciliations??[]){
-      if(a.kind==='SCOPED_CASE_UNPREPARED_CONTINUATION'||a.kind==='SCOPED_CASE_VERIFIED_CONTINUATION'){
+      if(['SCOPED_CASE_UNPREPARED_CONTINUATION','SCOPED_CASE_VERIFIED_CONTINUATION','SCOPED_CASE_PREPARED_CONTINUATION'].includes(a.kind)){
         need(hash(a.oldExecutor??'')===tip,'CASE_UNPREPARED_AUDIT');
         if(a.kind==='SCOPED_CASE_VERIFIED_CONTINUATION'){
           const matches=(x.caseContinuations??[]).filter(v=>v.executor===a.newExecutor);
@@ -348,6 +353,122 @@ function createBridge({readOnly=true,liveProviderPath,liveProviderHash}={}){
     out.unpreparedContinuations=[...(out.unpreparedContinuations??[]),{executor:b.executor,recordHash:hash(bytes(file))}];
     pins();need(bytes(b.file)===raw,'PERSISTENCE');atomic(b.file,next);b.state=read(b.file);
     return {status:'READY',next:0,executor:b.executor,planHash:out.planHash,notionWrites:0};
+  }
+  const preparedKind='SCOPED_CASE_PREPARED_CONTINUATION';
+  const preparedFile=a=>path.join(b.root,prefix+'.prepared-continuation-'+a.journalHash+'-'+a.newExecutor+'.json');
+  function preparedBoundary(x){
+    const o=CONFIG.preparedOrigin,d=x.dispatch;
+    need(o&&Number.isInteger(o.index)&&o.index>0&&x.next===o.index&&x.edits.length===o.index+1&&
+      x.receipt?.ticket===o.ticket&&x.receipt.snapshot===b.snapshot(CONFIG.batchId,o.index)&&
+      x.receipt.snapshotHash===o.snapshotHash&&d?.version===1&&!d.revoked&&
+      d.attempts.length===o.index&&d.attempts.every((a,i)=>a.index===i&&a.phase==='ACKNOWLEDGED'&&
+        a.provider?.status==='SUCCEEDED'&&a.provider.pageId===x.edits[i].pageId)&&
+      x.verifications?.length===o.index&&
+      JSON.stringify(d.provider)===JSON.stringify(d.attempts.at(-1).provider)&&
+      ((d.phase==='PREPARED'&&(x.status==='PREPARED'||x.status==='HALTED'&&x.haltedFrom==='PREPARED'))||
+       (d.phase==='AUTHORIZED'&&(x.status==='WRITE_PENDING'||x.status==='HALTED'&&x.haltedFrom==='WRITE_PENDING')))&&
+      /^(?:REMOTE_ERROR:|REMOTE_CALL_FAILED:|BROKER_RESPONSE_UNKNOWN$|REMOTE_RESULT_UNKNOWN$|FETCH_ERROR:)/.test(x.error??''),
+      'CASE_PREPARED_UNEXPORTED');
+  }
+  function preparedHistory(x){
+    const refs=x.casePreparedContinuations??[],events=(x.reconciliations??[]).filter(a=>a.kind===preparedKind),o=CONFIG.preparedOrigin;
+    need(refs.length===events.length&&new Set(refs.map(r=>r.executor)).size===refs.length,'CASE_PREPARED_AUDIT');
+    if(!refs.length){if(o)need(hash(bytes(b.file))===o.journalHash,'CASE_PREPARED_ORIGIN');return;}
+    need(o,'CASE_PREPARED_ORIGIN');let genesis;
+    for(const [i,ref] of refs.entries()){
+      const a=events[i],raw=bytes(preparedFile(a)),record=JSON.parse(raw),old=record.journalBefore?.batches?.[CONFIG.batchId];
+      need(a.newExecutor===ref.executor&&/^[a-f0-9-]{36}$/.test(a.newExecutor)&&
+        hash(raw)===ref.recordHash&&JSON.stringify(record.audit)===JSON.stringify(a)&&
+        hash(JSON.stringify(record.journalBefore))===a.journalHash&&a.batchId===CONFIG.batchId&&
+        a.planHash===CONFIG.planHash&&a.index===o.index&&a.ticket===o.ticket&&a.snapshotHash===o.snapshotHash&&
+        a.oldExecutor===old?.dispatch?.executor&&a.fromPhase===old.dispatch.phase&&a.expectedError===old.error&&
+        a.notionWrites===0&&a.ticketsCreated===0&&a.pageAdvances===0&&
+        JSON.stringify(old.casePreparedContinuations??[])===JSON.stringify(refs.slice(0,i))&&
+        JSON.stringify((old.reconciliations??[]).filter(v=>v.kind===preparedKind))===JSON.stringify(events.slice(0,i)),
+        'CASE_PREPARED_AUDIT');
+      preparedBoundary(old);
+      if(i===0){need(a.journalHash===o.journalHash&&a.oldExecutor===o.executor,'CASE_PREPARED_ORIGIN');genesis=old;}
+      need(JSON.stringify(old.edits)===JSON.stringify(genesis.edits)&&
+        JSON.stringify(old.dispatch.attempts)===JSON.stringify(genesis.dispatch.attempts)&&
+        JSON.stringify(old.verifications)===JSON.stringify(genesis.verifications),'CASE_PREPARED_AUDIT');
+      const authority=b.state.caseExceptionControl.authority,owner=a.owner,at=Date.parse(a.at),observed=Date.parse(owner?.observedAt);
+      need(owner?.ownerId===authority.ownerId&&owner.generation===authority.generation&&owner.scope===CONFIG.batchId&&
+        owner.evidenceHash===b.state.caseExceptionControl.manifestHash&&owner.prerequisites===true&&
+        Array.isArray(owner.conflicts)&&owner.conflicts.length===0&&Number.isFinite(at)&&Number.isFinite(observed)&&
+        observed<=at&&at-observed<=30000&&Date.parse(owner.validUntil)>at,'CASE_PREPARED_AUDIT');
+      need(Array.isArray(record.priorPages)&&record.priorPages.length===o.index,'CASE_PREPARED_AUDIT');
+      const fingerprints=record.priorPages.map((p,index)=>{
+        const s=snapshot(old,index),v=read(b.snapshot(CONFIG.batchId,index)+'.verified.json');
+        fullPage(p,old.edits[index].pageId,v.page);return b.verifiedFingerprint(s,v,old,index);
+      });
+      need(JSON.stringify(a.prior)===JSON.stringify(fingerprints),'CASE_PREPARED_AUDIT');
+      const s=snapshot(old,o.index);need(hash(JSON.stringify(s))===o.snapshotHash&&s.ticket===o.ticket,'CASE_PREPARED_AUDIT');
+      fullPage(record.page,old.edits[o.index].pageId,s.page);
+    }
+    need(x.next>=o.index&&x.next<=x.edits.length&&JSON.stringify(x.edits)===JSON.stringify(genesis.edits)&&
+      JSON.stringify(x.dispatch.attempts.slice(0,o.index))===JSON.stringify(genesis.dispatch.attempts)&&
+      JSON.stringify((x.verifications??[]).slice(0,o.index))===JSON.stringify(genesis.verifications)&&
+      JSON.stringify(x.dispatch.owner)===JSON.stringify(events.at(-1).owner)&&
+      JSON.stringify((x.reconciliations??[]).slice(0,genesis.reconciliations?.length??0))===JSON.stringify(genesis.reconciliations??[]),
+      'CASE_PREPARED_AUDIT');
+    if(x.next===o.index)need(JSON.stringify(x.receipt)===JSON.stringify(genesis.receipt),'CASE_PREPARED_AUDIT');
+    need(x.dispatch.attempts.length===o.index||x.dispatch.attempts.length===o.index+1,'CASE_PREPARED_AUDIT');
+    if(x.dispatch.attempts.length===o.index)preparedBoundary(x);
+    if(x.dispatch.attempts.length===o.index+1){
+      const a=x.dispatch.attempts[o.index],s=snapshot(x,o.index),permit=a.sendPermit;
+      need(a.index===o.index&&a.ticket===o.ticket&&a.requestHash===hash(JSON.stringify(plan(s.page,s.edit).request))&&
+        ['SEND_INTENT','ACKNOWLEDGED'].includes(a.phase),'CASE_PREPARED_AUDIT');
+      need(x.next===o.index&&['WRITE_PENDING','HALTED'].includes(x.status)&&
+          ['SEND_INTENT','ACKNOWLEDGED'].includes(x.dispatch.phase)&&a.phase===x.dispatch.phase||
+        x.next===o.index+1&&x.status==='COMPLETED'&&x.receipt===null&&b.state.active===null&&
+          ['VERIFIED','ACKNOWLEDGED'].includes(x.dispatch.phase)&&a.phase==='ACKNOWLEDGED',
+        'CASE_PREPARED_AUDIT');
+      if(permit)need(permit.executor===x.dispatch.executor&&permit.dispatchId===a.dispatchId&&
+        permit.pageId===x.edits[o.index].pageId&&permit.ownerId===x.dispatch.owner.ownerId&&
+        permit.generation===x.dispatch.owner.generation&&permit.scope===CONFIG.batchId&&
+        stamp(a.at)&&stamp(permit.observedAt)&&stamp(permit.validUntil)&&
+        Date.parse(permit.observedAt)>=Date.parse(a.at)&&Date.parse(permit.validUntil)>Date.parse(permit.observedAt)&&
+        Date.parse(permit.validUntil)-Date.parse(permit.observedAt)<=30000,'CASE_PREPARED_AUDIT');
+      if(a.phase==='ACKNOWLEDGED')need(permit&&a.provider?.status==='SUCCEEDED'&&
+        a.provider.pageId===x.edits[o.index].pageId&&JSON.stringify(a.provider)===JSON.stringify(x.dispatch.provider),'CASE_PREPARED_AUDIT');
+      if(x.next===o.index+1){
+        need(x.verifications?.length===o.index+1,'CASE_PREPARED_AUDIT');
+        const verified=read(b.snapshot(CONFIG.batchId,o.index)+'.verified.json');
+        b.verifiedFingerprint(s,verified,x,o.index);
+        need(stamp(verified.page.revision)&&Date.parse(verified.page.revision)>Date.parse(s.page.revision),'CASE_PREPARED_AUDIT');
+      }
+    }
+  }
+  function restorePrepared(input){
+    need(typeof input.apply==='boolean'&&(!readOnly||!input.apply),'READ_ONLY');
+    const {raw,batch:x}=current(input),o=CONFIG.preparedOrigin;preparedBoundary(x);history(x);
+    need(x.dispatch.executor!==b.executor&&input.expectedError===x.error&&input.ticket===o.ticket&&
+      input.snapshotHash===o.snapshotHash,'CASE_PREPARED_IDENTITY');
+    inventory(x,true);
+    need(!fs.existsSync(b.snapshot(CONFIG.batchId,x.next)+'.verified.json'),'CASE_PREPARED_UNEXPORTED');
+    const fingerprints=prior(x,input.priorPages),s=snapshot(x,x.next),page=pageData(input.page,x.edits[x.next].pageId);
+    need(hash(JSON.stringify(s))===o.snapshotHash&&s.ticket===o.ticket,'CASE_PREPARED_IDENTITY');
+    fullPage(page,x.edits[x.next].pageId,s.page);
+    const [id,bodyHash,propertiesHash,revision]=CONFIG.preimages[x.next];
+    need(id===x.edits[x.next].pageId&&hash(page.body)===bodyHash&&hash(page.properties)===propertiesHash&&page.revision===revision,
+      'CASE_PREPARED_CHANGED');
+    const at=new Date().toISOString();b.ownerProof(input.ownerProof,x.dispatch.owner);
+    need(input.ownerProof.evidenceHash===b.state.caseExceptionControl.manifestHash,'CASE_PREPARED_OWNER');
+    const audit={kind:preparedKind,at,batchId:CONFIG.batchId,planHash:CONFIG.planHash,index:x.next,
+      journalHash:hash(raw),oldExecutor:x.dispatch.executor,newExecutor:b.executor,fromPhase:x.dispatch.phase,
+      expectedError:x.error,ticket:o.ticket,snapshotHash:o.snapshotHash,prior:fingerprints,owner:clone(input.ownerProof),
+      notionWrites:0,ticketsCreated:0,pageAdvances:0};
+    if(!input.apply)return {checkOnly:true,status:x.status,next:x.next,audit};
+    const record={audit,journalBefore:JSON.parse(raw),priorPages:input.priorPages.map((p,i)=>pageData(p,x.edits[i].pageId)),page};
+    const file=preparedFile(audit);need(!fs.existsSync(file),'CASE_PREPARED_AUDIT');atomic(file,record);
+    const next=JSON.parse(raw),out=next.batches[CONFIG.batchId];out.status='PREPARED';
+    out.dispatch.executor=b.executor;out.dispatch.owner=clone(input.ownerProof);out.dispatch.phase='PREPARED';
+    out.reconciliations=[...(out.reconciliations??[]),audit];
+    out.casePreparedContinuations=[...(out.casePreparedContinuations??[]),{executor:b.executor,recordHash:hash(bytes(file))}];
+    pins();need(bytes(b.file)===raw,'PERSISTENCE');b.assertLock();b.ownerProof(input.ownerProof,x.dispatch.owner);
+    atomic(b.file,next);b.state=read(b.file);
+    return {status:'PREPARED',next:out.next,executor:b.executor,planHash:out.planHash,...clone(out.receipt),
+      notionWrites:0,ticketsCreated:0,pageAdvances:0};
   }
   async function liveOperation(input){
     need(!readOnly&&liveProvider&&!closed,'CASE_LIVE_PROVIDER_REQUIRED');b.assertLock();
@@ -421,6 +542,7 @@ function createBridge({readOnly=true,liveProviderPath,liveProviderHash}={}){
     if(input.action==='case_reconcile_acknowledged')return reconcile(input);
     if(input.action==='case_continue_verified')return continueVerified(input);
     if(input.action==='case_restore_unprepared')return restoreUnprepared(input);
+    if(input.action==='case_restore_prepared')return restorePrepared(input);
     if(readOnly)need(['status','case_authority','validate_owner_proof','validate_batch','preflight'].includes(input.action),'READ_ONLY');
     need(['case_authority','validate_owner_proof'].includes(input.action)||input.batchId===CONFIG.batchId,'CASE_ACK_SCOPE');
     need(['status','case_authority','validate_owner_proof','validate_batch','preflight','fence_begin',
