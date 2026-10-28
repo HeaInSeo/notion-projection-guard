@@ -170,9 +170,19 @@ function createUserCase({runtime,pageData,plan,atomic}){
     out.dispatch.executor=b.executor;out.dispatch.owner=JSON.parse(JSON.stringify(input.ownerProof));
     out.dispatch.phase='PREPARED';out.status='PREPARED';
     // No old ACK, no-send token, revocation or verified page is invented.
-    b.assertLock();b.ownerProof(input.ownerProof);
-    need(read(b.file)===raw,'SORI_CONTROL_USER_CASE_CHANGED');
-    need(read(approvalFile)===approvalRaw,'SORI_CONTROL_USER_APPROVAL_CHANGED');
+    try{
+      b.assertLock();b.ownerProof(input.ownerProof);
+      need(read(b.file)===raw,'SORI_CONTROL_USER_CASE_CHANGED');
+      need(read(approvalFile)===approvalRaw,'SORI_CONTROL_USER_APPROVAL_CHANGED');
+    }catch(error){
+      // The canonical atomic write has not been invoked. Retain the full audit
+      // under an explicit aborted name; never mask the original guard refusal.
+      try{const aborted=auditPath+'.aborted';fs.renameSync(auditPath,aborted);error.abortedAuditPath=aborted;}
+      catch(abortError){error.auditAbortError={message:abortError.message,code:abortError.code??null};}
+      throw error;
+    }
+    // Keep this outside the refusal catch: an atomic error may occur after a
+    // real commit, so its potentially referenced audit must never be aborted.
     atomic(b.file,next);b.state=next;
     return {status:'PREPARED',next:out.next,executor:b.executor,planHash:out.planHash,...out.receipt,
       auditPath,originalNativeCallCount:'UNKNOWN',notANoSendProof:true,

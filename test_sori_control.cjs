@@ -196,6 +196,27 @@ test('approval changed after assessment cannot commit a continuation',t=>{
   f.b.ownerProof=(...args)=>{const result=original(...args);if(++checks===2)fs.writeFileSync(file,'{"decision":"REVOKED"}');return result;};
   assert.throws(()=>f.continueUser(f.b,{...f.input,apply:true}),/SORI_CONTROL_USER_APPROVAL_CHANGED/);
   assert.equal(fs.readFileSync(f.b.file,'utf8'),f.raw);
+  const audits=fs.readdirSync(f.root).filter(n=>n.startsWith('user-case-'));
+  assert.equal(audits.length,1);assert.ok(audits[0].endsWith('.json.aborted'));
+});
+test('expired final ownership preserves its refusal and marks only the precommit audit aborted',t=>{
+  const f=legacyFixture(t);approve(f);const original=f.b.ownerProof.bind(f.b);let checks=0;
+  f.b.ownerProof=(...args)=>{if(++checks===2)throw Error('OWNERSHIP_FENCE synthetic expiry');return original(...args);};
+  assert.throws(()=>f.continueUser(f.b,{...f.input,apply:true}),/OWNERSHIP_FENCE synthetic expiry/);
+  assert.equal(fs.readFileSync(f.b.file,'utf8'),f.raw);
+  const audits=fs.readdirSync(f.root).filter(n=>n.startsWith('user-case-'));
+  assert.equal(audits.length,1);assert.ok(audits[0].endsWith('.json.aborted'));
+});
+test('an atomic error after a possible commit never aborts the referenced audit',t=>{
+  const f=legacyFixture(t);approve(f);
+  const apply=f.scope.createUserCase({...core,runtime:f.runtime,atomic(file,next){
+    core.atomic(file,next);throw Error('SYNTHETIC_ATOMIC_REPLY_UNKNOWN');}});
+  assert.throws(()=>apply(f.b,{...f.input,apply:true}),/SYNTHETIC_ATOMIC_REPLY_UNKNOWN/);
+  const disk=JSON.parse(fs.readFileSync(f.b.file,'utf8')),record=disk.batches[f.input.batchId].userCaseContinuation;
+  assert.ok(record);assert.equal(disk.batches[f.input.batchId].next,0);assert.ok(fs.existsSync(record.auditPath));
+  assert.equal(fs.existsSync(record.auditPath+'.aborted'),false);
+  const audits=fs.readdirSync(f.root).filter(n=>n.startsWith('user-case-'));
+  assert.equal(audits.length,1);assert.ok(audits[0].endsWith('.json'));
 });
 test('explicit synthetic approval preserves UNKNOWN and every original receipt without an ACK or page advance',t=>{
   const f=legacyFixture(t);approve(f);assert.equal(f.continueUser(f.b,f.input).eligible,true);
