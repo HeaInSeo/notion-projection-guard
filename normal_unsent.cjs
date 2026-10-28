@@ -16,7 +16,8 @@ function createUnsent({pageData,plan,atomic}){
       (exact?['ownerId','scope']:['ownerId','scope','generation']).every(k=>a.sendPermit[k]===input.ownerProof[k])&&
       (exact?x.status==='HALTED':x.status==='WRITE_PENDING'&&d.executor===b.executor&&input.executor===b.executor),
       'NORMAL_UNSENT_IDENTITY');
-    need(exact||d.attempts.filter(v=>v.index===x.next&&v.revokedBeforeCall).length<2,
+    need(exact||d.attempts.filter(v=>v.index===x.next&&
+      v.revokedBeforeCall?.reason==='LIVE_PRE_CALL_EXPIRED_CONTINUATION').length<2,
       'NORMAL_PRE_CALL_EXPIRY_BUDGET');
     const file=x.receipt.snapshot,st=fs.lstatSync(file);
     need(st.isFile()&&!st.isSymbolicLink()&&st.uid===process.geteuid()&&!(st.mode&0o077),

@@ -29,7 +29,9 @@ function liveFixture(t,fault){
   async mcp__codex_apps__dev_server___additional_mcp__dev_server_additional_mcp_start_process(){
    return {content:[{type:'text',text:'Process started with PID 123\nNPG/2 {"ready":true}\n'}]};},
   async mcp__codex_apps__dev_server___additional_mcp__dev_server_additional_mcp_interact_with_process(q){
-   assert.equal(q.wait_for_prompt,false);const input=JSON.parse(q.input);
+   const input=JSON.parse(q.input);
+   const metadata=['case_consume_live','case_live_send','fence_ack','fence_observe','fence_halt','close'].includes(input.action);
+   assert.equal(q.wait_for_prompt,metadata&&!Object.hasOwn(input,'page')&&!Object.hasOwn(input,'edits')&&q.input.length<=16384);
    if(input.action==='case_stage_input')stagedAction=input.operation.action;
    let result;
    try{result={requestId:input.requestId,ok:true,result:bridge.handle(input)};}
@@ -41,12 +43,13 @@ function liveFixture(t,fault){
    if(input.action==='close')closed++;
    pending='NPG/2 '+JSON.stringify(result)+'\n';
    // The transport consumed output during input; only the retained frame is
-   // available. Never return the preceding 3 MB echo through a 30-line tail.
+   // available. The final retained line is blank, as in real Additional MCP.
+   // Never return the preceding 3 MB echo through a 30-line tail.
    return {content:[{type:'text',text:'Process running; no incremental output'}]};
   },
   async mcp__codex_apps__dev_server___additional_mcp__dev_server_additional_mcp_read_process_output(q){
-   assert.equal(q.offset,-1);assert.equal(q.length,1);tails++;
-   return {content:[{type:'text',text:pending}]};},
+   assert.equal(q.offset,-2);assert.equal(q.length,2);tails++;
+   return {content:[{type:'text',text:pending+'\n'}]};},
   async mcp__codex_apps__notion_fetch({id}){return pages.get(id)||page(id);},
   async mcp__codex_apps__notion_notion_update_page(q){
    writes++;if(fault==='native-result-lost')throw Error('NORMAL_PRE_CALL_PERMIT_EXPIRED');
@@ -140,6 +143,21 @@ test('exact legacy expiry recovery verifies prior three pages, preserves all att
  assert.deepEqual(now.receipt,old.receipt);assert.deepEqual(now.verifications,old.verifications);
  assert.equal(now.dispatch.attempts.length,old.dispatch.attempts.length);assert.ok(now.dispatch.attempts.at(-1).revokedBeforeCall);
  assert.equal(now.error,old.error);assert.throws(()=>f.reconcile(f.b,{...f.input,apply:true}));
+});
+test('the explicit legacy revocation does not consume either live permit renewal',t=>{
+ const f=exactFixture(t),r=f.reconcile(f.b,{...f.input,apply:true});
+ class ExpiredDate extends Date{static now(){return Date.now()+16000;}}
+ const restore=compiled('normal_unsent.cjs',{Date:ExpiredDate}).createUnsent(core);
+ const live={batchId,executor:r.executor,planHash:r.planHash,ticket:r.ticket};
+ for(let index=0;index<3;index++){
+  const ownerProof=proof(),call=(action,extra={})=>f.b.handle({...live,action,ownerProof,...extra});
+  call('fence_authorize',{page:page(ids[3])});const d=call('fence_dispatch',{page:page(ids[3])});live.dispatchId=d.dispatchId;
+  const permit=call('fence_confirm_send').permit;
+  const input={...live,page:page(ids[3]),permit,ownerProof};
+  if(index<2)assert.equal(restore(f.b,input).status,'PREPARED');
+  else assert.throws(()=>restore(f.b,input),/NORMAL_PRE_CALL_EXPIRY_BUDGET/);
+ }
+ assert.equal(f.b.state.batches[batchId].dispatch.attempts.filter(a=>a.revokedBeforeCall).length,3);
 });
 test('actual HALTED runner enters exact recovery through the bridge and finishes only the remaining three pages',async t=>{
  const f=exactFixture(t),pages=new Map(ids.map((id,i)=>[id,i<3?f.input.pages[i]:page(id)]));

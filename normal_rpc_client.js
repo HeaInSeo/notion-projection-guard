@@ -6,11 +6,12 @@
   if(![start,interact,read].every(f=>typeof f==='function'))throw Error('NORMAL_ADDITIONAL_MCP_REQUIRED');
   const text=r=>(r?.content??[]).filter(c=>c.type==='text').map(c=>c.text).join('\n');
   const clone=x=>JSON.parse(JSON.stringify(x));
+  const metadata=new Set(['case_consume_live','case_live_send','fence_ack','fence_observe','fence_halt','close']);
   let pid=null,sequence=0,closed=false,busy=false,grant=null,dispatch=null;
   const unsent=new WeakMap();
   function parse(r,id){
     if(r?.isError||r?.error||r?.call_id||r?.structuredContent?.call_id)throw Error('NORMAL_RPC_TRANSPORT_UNKNOWN');
-    const lines=text(r).split('\n').filter(l=>l.startsWith('NPG/2 '));
+    const lines=text(r).split('\n').map(l=>l.trim()).filter(l=>l.startsWith('NPG/2 '));
     for(const line of lines){
       if(line.length>32768)throw Error('NORMAL_RPC_REPLY_TOO_LARGE');
       const v=JSON.parse(line.slice(6));if(id===null?v.ready===true:v.requestId===id)return v;
@@ -24,7 +25,7 @@
     parse(r,null);pid=Number(text(r).match(/PID (\d+)/)?.[1]);
     if(!Number.isSafeInteger(pid)||pid<=0)throw Error('NORMAL_RPC_START_UNKNOWN');
     let ready=parse(r,null);
-    for(let i=0;!ready&&i<12;i++)ready=parse(await read({pid,offset:-1,length:1,timeout_ms:0}),null);
+    for(let i=0;!ready&&i<12;i++)ready=parse(await read({pid,offset:-2,length:2,timeout_ms:0}),null);
     if(!ready)throw Error('NORMAL_RPC_NOT_READY');
   }
   async function rpc(q,internal=false){
@@ -34,10 +35,12 @@
     try{
       await boot();const requestId='normal-'+pid+'-'+(++sequence);
       const input=JSON.stringify({...q,requestId})+'\n';
-      // Never use regex prompt detection on page data. A retained single-line
-      // reply avoids returning the preceding multi-megabyte input echo.
-      let v=parse(await interact({pid,input,timeout_ms:500,wait_for_prompt:false}),requestId);
-      for(let i=0;!v&&i<12;i++)v=parse(await read({pid,offset:-1,length:1,timeout_ms:0}),requestId);
+      // Prompt matching is restricted to bounded metadata. Full page inputs
+      // never enter it. Retained output includes the frame and trailing blank
+      // line, without the preceding multi-megabyte input echo.
+      const bounded=metadata.has(q.action)&&!Object.hasOwn(q,'page')&&!Object.hasOwn(q,'edits')&&input.length<=16384;
+      let v=parse(await interact({pid,input,timeout_ms:500,wait_for_prompt:bounded}),requestId);
+      for(let i=0;!v&&i<12;i++)v=parse(await read({pid,offset:-2,length:2,timeout_ms:0}),requestId);
       if(!v)throw Error('NORMAL_RPC_RESPONSE_UNKNOWN');
       if(v.ok!==true){const e=Error(v.code+': '+v.error);e.code=v.code;throw e;}
       const result=v.result;

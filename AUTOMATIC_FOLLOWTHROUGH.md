@@ -5,8 +5,10 @@
 The current ordinary entry uses `normal_rpc_client.js` as `createClient`.
 Install all fourteen files declared by `normal_live_command.js` from the same
 reviewed source. This entry uses Additional MCP directly and bounded `NPG/2`
-reply frames. Retained reads request only the final output line, rather than
-returning a preceding multi-megabyte input echo. Requests are never resent.
+reply frames. Retained reads request the final frame and its trailing blank
+line, rather than returning a preceding multi-megabyte input echo. Only bounded
+metadata uses prompt matching, so a send confirmation can return directly;
+full page inputs never enter that path. Requests are never resent.
 The original eighteen control files, source freshness of thirty seconds and
 send validity of at most fifteen seconds remain unchanged.
 
@@ -19,7 +21,8 @@ executor cannot enter that branch. The continuation verifies the entire pending
 preimage, revision, immutable request, ticket and current attempt. It privately
 audits and revokes only the expired, uncalled attempt, restores the same ticket
 to PREPARED and authorizes a new permit. At most two such renewals are allowed
-per page; persistent delay halts without calling Notion. No native invocation
+per page, excluding the one explicit legacy-incident revocation; persistent
+delay halts without calling Notion. No native invocation
 is retried, and a crash loses the process-local token and remains blocked.
 
 `reconcile_permit_expiry.cjs` separately admits only the legacy NodeKit149
