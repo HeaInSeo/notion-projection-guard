@@ -1,5 +1,64 @@
 # Ordinary landing and successor intake
 
+## Local ownership consumption under slow transport
+
+The first scheduled adoption of PR16 halted at `SEND_INTENT` before a send
+permit existed. The original hosted provider could lose its 30-second source
+window while waiting for multiple control-plane replies. Its timestamps must
+not be renewed, and the halted transaction must not be replayed.
+
+`normal_followthrough_v2.js` is the corrected ordinary entry. Load its factories
+from the same reviewed immutable source and install all eleven files declared
+by `normal_live_command.js` in a new versioned directory. The literal command
+bootstrap checks every extension before evaluating it, validates the original
+case manifest and all original controls, then starts `normal_bridge.cjs` under
+the original canonical broker lock. No original control file is replaced.
+
+Wire `createTransport`, the unchanged `runner.js` as `createClient`,
+`normal_live_runner.js` as `createLiveRunner`, `normal_live_owner.js` as
+`createWitness`, `landed_task_projection.js` as `createLandedProjection`, and
+`normal_live_command.js` as `createCommand`. Supply the installation manifest,
+actual central task/run identifiers and the existing device configuration.
+Call `run(bundle, references)` with the same validated merged-task binding and
+fresh original/pair/Router/WIP references used by the first entry.
+
+Every full operation is staged before its fresh native and scheduler reads.
+Those reads run concurrently and retain the start timestamp. The locked local
+consumer checks the actual enabled in-progress run, reference token, complete
+source matches, original controls, current batch and installed extensions before
+issuing a proof directly to the unchanged broker. There is no extra hosted
+owner-proof round trip. Source freshness stays 30 seconds; the send permit stays
+at most 15 seconds and is synchronously checked before the sole native call.
+The `case_stage_input`, `case_consume_live` and `case_live_send` protocol names
+are compatibility names for the pinned transport's bounded metadata handling;
+this command never loads or borrows the incident-specific Sori bridge/provider.
+
+All ordinary sources, plans, native scope, worker proof, main-branch merge and
+full protected readback gates remain in `landed_task_projection.js`. BORI is
+excluded. A failed or uncertain mutation is never retried.
+
+### Exact denied-confirmation recovery
+
+`reconcile_unpermitted_dispatch.cjs` is limited by literal journal, plan,
+snapshot, dispatch, ticket, runner and diagnostic pins to the observed
+`NODEKIT149-LANDED-20261028` failure. It is not a general SEND_INTENT recovery.
+The original pinned driver calls Notion only after successful confirmation and
+the synchronous permit check. This recovery requires its actual caught denial,
+no durable permit, no provider/task, the complete unchanged native preimage and
+revision, fresh scheduled ownership and the same canonical lock. A lost reply
+with a saved permit, changed page, absent evidence or different journal fails.
+
+Only the adopting owner may explicitly set `recovery: {apply: true}` for that
+exact incident. The runner performs read-only assessment and then a new full
+read and new ownership observation before apply. Apply saves a private complete
+preimage audit, revokes the exact unpermitted exported intent, retains the old
+failure and attempt, and restores PREPARED on the same plan/index/ticket under
+the new executor. It makes zero Notion calls, creates zero tickets and advances
+zero pages. The ordinary runner then performs new authorization, dispatch,
+confirmation, its one native call, ACK and full verification. Neither the old
+executor nor a second recovery may consume the revoked intent. Missing/lost
+recovery results require inspection; there is no automatic reset or replay.
+
 The exclusive recovery provider is intentionally restricted to its original
 incident. Do not weaken it or reuse it for ordinary `exclusive=false` work.
 `landed_task_projection.js` and `normal_projection_prerequisites.js` provide the

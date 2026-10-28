@@ -292,3 +292,62 @@ for(const mutation of ['changed','symlink','writable'])test('literal bootstrap r
  const r=cp.spawnSync('/bin/sh',['-c',cmd],{encoding:'utf8'});
  assert.notEqual(r.status,0);assert.equal(r.stdout.includes('NPG-NORMAL/1'),false);assert.match(r.stderr,/ORDINARY_(FILE_PIN|EXTENSION_FILE)/);
 });
+
+for(const repository of ['nodekit','sori'])test('local ordinary ownership completes with staged full inputs and one send per page: '+repository,async t=>{
+ const {Broker}=require('./broker.cjs'),{createBridge}=require('./normal_bridge.cjs');
+ const f=projectionFixture(repository,repository==='nodekit'?149:47),root=fs.mkdtempSync(path.join(os.tmpdir(),'npg-live-flow-'));
+ f.bundle.observationId=repository.toUpperCase()+f.bundle.binding.source.pr+'-LANDED-20261028';
+ const marker='observation-id: '+f.bundle.observationId;
+ for(const n of f.bundle.native){n.properties['큐 정리 근거']=marker+'; current source';f.pages.get(n.pageId).props['큐 정리 근거']=n.properties['큐 정리 근거'];}
+ for(const e of f.bundle.edits)e.newStr=marker+'; current source '+e.pageId;
+ f.pages.set(policy,{props:{},body:'Applied WIP authority'});
+ let b,bridge,updates=0,peeks=0;const events=[];
+ const scope={productionEnabled:true,productionPages:f.bundle.edits.map(e=>e.pageId),canaryPages:[],
+  centralSections:f.bundle.edits.filter(e=>e.heading.startsWith('## CURRENT ·')).map(e=>({pageId:e.pageId,heading:e.heading})),
+  headingPrefixes:['## CURRENT CENTRAL OBSERVATION','## CURRENT INCIDENT MAINTENANCE']};
+ t.after(()=>{if(b&&!b.closed)b.close();fs.rmSync(root,{recursive:true,force:true});});
+ const tools={...f.tools,
+  async mcp__codex_apps__automations_peek(){peeks++;events.push('fresh-central');return {structuredContent:{automations:[{id:'1'.repeat(32),is_enabled:true,
+   run_details:{last_run:{id:'actual-run',recorded_status:'in_progress'}}}]}};},
+  async mcp__codex_apps__notion_notion_update_page(request){updates++;events.push('native-write');
+   const p=f.pages.get(request.page_id),e=request.content_updates[0];p.body=p.body.replace(e.old_str,()=>e.new_str);
+   return {structuredContent:{page_id:request.page_id}};},
+  async mcp__codex_apps__dev_server___additional_mcp__dev_server_additional_mcp_start_process(){
+   b=new Broker(root,scope);bridge=createBridge({broker:b,installation:{root},verifyExtensions(){},
+    probe(){return {canonical:{exclusive:false,manifestHash:'f'.repeat(64)},brokerExecutor:b.executor,journalHash:'e'.repeat(64)};}});
+   return {content:[{type:'text',text:'Process started with PID '+process.pid+'\nNPG/1 {"ready":true}'}]};},
+  async mcp__codex_apps__dev_server___additional_mcp__dev_server_additional_mcp_interact_with_process({input}){
+   const q=JSON.parse(input);events.push(q.action);let r;
+   try{r={requestId:q.requestId,ok:true,result:bridge.handle(q)};}catch(e){r={requestId:q.requestId,ok:false,error:e.message,code:e.code};}
+   return {content:[{type:'text',text:'NPG/1 '+JSON.stringify(r)}]};},
+  async mcp__codex_apps__dev_server___additional_mcp__dev_server_additional_mcp_read_process_output(){throw Error('No replay');}
+ };
+ const references=[f.bundle.binding.writer.pageId,f.bundle.binding.reviewer.pageId,router,policy].map(pageId=>({pageId,page:raw(pageId,f.pages.get(pageId))}));
+ const client=factory('normal_followthrough_v2.js')(tools,{createTransport:transport,createClient:factory('runner.js'),
+  createLiveRunner:factory('normal_live_runner.js'),createWitness:factory('normal_live_owner.js'),createLandedProjection:landed,
+  createCommand:()=> 'SYNTHETIC_VERIFIED_LIVE_COMMAND',installation:{},centralTaskId:'1'.repeat(32),runId:'actual-run',runnerConfig:{}});
+ const result=await client.run(f.bundle,references);
+ assert.equal(result.status,'COMPLETE');assert.equal(updates,repository==='sori'?8:6);assert.equal(b.state.active,null);
+ for(let i=0;i<events.length;i++)if(events[i]==='case_stage_input'){
+  assert.equal(events[i+1],'fresh-central');assert.equal(events[i+2],'case_consume_live');
+ }
+ assert.equal(events.filter(e=>e==='case_live_send').length,updates);
+ assert.equal(peeks,1+1+updates*4); // one preflight, begin, and prepare/authorize/dispatch/send
+});
+
+function liveOwnerFixture(){
+ const f=providerFixture(),config={...f.config,referenceToken:'actual-broker-reference'};
+ return {...f,config,witness:factory('normal_live_owner.js')(f.tools,config)};
+}
+test('live witness binds actual enabled run and unchanged full source to original read time',async()=>{
+ const f=liveOwnerFixture(),r=await f.witness({batchId:f.config.batchId});
+ assert.equal(r.referenceToken,'actual-broker-reference');assert.equal(r.nativeChecks.length,4);
+ assert.equal(r.central.run.id,f.config.runId);assert.ok(Date.parse(r.observedAt)<=Date.now());
+});
+for(const [name,change] of [
+ ['body',f=>f.pages.get(router).body+=' unrelated drift'],
+ ['native hold',f=>f.pages.get(writer).props['차단 대상']='new real HOLD'],
+ ['own event',f=>f.pages.get(writer).props['이벤트 ID']='a new own claim']
+])test('live witness rejects '+name,async()=>{
+ const f=liveOwnerFixture();change(f);await assert.rejects(f.witness({batchId:f.config.batchId}));
+});

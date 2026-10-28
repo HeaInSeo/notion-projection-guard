@@ -1,0 +1,91 @@
+'use strict';
+// Ordinary scheduled projection only. The legacy core and all original control
+// files remain unchanged. A stage is data, and is never a grant or send permit.
+const fs=require('node:fs'),crypto=require('node:crypto');
+const hash=x=>crypto.createHash('sha256').update(x).digest('hex');
+const copy=x=>JSON.parse(JSON.stringify(x));
+const need=(v,c)=>{if(!v)throw Error(c);};
+function createBridge({broker,probe,installation,reconcileUnpermitted,verifyExtensions}){
+  let init=null,staged=null,closed=false;
+  const check=()=>{
+    need(!closed,'NORMAL_BRIDGE_CLOSED');broker.assertLock();verifyExtensions();
+    const p=probe({root:installation.root,runtime:installation.runtime,
+      caseModuleHash:installation.caseModuleHash,brokerPid:process.pid,batchId:init.batchId});
+    need(p.canonical.exclusive===false&&p.brokerExecutor===broker.executor,'NORMAL_BRIDGE_OWNER');
+    return p;
+  };
+  function proof(w){
+    const p=check(),at=Date.parse(w?.observedAt),now=Date.now(),c=w?.central;
+    need(w?.referenceToken===init.referenceToken&&Number.isFinite(at)&&at<=now&&now-at<30000,
+      'NORMAL_LIVE_EXPIRED');
+    need(Array.isArray(w.nativeChecks)&&w.nativeChecks.length===init.referenceIds.length&&
+      w.nativeChecks.every((v,i)=>v.pageId===init.referenceIds[i]&&v.matched===true&&
+        v.observedAt===w.observedAt&&typeof v.revision==='string'),'NORMAL_LIVE_NATIVE');
+    need(c?.id===init.centralTaskId&&c.is_enabled===true&&c.run?.id===init.runId&&
+      c.run.recorded_status==='in_progress','NORMAL_LIVE_CENTRAL_OWNER');
+    return {ownerId:'automation:'+init.centralTaskId,generation:init.runId,scope:init.batchId,
+      prerequisites:true,conflicts:[],evidenceHash:p.canonical.manifestHash,
+      observedAt:w.observedAt,validUntil:new Date(Math.min(now+15000,at+30000)).toISOString(),
+      currentCentralRunId:c.run.id,currentCentralRunStatus:c.run.recorded_status,
+      authoritySource:'CANONICAL_CASE_ADMISSION',
+      prerequisiteEvidence:'NORMAL-LIVE:'+init.referenceToken+':'+p.journalHash};
+  }
+  function bound(op){
+    need(op?.batchId===init.batchId&&!Object.hasOwn(op,'ownerProof'),'NORMAL_OPERATION_SCOPE');
+    if(op.action==='fence_begin')need(JSON.stringify(op.edits)===JSON.stringify(init.edits),'NORMAL_PLAN_CHANGED');
+    else if(op.action!=='normal_reconcile_unpermitted'){
+      const b=broker.state.batches[init.batchId];
+      need(b?.planHash===init.planHash&&op.planHash===b.planHash&&op.executor===broker.executor,'NORMAL_OPERATION_IDENTITY');
+    }
+  }
+  return {handle(input){
+    need(!closed,'NORMAL_BRIDGE_CLOSED');
+    if(input.action==='close'){closed=true;staged=null;return broker.handle({action:'close'});}
+    if(input.action==='normal_init'){
+      need(!init&&!staged&&/^[a-f0-9]{32}$/.test(input.centralTaskId??'')&&typeof input.runId==='string'&&
+        /^[A-Za-z0-9-]{1,100}$/.test(input.batchId??'')&&Array.isArray(input.edits)&&input.edits.length>0&&
+        Array.isArray(input.referenceIds)&&input.referenceIds.length>=4&&
+        new Set(input.referenceIds).size===input.referenceIds.length&&
+        input.referenceIds.every(id=>/^[a-f0-9]{32}$/.test(id))&&
+        input.referenceIds.includes('3bf86e6dd1d18110938bc358e17c779e')&&
+        input.referenceIds.includes('3b286e6dd1d18194866dd8d7a28c7ab4'),'NORMAL_INIT');
+      need(['sori','nodekit'].includes(input.repository)&&Number.isSafeInteger(input.pr)&&input.pr>0&&
+        new RegExp('^'+input.repository.toUpperCase()+input.pr+'-LANDED-[0-9]{8}$').test(input.batchId),
+        'NORMAL_ADOPTED_SCOPE');
+      init={batchId:input.batchId,centralTaskId:input.centralTaskId,runId:input.runId,
+        referenceIds:copy(input.referenceIds),edits:copy(input.edits),planHash:hash(JSON.stringify(input.edits)),
+        referenceToken:crypto.randomUUID()};
+      try{check();return {referenceToken:init.referenceToken,planHash:init.planHash,executor:broker.executor};}
+      catch(e){init=null;throw e;}
+    }
+    need(init,'NORMAL_INIT_REQUIRED');
+    if(input.action==='case_stage_input'){
+      need(!staged&&input.batchId===init.batchId&&
+        ['fence_begin','fence_prepare','fence_authorize','fence_dispatch','normal_reconcile_unpermitted'].includes(input.operation?.action),
+        'NORMAL_STAGE_SCOPE');bound(input.operation);check();
+      const operation=copy(input.operation),stageId=crypto.randomUUID(),inputHash=hash(JSON.stringify(operation));
+      staged={operation,stageId,inputHash};return {stageId,inputHash};
+    }
+    if(input.action==='case_consume_live'){
+      need(input.batchId===init.batchId&&staged&&input.stageId===staged.stageId&&input.inputHash===staged.inputHash,
+        'NORMAL_STAGE_IDENTITY');
+      const op=staged.operation;staged=null;bound(op);const ownerProof=proof(input.liveSource);
+      if(op.action==='normal_reconcile_unpermitted'){
+        need(typeof reconcileUnpermitted==='function','NORMAL_RECOVERY_UNAVAILABLE');
+        return reconcileUnpermitted(broker,{...op,ownerProof});
+      }
+      return broker.handle({...op,ownerProof});
+    }
+    if(input.action==='case_live_send'){
+      need(!staged&&input.batchId===init.batchId&&input.operation?.action==='fence_confirm_send','NORMAL_SEND_SCOPE');
+      bound(input.operation);return broker.handle({...input.operation,ownerProof:proof(input.liveSource)});
+    }
+    need(!staged&&input.batchId===init.batchId&&
+      ['status','validate_batch','preflight','fence_observe','fence_ack','fence_verify','fence_halt'].includes(input.action),
+      'NORMAL_ACTION');
+    if(input.action==='validate_batch')need(JSON.stringify(input.edits)===JSON.stringify(init.edits),'NORMAL_PLAN_CHANGED');
+    if(input.action==='preflight')need(init.edits.some(e=>JSON.stringify(e)===JSON.stringify(input.edit)),'NORMAL_PLAN_CHANGED');
+    check();return broker.handle(input);
+  }};
+}
+module.exports={createBridge};
