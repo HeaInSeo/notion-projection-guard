@@ -37,11 +37,11 @@
     const load=n=>{const m={exports:{}};new Function('require','module','exports',data[n])(require,m,m.exports);return m.exports;};
     const probe=load('normal_projection_probe.cjs').probe;
     const reconcile=load('reconcile_unpermitted_dispatch.cjs').createReconciler({...core,runtime:c.runtime});
-    const restoreUnsent=load('normal_unsent.cjs').createUnsent(core);
+    const unsent=load('normal_unsent.cjs'),restoreUnsent=unsent.createUnsent(core),resumePrepared=unsent.createPreparedResumer(core);
     const reconcilePermitExpiry=load('reconcile_permit_expiry.cjs').createReconciler({...core,runtime:c.runtime,restoreUnsent});
     const b=new core.Broker(c.root,JSON.parse(trusted(path.join(c.runtime,'policy.json'))));
     const bridge=load('normal_bridge.cjs').createBridge({broker:b,probe,installation:c,
-      reconcileUnpermitted:reconcile,reconcilePermitExpiry,restoreUnsent,verifyExtensions});
+      reconcileUnpermitted:reconcile,reconcilePermitExpiry,restoreUnsent,resumePrepared,verifyExtensions});
     process.stdout.write('NPG/2 {"ready":true}\n');
     const rl=readline.createInterface({input:process.stdin,crlfDelay:Infinity});
     rl.on('line',line=>{let q;try{q=JSON.parse(line);const result=bridge.handle(q);

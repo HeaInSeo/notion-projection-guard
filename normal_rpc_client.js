@@ -39,7 +39,7 @@
       // never enter it. Retained output includes the frame and trailing blank
       // line, without the preceding multi-megabyte input echo.
       const bounded=metadata.has(q.action)&&!Object.hasOwn(q,'page')&&!Object.hasOwn(q,'edits')&&input.length<=16384;
-      let v=parse(await interact({pid,input,timeout_ms:500,wait_for_prompt:bounded}),requestId);
+      let v=parse(await interact({pid,input,timeout_ms:bounded?3000:500,wait_for_prompt:bounded}),requestId);
       for(let i=0;!v&&i<12;i++)v=parse(await read({pid,offset:-2,length:2,timeout_ms:0}),requestId);
       if(!v)throw Error('NORMAL_RPC_RESPONSE_UNKNOWN');
       if(v.ok!==true){const e=Error(v.code+': '+v.error);e.code=v.code;throw e;}

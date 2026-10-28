@@ -49,4 +49,97 @@ function createUnsent({pageData,plan,atomic}){
       auditPath,notionWrites:0,pageAdvances:0,ticketsCreated:0};
   };
 }
-module.exports={createUnsent};
+function createPreparedResumer({pageData,plan,atomic}){
+  const read=file=>{const st=fs.lstatSync(file);
+    need(st.isFile()&&!st.isSymbolicLink()&&st.uid===process.geteuid()&&!(st.mode&0o077),
+      'PREPARED_RESUME_PRIVATE');return fs.readFileSync(file,'utf8');};
+  return function resume(b,input){
+    b.assertLock();b.ownerProof(input.ownerProof);
+    const raw=read(b.file),state=JSON.parse(raw),x=state.batches[input.batchId],d=x?.dispatch;
+    need(typeof input.apply==='boolean'&&state.active===input.batchId&&
+      JSON.stringify(state)===JSON.stringify(b.state)&&x?.receipt&&
+      (x.status==='PREPARED'||x.status==='HALTED'&&x.haltedFrom==='PREPARED')&&
+      d?.version===1&&d.phase==='PREPARED'&&typeof d.executor==='string'&&d.executor!==b.executor&&
+      Number.isSafeInteger(x.next)&&x.next>=0&&x.next<x.edits.length&&typeof x.receipt.ticket==='string'&&
+      d.owner?.ownerId===input.ownerProof.ownerId&&d.owner.scope===input.ownerProof.scope&&
+      input.ownerProof.scope===input.batchId&&input.planHash===x.planHash&&hash(JSON.stringify(x.edits))===x.planHash&&
+      Array.isArray(d.attempts)&&d.attempts.every(a=>Number.isSafeInteger(a.index)&&a.index>=0&&a.index<=x.next),
+      'PREPARED_RESUME_BOUNDARY');
+    const file=b.snapshot(input.batchId,x.next),sr=read(file),s=JSON.parse(sr),edit=x.edits[x.next];
+    const fresh=pageData(input.page,edit.pageId),generated=plan(fresh,edit),saved=pageData(s.page.raw,edit.pageId);
+    need(x.receipt.snapshot===file&&hash(sr)===x.receipt.snapshotHash&&hash(JSON.stringify(s))===x.receipt.snapshotHash&&
+      s.batchId===input.batchId&&s.index===x.next&&s.ticket===x.receipt.ticket&&
+      JSON.stringify(s.edit)===JSON.stringify(edit)&&saved.body===s.page.body&&
+      saved.properties===s.page.properties&&saved.revision===s.page.revision&&
+      s.bodyHash===hash(s.page.body)&&s.propertiesHash===hash(s.page.properties)&&
+      s.expectedHash===hash(s.expected)&&fresh.body===s.page.body&&fresh.properties===s.page.properties&&
+      fresh.revision===s.page.revision&&generated.expected===s.expected&&
+      generated.beforeHash===s.beforeHash&&generated.afterHash===s.afterHash&&
+      !fs.existsSync(file+'.actual.json')&&!fs.existsSync(file+'.verified.json'),
+      'PREPARED_RESUME_PREIMAGE');
+    const current=d.attempts.filter(a=>a.index===x.next),revocations=[];
+    if(d.provider){
+      const previous=d.attempts.at(-1);
+      need(current.length===0&&previous?.index<x.next&&previous.phase==='ACKNOWLEDGED'&&
+        d.provider.status==='SUCCEEDED'&&JSON.stringify(previous.provider)===JSON.stringify(d.provider),
+        'PREPARED_RESUME_PROVIDER_UNRESOLVED');
+    }
+    for(const a of current){
+      const revoked=a.revokedBeforeCall;
+      need(a.phase==='SEND_INTENT'&&!a.provider&&revoked&&
+        ['LIVE_PRE_CALL_EXPIRED_CONTINUATION','EXACT_PRE_CALL_EXPIRED_CONTINUATION'].includes(revoked.reason)&&
+        a.ticket===s.ticket&&a.requestHash===hash(JSON.stringify(generated.request))&&
+        a.sendPermit?.dispatchId===a.dispatchId&&a.sendPermit.pageId===edit.pageId&&
+        Date.parse(a.sendPermit.validUntil)<=Date.now()&&
+        typeof revoked.record==='string'&&path.dirname(revoked.record)===b.root&&
+        path.basename(revoked.record).startsWith('precall-'+hash(input.batchId)+'-'),
+        'PREPARED_RESUME_SEND_UNRESOLVED');
+      const bytes=read(revoked.record),record=JSON.parse(bytes),audit=record.audit,
+        before=record.journalBefore,prior=before?.batches?.[input.batchId],attempt=prior?.dispatch?.attempts?.at(-1);
+      const unrevoked=JSON.parse(JSON.stringify(a));delete unrevoked.revokedBeforeCall;
+      need(audit&&audit.kind===revoked.reason&&audit.at===revoked.at&&audit.batchId===input.batchId&&
+        audit.planHash===x.planHash&&audit.index===x.next&&audit.ticket===s.ticket&&
+        audit.dispatchId===a.dispatchId&&audit.oldExecutor===a.sendPermit.executor&&
+        JSON.stringify(audit.permit)===JSON.stringify(a.sendPermit)&&
+        audit.notionWrites===0&&audit.pageAdvances===0&&audit.ticketsCreated===0&&
+        audit.journalBeforeHash===hash(JSON.stringify(before))&&before.active===input.batchId&&
+        prior.planHash===x.planHash&&prior.next===x.next&&prior.dispatch.phase==='SEND_INTENT'&&
+        prior.dispatch.provider===null&&JSON.stringify(prior.receipt)===JSON.stringify(x.receipt)&&
+        JSON.stringify(attempt)===JSON.stringify(unrevoked)&&attempt?.dispatchId===a.dispatchId&&attempt.ticket===a.ticket&&
+        !attempt.provider&&!attempt.revokedBeforeCall&&
+        JSON.stringify(attempt.sendPermit)===JSON.stringify(a.sendPermit)&&
+        (x.reconciliations??[]).some(v=>JSON.stringify(v)===JSON.stringify(audit)),
+        'PREPARED_RESUME_REVOCATION_AUDIT');
+      revocations.push({dispatchId:a.dispatchId,record:revoked.record,sha256:hash(bytes)});
+    }
+    need(Array.isArray(input.pages)&&input.pages.length===x.next&&
+      (x.verifications??[]).length===x.next,'PREPARED_RESUME_PRIOR_PAGES');
+    const prior=[];
+    for(let index=0;index<x.next;index++){
+      const p=b.snapshot(input.batchId,index),ps=read(p),pv=read(p+'.verified.json'),
+        snapshot=JSON.parse(ps),verified=JSON.parse(pv),fingerprint=b.verifiedFingerprint(snapshot,verified,x,index),
+        native=pageData(input.pages[index],x.edits[index].pageId);
+      need(hash(ps)===fingerprint.snapshotHash&&hash(pv)===fingerprint.verifiedHash&&
+        native.body===verified.page.body&&native.properties===verified.page.properties&&
+        Date.parse(native.revision)>=Date.parse(verified.page.revision),'PREPARED_RESUME_PRIOR_CHANGED');
+      prior.push(fingerprint);
+    }
+    const audit={kind:'PREPARED_NO_SEND_CONTINUATION',at:new Date().toISOString(),batchId:input.batchId,
+      planHash:x.planHash,index:x.next,ticket:s.ticket,snapshotHash:x.receipt.snapshotHash,
+      oldExecutor:d.executor,newExecutor:b.executor,owner:input.ownerProof,journalBeforeHash:hash(raw),
+      revocations,prior,notionWrites:0,pageAdvances:0,ticketsCreated:0};
+    if(!input.apply)return {eligible:true,checkOnly:true,status:x.status,next:x.next,audit};
+    const auditPath=path.join(b.root,'prepared-resume-'+hash(input.batchId)+'-'+crypto.randomUUID()+'.json');
+    const fd=fs.openSync(auditPath,'wx',0o600);
+    try{fs.writeFileSync(fd,JSON.stringify({audit,journalBefore:state,freshPage:input.page,priorPages:input.pages}));fs.fsyncSync(fd);}finally{fs.closeSync(fd);}
+    const next=JSON.parse(raw),out=next.batches[input.batchId];
+    out.status='PREPARED';out.dispatch.phase='PREPARED';out.dispatch.executor=b.executor;
+    out.dispatch.owner=JSON.parse(JSON.stringify(input.ownerProof));
+    out.reconciliations=[...(out.reconciliations??[]),audit];
+    b.assertLock();b.ownerProof(input.ownerProof);need(read(b.file)===raw,'PREPARED_RESUME_CHANGED');
+    atomic(b.file,next);b.state=next;
+    return {status:'PREPARED',next:out.next,executor:b.executor,planHash:out.planHash,...out.receipt,
+      auditPath,notionWrites:0,pageAdvances:0,ticketsCreated:0};
+  };
+}
+module.exports={createUnsent,createPreparedResumer};
