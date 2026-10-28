@@ -163,7 +163,7 @@ function liveBootstrapFixture(t){
  const names=['additional_mcp_transport.js','landed_task_projection.js','normal_projection_prerequisites.js',
   'normal_projection_probe.cjs','ordinary_followthrough.js','normal_bridge.cjs','normal_live_owner.js',
   'normal_live_runner.js','normal_followthrough_v2.js','normal_live_command.js','reconcile_unpermitted_dispatch.cjs',
-  'normal_rpc_client.js','normal_unsent.cjs','reconcile_permit_expiry.cjs'];
+  'normal_rpc_client.js','normal_unsent.cjs','reconcile_permit_expiry.cjs','sori_startup_control.cjs'];
  const files={};for(const n of names){const bytes=fs.readFileSync(path.join(__dirname,n));
   fs.writeFileSync(path.join(dir,n),bytes,{mode:0o600});files[n]=sha(bytes);}
  const ce='module.exports={validateControl:()=>({}),controls:()=>{}};';

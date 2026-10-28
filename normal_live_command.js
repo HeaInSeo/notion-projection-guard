@@ -3,7 +3,7 @@
   const names=['additional_mcp_transport.js','landed_task_projection.js','normal_projection_prerequisites.js',
     'normal_projection_probe.cjs','ordinary_followthrough.js','normal_bridge.cjs','normal_live_owner.js',
     'normal_live_runner.js','normal_followthrough_v2.js','normal_live_command.js','reconcile_unpermitted_dispatch.cjs',
-    'normal_rpc_client.js','normal_unsent.cjs','reconcile_permit_expiry.cjs'];
+    'normal_rpc_client.js','normal_unsent.cjs','reconcile_permit_expiry.cjs','sori_startup_control.cjs'];
   const c=JSON.parse(JSON.stringify(installation));
   if(!c||!/^[a-f0-9]{40}$/.test(c.sourceHead??'')||!/^[a-f0-9]{64}$/.test(c.caseModuleHash??'')||
     ![c.root,c.runtime,c.extensionDirectory].every(p=>typeof p==='string'&&p.startsWith('/')&&!p.includes('\0'))||
@@ -17,7 +17,7 @@
     const names=['additional_mcp_transport.js','landed_task_projection.js','normal_projection_prerequisites.js',
       'normal_projection_probe.cjs','ordinary_followthrough.js','normal_bridge.cjs','normal_live_owner.js',
       'normal_live_runner.js','normal_followthrough_v2.js','normal_live_command.js','reconcile_unpermitted_dispatch.cjs',
-      'normal_rpc_client.js','normal_unsent.cjs','reconcile_permit_expiry.cjs'];
+      'normal_rpc_client.js','normal_unsent.cjs','reconcile_permit_expiry.cjs','sori_startup_control.cjs'];
     const data={};
     const trusted=file=>{const s=fs.lstatSync(file);need(s.isFile()&&!s.isSymbolicLink()&&
       s.uid===process.geteuid()&&!(s.mode&0o022),'NORMAL_RUNTIME_FILE');return fs.readFileSync(file);};
@@ -40,9 +40,14 @@
     const unsent=load('normal_unsent.cjs'),restoreUnsent=unsent.createUnsent(core),resumePrepared=unsent.createPreparedResumer(core),
       resumeUnprepared=unsent.createUnpreparedResumer(core);
     const reconcilePermitExpiry=load('reconcile_permit_expiry.cjs').createReconciler({...core,runtime:c.runtime,restoreUnsent});
+    const control=load('sori_startup_control.cjs');
+    const validateControlInit=control.createAdmission({runtime:c.runtime});
+    const assessControlPermit=control.createAssessor({...core,runtime:c.runtime});
+    const continueApprovedControl=control.createUserCase({...core,runtime:c.runtime});
     const b=new core.Broker(c.root,JSON.parse(trusted(path.join(c.runtime,'policy.json'))));
     const bridge=load('normal_bridge.cjs').createBridge({broker:b,probe,installation:c,
-      reconcileUnpermitted:reconcile,reconcilePermitExpiry,restoreUnsent,resumePrepared,resumeUnprepared,verifyExtensions});
+      reconcileUnpermitted:reconcile,reconcilePermitExpiry,restoreUnsent,resumePrepared,resumeUnprepared,verifyExtensions,
+      validateControlInit,assessControlPermit,continueApprovedControl});
     process.stdout.write('NPG/2 {"ready":true}\n');
     const rl=readline.createInterface({input:process.stdin,crlfDelay:Infinity});
     rl.on('line',line=>{let q;try{q=JSON.parse(line);const result=bridge.handle(q);
