@@ -125,7 +125,7 @@ function createAssessor({runtime,pageData,plan}){
       reason:'ORIGINAL_PRECALL_EXECUTION_PROOF_MISSING',nativeBodyCallCount:'UNKNOWN',
       missing:copyMissing(trace.missingOriginalProof),notionWrites:0,canonicalWrites:0,
       acknowledgedWrites:0,pageAdvances:0,ticketsCreated:0,
-      next:'Preserve the original SEND_INTENT. Obtain independently attributable original proof or a separately authorized reviewed exception; never infer no-send or retry from this assessment.'};
+      nextAction:'Preserve the original SEND_INTENT. Obtain independently attributable original proof or a separately authorized reviewed exception; never infer no-send or retry from this assessment.'};
   };
 }
 function copyMissing(value){return JSON.parse(JSON.stringify(value));}
@@ -139,6 +139,8 @@ function createUserCase({runtime,pageData,plan,atomic}){
     const dir=path.join(b.root,'manual-audits/automatic-followthrough-20261028-04386a5');
     const approvalFile=path.join(dir,'sori-startup-control-user-approval.json');
     need(fs.existsSync(approvalFile),'SORI_CONTROL_USER_APPROVAL_REQUIRED');
+    // These are receipt-format and scope checks. The actual message must first
+    // be authenticated by the separate operator procedure in the proposal doc.
     const approvalRaw=read(approvalFile),approval=JSON.parse(approvalRaw),at=Date.parse(approval.approvedAt);
     need(Object.keys(approval).sort().join(',')===
       ['schema','proposalSha256','decision','approvedAt','userMessageRef','userMessageSha256'].sort().join(',')&&
@@ -169,7 +171,9 @@ function createUserCase({runtime,pageData,plan,atomic}){
     out.dispatch.phase='PREPARED';out.status='PREPARED';
     // No old ACK, no-send token, revocation or verified page is invented.
     b.assertLock();b.ownerProof(input.ownerProof);
-    need(read(b.file)===raw,'SORI_CONTROL_USER_CASE_CHANGED');atomic(b.file,next);b.state=next;
+    need(read(b.file)===raw,'SORI_CONTROL_USER_CASE_CHANGED');
+    need(read(approvalFile)===approvalRaw,'SORI_CONTROL_USER_APPROVAL_CHANGED');
+    atomic(b.file,next);b.state=next;
     return {status:'PREPARED',next:out.next,executor:b.executor,planHash:out.planHash,...out.receipt,
       auditPath,originalNativeCallCount:'UNKNOWN',notANoSendProof:true,
       notionWrites:0,acknowledgedWrites:0,pageAdvances:0,ticketsCreated:0};

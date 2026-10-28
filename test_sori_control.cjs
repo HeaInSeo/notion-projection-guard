@@ -29,6 +29,13 @@ test('fixed normal control admission is read-only and preserves the case packet'
   f.validate(f);assert.deepEqual(f.broker.state,before);assert.deepEqual(fs.readFileSync(f.old),old);
   assert.deepEqual(fs.readFileSync(f.normal),normal);assert.equal(fs.existsSync(path.join(f.root,'journal.json')),false);
 });
+test('production proposal and published document independently retain their reviewed digest',()=>{
+  const expected='f698f6fd760f6f836d5a70bde9e95e845627b719098f7d116fa81d226cf7f7b4';
+  const doc=fs.readFileSync(path.join(__dirname,'SORI_CONTROL_EXCEPTION_PROPOSAL.md'),'utf8');
+  assert.equal(production.proposalSha256,expected);assert.ok(doc.includes('Proposal SHA256: '+expected));
+  const block=doc.match(/```json\n([\s\S]*?)\n```/);assert.ok(block);
+  assert.equal(sha(JSON.stringify(JSON.parse(block[1]))),expected);
+});
 for(const [name,change] of [
   ['fake MERGED PR',f=>f.input.pr=47],
   ['repository disguise',f=>f.input.repository='sori'],
@@ -153,6 +160,7 @@ function legacyFixture(t){
 test('incomplete legacy evidence remains Class C and cannot apply a no-send recovery',t=>{
   const f=legacyFixture(t),assessment=f.assess(f.b,f.input);
   assert.equal(assessment.eligible,false);assert.equal(assessment.classification,'C');
+  assert.equal(assessment.next,0);assert.equal(typeof assessment.nextAction,'string');
   assert.equal(assessment.nativeBodyCallCount,'UNKNOWN');assert.equal(fs.readFileSync(f.b.file,'utf8'),f.raw);
   assert.throws(()=>f.assess(f.b,{...f.input,apply:true}),/SORI_CONTROL_EXECUTION_UNPROVEN/);
   assert.throws(()=>f.continueUser(f.b,f.input),/SORI_CONTROL_USER_APPROVAL_REQUIRED/);
@@ -170,6 +178,23 @@ for(const [name,change] of [
   ['pre-incident',p=>p.approvedAt='2026-10-27T00:00:00Z'],['extra permissions',p=>p.allowAnyBatch=true]
 ])test('user exception refuses '+name+' without canonical change',t=>{
   const f=legacyFixture(t);approve(f,change);assert.throws(()=>f.continueUser(f.b,{...f.input,apply:true}));
+  assert.equal(fs.readFileSync(f.b.file,'utf8'),f.raw);
+});
+for(const mode of [0o640,0o604,0o620])test('approval receipt refuses non-private mode '+mode.toString(8),t=>{
+  const f=legacyFixture(t),file=approve(f);fs.chmodSync(file,mode);
+  assert.throws(()=>f.continueUser(f.b,{...f.input,apply:true}),/SORI_CONTROL_PRIVATE_FILE/);
+  assert.equal(fs.readFileSync(f.b.file,'utf8'),f.raw);
+});
+test('approval receipt refuses a symlink to otherwise valid private approval',t=>{
+  const f=legacyFixture(t),file=approve(f),target=path.join(f.dir,'synthetic-other-approval.json');
+  fs.renameSync(file,target);fs.symlinkSync(target,file);
+  assert.throws(()=>f.continueUser(f.b,{...f.input,apply:true}),/SORI_CONTROL_PRIVATE_FILE/);
+  assert.equal(fs.readFileSync(f.b.file,'utf8'),f.raw);
+});
+test('approval changed after assessment cannot commit a continuation',t=>{
+  const f=legacyFixture(t),file=approve(f),original=f.b.ownerProof.bind(f.b);let checks=0;
+  f.b.ownerProof=(...args)=>{const result=original(...args);if(++checks===2)fs.writeFileSync(file,'{"decision":"REVOKED"}');return result;};
+  assert.throws(()=>f.continueUser(f.b,{...f.input,apply:true}),/SORI_CONTROL_USER_APPROVAL_CHANGED/);
   assert.equal(fs.readFileSync(f.b.file,'utf8'),f.raw);
 });
 test('explicit synthetic approval preserves UNKNOWN and every original receipt without an ACK or page advance',t=>{

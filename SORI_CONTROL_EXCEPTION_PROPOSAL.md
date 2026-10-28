@@ -43,3 +43,11 @@ The private approval receipt at the fixed audit path requires schema, this exact
 ```
 
 Evidence pins are in the fixed module: actual R3 diagnostic eb97f716 and R4 UNKNOWN evidence f4c29438. Actual runtime acceptance remains prior merged-body6/8/6 completion. This proposal does not establish Sori intake or product completion.
+
+## Operator verification before creating the receipt
+
+1. The primary operator must inspect the actual user message in the trusted conversation, together with the exact proposal presented to that user. A broad request to finish, an old NodeKit approval, source-review PASS or a file claiming approval is not approval of this exception.
+2. Require explicit acceptance of this one UNKNOWN-send continuation for proposal f698f6fd760f6f836d5a70bde9e95e845627b719098f7d116fa81d226cf7f7b4. Confirm the author is the current user and the message follows presentation of this proposal. If intent or provenance is missing, leave the production receipt absent.
+3. Compute SHA256 over the actual user-message UTF-8 bytes before Markdown or Notion serialization. Record its genuine platform message reference when available, otherwise the available genuine conversation/message identity, timestamp and digest; never invent an opaque message ID. Independently compare the stored reference and digest to that actual message.
+4. Only after those checks may the primary operator create the private 0600 receipt with the exact six fields. Scheduled workers and PR reviewers must not synthesize it. The parser checks format and fixed scope; it does not independently authenticate the user message.
+5. Re-read the saved receipt and verify proposal, decision, approval time, user reference and digest before dispatch. The server also rejects a receipt whose bytes change before the canonical commit. Any unavailable or conflicting message evidence keeps the case locked.
