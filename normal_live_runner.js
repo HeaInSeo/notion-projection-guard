@@ -57,18 +57,21 @@
       const checked=await rpc({action:'validate_batch',batchId,edits});
       if(checked.status==='COMPLETED')return {status:'COMPLETED',alreadyConsumed:true,receipts};
       let prepared=null,next=checked.next;
-      if(checked.status==='HALTED'){
-        if(config.recovery?.apply!==true)throw Error('EXPLICIT_UNPERMITTED_RECOVERY_REQUIRED');
+      const preparedResume=checked.status==='PREPARED'||checked.status==='HALTED'&&config.recovery?.kind==='PREPARED_NO_SEND';
+      if(checked.status==='HALTED'||preparedResume){
+        if(checked.status==='HALTED'&&config.recovery?.apply!==true)throw Error('EXPLICIT_UNPERMITTED_RECOVERY_REQUIRED');
         const page=await read(edits[next].pageId);
-        const permitRecovery=config.recovery.kind==='PRE_CALL_EXPIRED';
-        const operation={...copy(config.recovery),action:permitRecovery?'normal_reconcile_permit_expiry':'normal_reconcile_unpermitted',batchId,page};
+        const permitRecovery=config.recovery?.kind==='PRE_CALL_EXPIRED'&&!preparedResume;
+        const operation={...copy(config.recovery??{}),action:preparedResume?'normal_reconcile_prepared':
+          permitRecovery?'normal_reconcile_permit_expiry':'normal_reconcile_unpermitted',batchId,page,
+          ...(preparedResume?{planHash:initial.planHash}:{})};
         delete operation.apply;
         delete operation.kind;
-        if(permitRecovery)operation.pages=await Promise.all(edits.slice(0,next).map(e=>read(e.pageId)));
+        if(permitRecovery||preparedResume)operation.pages=await Promise.all(edits.slice(0,next).map(e=>read(e.pageId)));
         const assessment=await owned({...operation,apply:false});
         if(assessment.eligible!==true)throw Error('NORMAL_RECOVERY_INELIGIBLE');
         prepared=await owned({...operation,page:await read(edits[next].pageId),
-          ...(permitRecovery?{pages:await Promise.all(edits.slice(0,next).map(e=>read(e.pageId)))}:{}),apply:true});
+          ...(permitRecovery||preparedResume?{pages:await Promise.all(edits.slice(0,next).map(e=>read(e.pageId)))}:{}),apply:true});
         live={batchId,executor:prepared.executor,planHash:prepared.planHash};
       }else{
         if(checked.status!=='READY')throw Error('UNRESOLVED_BATCH: '+checked.status);

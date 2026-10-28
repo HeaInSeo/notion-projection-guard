@@ -5,7 +5,7 @@ const fs=require('node:fs'),crypto=require('node:crypto');
 const hash=x=>crypto.createHash('sha256').update(x).digest('hex');
 const copy=x=>JSON.parse(JSON.stringify(x));
 const need=(v,c)=>{if(!v)throw Error(c);};
-function createBridge({broker,probe,installation,reconcileUnpermitted,reconcilePermitExpiry,restoreUnsent,verifyExtensions}){
+function createBridge({broker,probe,installation,reconcileUnpermitted,reconcilePermitExpiry,restoreUnsent,resumePrepared,verifyExtensions}){
   let init=null,staged=null,closed=false,noCall=null;
   const check=()=>{
     need(!closed,'NORMAL_BRIDGE_CLOSED');broker.assertLock();verifyExtensions();
@@ -33,6 +33,8 @@ function createBridge({broker,probe,installation,reconcileUnpermitted,reconcileP
   function bound(op){
     need(op?.batchId===init.batchId&&!Object.hasOwn(op,'ownerProof'),'NORMAL_OPERATION_SCOPE');
     if(op.action==='fence_begin')need(JSON.stringify(op.edits)===JSON.stringify(init.edits),'NORMAL_PLAN_CHANGED');
+    else if(op.action==='normal_reconcile_prepared')need(op.planHash===init.planHash&&
+      broker.state.batches[init.batchId]?.planHash===init.planHash,'NORMAL_PLAN_CHANGED');
     else if(!['normal_reconcile_unpermitted','normal_reconcile_permit_expiry'].includes(op.action)){
       const b=broker.state.batches[init.batchId];
       need(b?.planHash===init.planHash&&op.planHash===b.planHash&&op.executor===broker.executor,'NORMAL_OPERATION_IDENTITY');
@@ -62,7 +64,7 @@ function createBridge({broker,probe,installation,reconcileUnpermitted,reconcileP
     if(input.action==='case_stage_input'){
       need(!staged&&input.batchId===init.batchId&&
         ['fence_begin','fence_prepare','fence_authorize','fence_dispatch','normal_reconcile_unpermitted',
-          'normal_reconcile_permit_expiry','normal_pre_call_expired'].includes(input.operation?.action),
+          'normal_reconcile_permit_expiry','normal_pre_call_expired','normal_reconcile_prepared'].includes(input.operation?.action),
         'NORMAL_STAGE_SCOPE');bound(input.operation);check();
       const operation=copy(input.operation),stageId=crypto.randomUUID(),inputHash=hash(JSON.stringify(operation));
       staged={operation,stageId,inputHash};return {stageId,inputHash};
@@ -79,6 +81,10 @@ function createBridge({broker,probe,installation,reconcileUnpermitted,reconcileP
         need(typeof reconcilePermitExpiry==='function','NORMAL_RECOVERY_UNAVAILABLE');
         return reconcilePermitExpiry(broker,{...op,ownerProof});
       }
+      if(op.action==='normal_reconcile_prepared'){
+        need(typeof resumePrepared==='function','NORMAL_PREPARED_RESUME_UNAVAILABLE');
+        return resumePrepared(broker,{...op,ownerProof});
+      }
       if(op.action==='normal_pre_call_expired'){
         need(noCall&&typeof restoreUnsent==='function'&&op.noCallToken===noCall.token&&
           JSON.stringify(op.permit)===JSON.stringify(noCall.permit)&&
@@ -94,6 +100,12 @@ function createBridge({broker,probe,installation,reconcileUnpermitted,reconcileP
       const result=broker.handle({...input.operation,ownerProof:proof(input.liveSource)});
       noCall={token:crypto.randomUUID(),permit:copy(result.permit)};
       return {...result,noCallToken:noCall.token};
+    }
+    if(input.action==='fence_halt'&&input.batchId===init.batchId&&staged){
+      bound(input);check();const discarded={stageId:staged.stageId,inputHash:staged.inputHash,action:staged.operation.action};
+      staged=null;
+      return {...broker.handle({...input,readDetail:JSON.stringify({unconsumedStageDiscarded:discarded})}),
+        unconsumedStageDiscarded:discarded};
     }
     need(!staged&&input.batchId===init.batchId&&
       ['status','validate_batch','preflight','fence_observe','fence_ack','fence_verify','fence_halt'].includes(input.action),

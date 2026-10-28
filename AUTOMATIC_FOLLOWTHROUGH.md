@@ -1,5 +1,30 @@
 # Ordinary landing and successor intake
 
+## Continuing a prepared transaction after transport loss
+
+An ordinary entry may encounter the same active batch at PREPARED after its
+previous broker closed cleanly. The new executor first assesses and then applies
+`normal_reconcile_prepared` under freshly observed actual central ownership.
+It checks the immutable plan, same ticket, full pending snapshot and exact native
+preimage, properties and revision. Every earlier full verification receipt and
+fresh protected native page must match. Current-page send attempts are admitted
+only when each expired permit already has its private zero-call revocation audit;
+an unrevoked, pending or unknown native send remains blocked. A prior page's
+terminal successful provider may remain only with its acknowledged earlier attempt.
+
+Check-only writes nothing. Apply saves a full private audit and transfers only
+the prepared executor and current owner; it preserves the ticket, plan, history,
+earlier receipts and page position. It neither creates a ticket, sends, ACKs nor
+advances. The normal fresh authorize/send/ACK/full verification follows. The
+original broker lock must be held by the new executor, so a live prior executor
+cannot be adopted. A HALTED prepared transaction additionally requires explicit
+`recovery: {apply:true,kind:'PREPARED_NO_SEND'}`. Other HALTs do not enter this path.
+
+When input staging loses its reply, a correlated halt may discard that unconsumed
+stage and record its action, input hash and stage ID. Discarding a stage grants no
+authority and never consumes it. The halt remains subject to the same live
+executor, plan, original controls and canonical lock checks.
+
 ## Bounded replies and pre-call permit expiry
 
 The current ordinary entry uses `normal_rpc_client.js` as `createClient`.
@@ -8,7 +33,9 @@ reviewed source. This entry uses Additional MCP directly and bounded `NPG/2`
 reply frames. Retained reads request the final frame and its trailing blank
 line, rather than returning a preceding multi-megabyte input echo. Only bounded
 metadata uses prompt matching, so a send confirmation can return directly;
-full page inputs never enter that path. Requests are never resent.
+full page inputs never enter that path. Bounded metadata waits up to three
+seconds for its short reply, avoiding unnecessary retained-output round trips.
+Requests are never resent.
 The original eighteen control files, source freshness of thirty seconds and
 send validity of at most fifteen seconds remain unchanged.
 
@@ -23,7 +50,9 @@ audits and revokes only the expired, uncalled attempt, restores the same ticket
 to PREPARED and authorizes a new permit. At most two such renewals are allowed
 per page, excluding the one explicit legacy-incident revocation; persistent
 delay halts without calling Notion. No native invocation
-is retried, and a crash loses the process-local token and remains blocked.
+is retried. A crash before durable revocation loses the process-local token and
+remains blocked. After durable zero-call revocation, only the prepared continuation
+above can transfer a closed executor, with a fresh full preservation check.
 
 `reconcile_permit_expiry.cjs` separately admits only the legacy NodeKit149
 index-three incident. Its literal journal, driver, diagnostic, failure-trace,

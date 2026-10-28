@@ -32,6 +32,7 @@ function liveFixture(t,fault){
    const input=JSON.parse(q.input);
    const metadata=['case_consume_live','case_live_send','fence_ack','fence_observe','fence_halt','close'].includes(input.action);
    assert.equal(q.wait_for_prompt,metadata&&!Object.hasOwn(input,'page')&&!Object.hasOwn(input,'edits')&&q.input.length<=16384);
+   assert.equal(q.timeout_ms,q.wait_for_prompt?3000:500);
    if(input.action==='case_stage_input')stagedAction=input.operation.action;
    let result;
    try{result={requestId:input.requestId,ok:true,result:bridge.handle(input)};}
@@ -207,4 +208,130 @@ for(const [name,change] of [
 ])test('exact legacy expiry recovery refuses '+name+' without journal writes',t=>{
  const f=exactFixture(t);change(f);const before=fs.readFileSync(f.b.file,'utf8');
  assert.throws(()=>f.reconcile(f.b,{...f.input,apply:true}));assert.equal(fs.readFileSync(f.b.file,'utf8'),before);
+});
+
+function preparedFixture(t,{prefix=0,revoked=false,halted=false,sameExecutor=false}={}){
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'npg-prepared-resume-')),
+  policy={productionEnabled:true,productionPages:ids,canaryPages:[],headingPrefixes:['## CURRENT CENTRAL OBSERVATION']};
+ let b=new core.Broker(root,policy);const pages=new Map(ids.map(id=>[id,page(id)])),start=b.handle({action:'fence_begin',batchId,edits,ownerProof:proof()});
+ const live={batchId,executor:start.executor,planHash:start.planHash},call=(action,extra={})=>b.handle({...live,action,ownerProof:proof(),...extra});
+ for(let i=0;i<prefix;i++){
+  live.ticket=call('fence_prepare',{page:pages.get(ids[i])}).ticket;
+  call('fence_authorize',{page:pages.get(ids[i])});live.dispatchId=call('fence_dispatch',{page:pages.get(ids[i])}).dispatchId;
+  call('fence_confirm_send');call('fence_ack',{provider:{status:'SUCCEEDED',pageId:ids[i],taskId:null}});
+  pages.set(ids[i],page(ids[i],'NEW','2026-10-28T00:00:01Z'));call('fence_verify',{page:pages.get(ids[i])});
+ }
+ live.ticket=call('fence_prepare',{page:pages.get(ids[prefix])}).ticket;
+ class ExpiredDate extends Date{static now(){return Date.now()+16000;}}
+ const unsent=compiled('normal_unsent.cjs',{Date:ExpiredDate});
+ if(revoked){call('fence_authorize',{page:pages.get(ids[prefix])});
+  live.dispatchId=call('fence_dispatch',{page:pages.get(ids[prefix])}).dispatchId;
+  const permit=call('fence_confirm_send').permit;
+  unsent.createUnsent(core)(b,{...live,permit,page:pages.get(ids[prefix]),ownerProof:proof()});
+ }
+ if(halted)call('fence_halt',{reason:'NORMAL_RPC_TRANSPORT_UNKNOWN'});
+ const original=fs.readFileSync(b.file,'utf8'),oldExecutor=b.executor;
+ if(!sameExecutor){b.close();b=new core.Broker(root,policy);}
+ t.after(()=>{b.close();fs.rmSync(root,{recursive:true,force:true});});
+ return {b,root,pages,original,oldExecutor,resume:unsent.createPreparedResumer(core),
+  input:{batchId,planHash:start.planHash,apply:false,page:pages.get(ids[prefix]),
+   pages:ids.slice(0,prefix).map(id=>pages.get(id)),ownerProof:proof()}};
+}
+for(const options of [{},{revoked:true},{prefix:2},{prefix:2,revoked:true},{halted:true,revoked:true}])
+test('closed PREPARED executor continuation preserves its exact ticket, receipts and history '+JSON.stringify(options),t=>{
+ const f=preparedFixture(t,options),before=fs.readFileSync(f.b.file,'utf8'),old=JSON.parse(before).batches[batchId];
+ assert.equal(f.resume(f.b,f.input).eligible,true);assert.equal(fs.readFileSync(f.b.file,'utf8'),before);
+ const r=f.resume(f.b,{...f.input,apply:true}),now=f.b.state.batches[batchId];
+ assert.equal(r.status,'PREPARED');assert.equal(r.next,options.prefix??0);assert.notEqual(r.executor,f.oldExecutor);
+ for(const key of ['receipt','verifications','error','haltedFrom','edits','next'])assert.deepEqual(now[key],old[key]);
+ assert.deepEqual(now.dispatch.attempts,old.dispatch.attempts);assert.deepEqual(now.dispatch.provider,old.dispatch.provider);
+ assert.equal(r.notionWrites,0);assert.equal(r.pageAdvances,0);assert.equal(r.ticketsCreated,0);
+ assert.equal(now.reconciliations.at(-1).kind,'PREPARED_NO_SEND_CONTINUATION');
+ assert.throws(()=>f.resume(f.b,{...f.input,apply:true}),/PREPARED_RESUME_BOUNDARY/);
+});
+for(const [name,change] of [
+ ['same live executor',()=>{}],
+ ['different plan',f=>f.input.planHash='0'.repeat(64)],
+ ['different owner',f=>f.input.ownerProof.ownerId='other'],
+ ['different scope',f=>f.input.ownerProof.scope='other'],
+ ['expired source',f=>f.input.ownerProof.validUntil='2020-01-01T00:00:00Z'],
+ ['pending full body',f=>f.input.page=page(ids[2],'CHANGED')],
+ ['pending properties',f=>f.input.page=JSON.parse(JSON.stringify(f.input.page).replace('source','changed'))],
+ ['pending revision',f=>f.input.page=page(ids[2],'OLD','2026-10-28T00:00:02Z')],
+ ['prior protected body',f=>f.input.pages[0]=page(ids[0],'CHANGED')],
+ ['prior properties',f=>f.input.pages[0]=JSON.parse(JSON.stringify(f.input.pages[0]).replace('source','changed'))],
+ ['prior stale revision',f=>f.input.pages[0]=page(ids[0],'NEW','2026-10-27T00:00:00Z')],
+ ['missing prior page',f=>f.input.pages.pop()],
+ ['unrevoked send',f=>{delete f.b.state.batches[batchId].dispatch.attempts.at(-1).revokedBeforeCall;f.b.save();}],
+ ['current pending provider',f=>{f.b.state.batches[batchId].dispatch.provider={status:'PENDING',taskId:'unknown'};f.b.save();}],
+ ['changed revocation audit',f=>{const file=f.b.state.batches[batchId].dispatch.attempts.at(-1).revokedBeforeCall.record;
+  const r=JSON.parse(fs.readFileSync(file));r.audit.notionWrites=1;fs.writeFileSync(file,JSON.stringify(r));}],
+ ['missing revocation audit',f=>fs.unlinkSync(f.b.state.batches[batchId].dispatch.attempts.at(-1).revokedBeforeCall.record)],
+ ['changed snapshot bytes',f=>fs.appendFileSync(f.b.state.batches[batchId].receipt.snapshot,' ')],
+ ['public snapshot',f=>fs.chmodSync(f.b.state.batches[batchId].receipt.snapshot,0o644)],
+ ['changed prior receipt',f=>fs.appendFileSync(f.b.snapshot(batchId,0)+'.verified.json',' ')],
+ ['authorized boundary',f=>{const x=f.b.state.batches[batchId];x.dispatch.phase='AUTHORIZED';x.status='WRITE_PENDING';f.b.save();}],
+ ['halt after send boundary',f=>{const x=f.b.state.batches[batchId];x.status='HALTED';x.haltedFrom='WRITE_PENDING';f.b.save();}],
+ ['lost protocol lock',f=>f.b.close()]
+])test('PREPARED continuation refuses '+name+' without canonical changes',t=>{
+ const f=preparedFixture(t,{prefix:2,revoked:true,sameExecutor:name==='same live executor'});change(f);
+ const before=fs.readFileSync(f.b.file,'utf8');assert.throws(()=>f.resume(f.b,{...f.input,apply:true}));
+ assert.equal(fs.readFileSync(f.b.file,'utf8'),before);
+});
+
+function preparedRunner(f,options={}){
+ const bridge=createBridge({broker:f.b,installation:{root:f.root},resumePrepared:f.resume,
+  restoreUnsent:compiled('normal_unsent.cjs').createUnsent(core),verifyExtensions(){},
+  probe(){return {canonical:{exclusive:false,manifestHash:'e'.repeat(64)},brokerExecutor:f.b.executor,journalHash:sha(fs.readFileSync(f.b.file))};}});
+ let writes=0,begins=0,pending='',savedStage=null;const refs=[ids[0],ids[1],router,wip];
+ const tools={
+  async mcp__codex_apps__dev_server___additional_mcp__dev_server_additional_mcp_start_process(){
+   return {content:[{type:'text',text:'Process started with PID 789\nNPG/2 {"ready":true}\n'}]};},
+  async mcp__codex_apps__dev_server___additional_mcp__dev_server_additional_mcp_interact_with_process(q){
+   const input=JSON.parse(q.input);if(input.operation?.action==='fence_begin')begins++;
+   let result;try{result=bridge.handle(input);if(input.action==='case_stage_input')savedStage={...result};
+    if(options.failStage&&input.operation?.action==='fence_authorize')throw Error('injected lost stage reply');}
+   catch(e){if(e.message==='injected lost stage reply')throw e;
+    return {content:[{type:'text',text:'NPG/2 '+JSON.stringify({requestId:input.requestId,ok:false,error:e.message})+'\n'}]};}
+   pending='NPG/2 '+JSON.stringify({requestId:input.requestId,ok:true,result})+'\n';
+   if(q.wait_for_prompt){assert.equal(q.timeout_ms,3000);return {content:[{type:'text',text:pending}]};}
+   return {content:[{type:'text',text:'Process running; no incremental output'}]};
+  },
+  async mcp__codex_apps__dev_server___additional_mcp__dev_server_additional_mcp_read_process_output(q){
+   assert.equal(q.offset,-2);assert.equal(q.length,2);return {content:[{type:'text',text:pending+'\n'}]};},
+  async mcp__codex_apps__notion_fetch({id}){return f.pages.get(id);},
+  async mcp__codex_apps__notion_notion_update_page(q){
+   writes++;assert.ok(ids.indexOf(q.page_id)>=f.input.pages.length);
+   f.pages.set(q.page_id,page(q.page_id,'NEW','2026-10-28T00:00:01Z'));return {structuredContent:{page_id:q.page_id}};
+  }
+ };
+ const client=factory('normal_rpc_client.js')(tools,{command:'synthetic-only'}),runner=factory('normal_live_runner.js')(tools,
+  {client,centralTaskId:central,runId:run,references:refs.map(pageId=>({pageId})),nativeExpectations:[],
+   binding:{repository:'nodekit',source:{pr:149}},recovery:options.recovery,createWitness:(_,c)=>async()=>{
+    const observedAt=new Date().toISOString();return {observedAt,referenceToken:c.referenceToken,
+     nativeChecks:refs.map(pageId=>({pageId,observedAt,matched:true,revision:'2026-10-28T00:00:00Z'})),
+     central:{id:central,is_enabled:true,run:{id:run,recorded_status:'in_progress'}}};}});
+ return {runner,bridge,get writes(){return writes;},get begins(){return begins;},get savedStage(){return savedStage;}};
+}
+for(const options of [{},{prefix:2,revoked:true},{prefix:2,halted:true,revoked:true}])
+test('real runner resumes closed PREPARED transaction without beginning it again '+JSON.stringify(options),async t=>{
+ const f=preparedFixture(t,options),r=preparedRunner(f,options.halted?{recovery:{apply:true,kind:'PREPARED_NO_SEND'}}:{});
+ const before=JSON.parse(f.original).batches[batchId],out=await r.runner.run(batchId,edits),now=f.b.state.batches[batchId];
+ assert.equal(out.status,'COMPLETED');assert.equal(r.writes,6-(options.prefix??0));assert.equal(r.begins,0);
+ assert.equal(now.next,6);assert.equal(now.verifications.length,6);assert.equal(f.b.state.active,null);
+ assert.deepEqual(now.verifications.slice(0,options.prefix??0),before.verifications??[]);
+ assert.equal(now.dispatch.attempts.find(a=>a.index===(options.prefix??0)&&!a.revokedBeforeCall).ticket,before.receipt.ticket);
+});
+test('HALTED PREPARED continuation requires explicit applied kind',async t=>{
+ const f=preparedFixture(t,{halted:true,revoked:true}),r=preparedRunner(f,{recovery:{kind:'PREPARED_NO_SEND'}});
+ await assert.rejects(r.runner.run(batchId,edits),/EXPLICIT_UNPERMITTED_RECOVERY_REQUIRED/);assert.equal(r.writes,0);
+});
+test('a lost staged authorize reply can halt without consuming the stage or making a native call',async t=>{
+ const f=preparedFixture(t,{revoked:true}),r=preparedRunner(f,{failStage:true});
+ await assert.rejects(r.runner.run(batchId,edits),/injected lost stage reply/);
+ const x=f.b.state.batches[batchId];assert.equal(x.status,'HALTED');assert.equal(x.haltedFrom,'PREPARED');
+ assert.equal(x.dispatch.phase,'PREPARED');assert.equal(r.writes,0);
+ const discarded=JSON.parse(x.readDetail).unconsumedStageDiscarded;
+ assert.equal(discarded.action,'fence_authorize');assert.equal(discarded.stageId,r.savedStage.stageId);
+ assert.equal(discarded.inputHash,r.savedStage.inputHash);assert.equal(x.receipt.ticket,JSON.parse(f.original).batches[batchId].receipt.ticket);
 });
