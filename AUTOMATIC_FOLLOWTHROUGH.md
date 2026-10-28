@@ -308,3 +308,14 @@ Runtime acceptance requires both a real scheduled complete projection and actual
 successor own intake on the existing Sori and NodeKit tasks. Until these exist,
 report the exact unfinished stage; local tests or source merge alone do not
 establish operational completion or product acceptance.
+
+
+## Separate normal Sori startup scope record
+
+The startup phase selection uses a distinct fixed control admission, never the MERGED-PR grammar. The exact six sources, central task, normal and preserved case packets and one-edit plan remain pinned. The original long PR43 code field is preserved whole as consumed history. All original controls and source30s/send15s checks remain unchanged. The NPG/2 client stages large inputs before fresh reads and retains its private no-call token and bounded pre-call renewals.
+
+The original NPG/1 attempt is still HALTED at SEND-INTENT. The successor evidence investigation found missing original stack and connector call coverage, so the native call count remains UNKNOWN. The read-only assessor returns Class C and ineligible; it never turns provider-null or an unchanged page into no-send proof. No ordinary retry is authorized.
+
+An additional explicit user-case operation is dormant unless a private approval receipt for the exact fixed proposal exists. It preserves UNKNOWN, every original attempt/error/ticket/snapshot and progress, writes a separate audit, and returns only the same PREPARED ticket without an ACK, page advance or new batch. This is an approved exception to uncertain-send replay policy, not a no-send reconciliation. The admission, actual central ownership, full unchanged preimage, closed prior broker and all ordinary guards are still required. Missing, denied, wrong, future or stale-scope approval refuses before mutation. The production approval file must not be created until the user explicitly approves the proposal.
+
+Only a subsequent real native write, ACK and full protected readback can finish the one-page update. Task/role admission and genuine new parent-plus-child CLAIM then require separate fresh normal gates; source merge, installation and metadata READY do not establish runtime or product completion.

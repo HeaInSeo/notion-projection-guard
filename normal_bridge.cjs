@@ -5,13 +5,14 @@ const fs=require('node:fs'),crypto=require('node:crypto');
 const hash=x=>crypto.createHash('sha256').update(x).digest('hex');
 const copy=x=>JSON.parse(JSON.stringify(x));
 const need=(v,c)=>{if(!v)throw Error(c);};
-function createBridge({broker,probe,installation,reconcileUnpermitted,reconcilePermitExpiry,restoreUnsent,resumePrepared,resumeUnprepared,verifyExtensions}){
+function createBridge({broker,probe,installation,reconcileUnpermitted,reconcilePermitExpiry,restoreUnsent,resumePrepared,resumeUnprepared,verifyExtensions,validateControlInit,assessControlPermit,continueApprovedControl}){
   let init=null,staged=null,closed=false,noCall=null;
   const check=()=>{
     need(!closed,'NORMAL_BRIDGE_CLOSED');broker.assertLock();verifyExtensions();
     const p=probe({root:installation.root,runtime:installation.runtime,
       caseModuleHash:installation.caseModuleHash,brokerPid:process.pid,batchId:init.batchId});
     need(p.canonical.exclusive===false&&p.brokerExecutor===broker.executor,'NORMAL_BRIDGE_OWNER');
+    if(init.controlInput)validateControlInit({broker,input:init.controlInput});
     return p;
   };
   function proof(w){
@@ -33,7 +34,7 @@ function createBridge({broker,probe,installation,reconcileUnpermitted,reconcileP
   function bound(op){
     need(op?.batchId===init.batchId&&!Object.hasOwn(op,'ownerProof'),'NORMAL_OPERATION_SCOPE');
     if(op.action==='fence_begin')need(JSON.stringify(op.edits)===JSON.stringify(init.edits),'NORMAL_PLAN_CHANGED');
-    else if(['normal_reconcile_prepared','normal_reconcile_unprepared'].includes(op.action))need(op.planHash===init.planHash&&
+    else if(['normal_reconcile_prepared','normal_reconcile_unprepared','normal_assess_control_permit','normal_user_case_control_continue'].includes(op.action))need(op.planHash===init.planHash&&
       broker.state.batches[init.batchId]?.planHash===init.planHash,'NORMAL_PLAN_CHANGED');
     else if(!['normal_reconcile_unpermitted','normal_reconcile_permit_expiry'].includes(op.action)){
       const b=broker.state.batches[init.batchId];
@@ -50,7 +51,7 @@ function createBridge({broker,probe,installation,reconcileUnpermitted,reconcileP
   return {handle(input){
     need(!closed,'NORMAL_BRIDGE_CLOSED');
     if(input.action==='close'){closed=true;staged=null;return broker.handle({action:'close'});}
-    if(input.action==='normal_init'){
+    if(input.action==='normal_init'||input.action==='normal_control_init'){
       need(!init&&!staged&&/^[a-f0-9]{32}$/.test(input.centralTaskId??'')&&typeof input.runId==='string'&&
         /^[A-Za-z0-9-]{1,100}$/.test(input.batchId??'')&&Array.isArray(input.edits)&&input.edits.length>0&&
         Array.isArray(input.referenceIds)&&input.referenceIds.length>=4&&
@@ -58,12 +59,17 @@ function createBridge({broker,probe,installation,reconcileUnpermitted,reconcileP
         input.referenceIds.every(id=>/^[a-f0-9]{32}$/.test(id))&&
         input.referenceIds.includes('3bf86e6dd1d18110938bc358e17c779e')&&
         input.referenceIds.includes('3b286e6dd1d18194866dd8d7a28c7ab4'),'NORMAL_INIT');
-      need(['sori','nodekit'].includes(input.repository)&&Number.isSafeInteger(input.pr)&&input.pr>0&&
+      const control=input.action==='normal_control_init';
+      if(control){
+        need(typeof validateControlInit==='function','NORMAL_CONTROL_UNAVAILABLE');
+        validateControlInit({broker,input});
+      }else need(!Object.hasOwn(input,'controlAdmissionId')&&['sori','nodekit'].includes(input.repository)&&
+        Number.isSafeInteger(input.pr)&&input.pr>0&&
         new RegExp('^'+input.repository.toUpperCase()+input.pr+'-LANDED-[0-9]{8}$').test(input.batchId),
         'NORMAL_ADOPTED_SCOPE');
       init={batchId:input.batchId,centralTaskId:input.centralTaskId,runId:input.runId,
         referenceIds:copy(input.referenceIds),edits:copy(input.edits),planHash:hash(JSON.stringify(input.edits)),
-        referenceToken:crypto.randomUUID()};
+        referenceToken:crypto.randomUUID(),...(control?{controlInput:copy(input)}:{})};
       try{check();return {referenceToken:init.referenceToken,planHash:init.planHash,executor:broker.executor,
         continuation:broker.state.batches[init.batchId]?.dispatch?.phase??null};}
       catch(e){init=null;throw e;}
@@ -72,7 +78,9 @@ function createBridge({broker,probe,installation,reconcileUnpermitted,reconcileP
     if(input.action==='case_stage_input'){
       need(!staged&&input.batchId===init.batchId&&
         ['fence_begin','fence_prepare','fence_authorize','fence_dispatch','normal_reconcile_unpermitted',
-          'normal_reconcile_permit_expiry','normal_pre_call_expired','normal_reconcile_prepared','normal_reconcile_unprepared'].includes(input.operation?.action),
+          'normal_reconcile_permit_expiry','normal_pre_call_expired','normal_reconcile_prepared','normal_reconcile_unprepared',
+          'normal_assess_control_permit','normal_user_case_control_continue'].includes(input.operation?.action)&&
+        (!['normal_assess_control_permit','normal_user_case_control_continue'].includes(input.operation.action)||!!init.controlInput),
         'NORMAL_STAGE_SCOPE');bound(input.operation);check();
       const operation=copy(input.operation),stageId=crypto.randomUUID(),inputHash=hash(JSON.stringify(operation));
       staged={operation,stageId,inputHash};return {stageId,inputHash};
@@ -89,6 +97,14 @@ function createBridge({broker,probe,installation,reconcileUnpermitted,reconcileP
       if(op.action==='normal_reconcile_permit_expiry'){
         need(typeof reconcilePermitExpiry==='function','NORMAL_RECOVERY_UNAVAILABLE');
         return reconcilePermitExpiry(broker,{...op,ownerProof});
+      }
+      if(op.action==='normal_assess_control_permit'){
+        need(init.controlInput&&typeof assessControlPermit==='function','NORMAL_CONTROL_ASSESSMENT_UNAVAILABLE');
+        return assessControlPermit(broker,{...op,ownerProof});
+      }
+      if(op.action==='normal_user_case_control_continue'){
+        need(init.controlInput&&typeof continueApprovedControl==='function','NORMAL_CONTROL_USER_CASE_UNAVAILABLE');
+        return continueApprovedControl(broker,{...op,ownerProof});
       }
       if(op.action==='normal_reconcile_prepared'){
         need(typeof resumePrepared==='function','NORMAL_PREPARED_RESUME_UNAVAILABLE');
