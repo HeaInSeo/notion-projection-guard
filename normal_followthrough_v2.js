@@ -11,6 +11,7 @@
     const transport=config.createTransport(tools);
     const client=config.createClient(transport,{...config.runnerConfig,command:config.createCommand(config.installation),
       allowLegacyRecovery:false,caseAckBridge:false,casePageStaging:false,caseLiveOwnership:false});
+    need(typeof client.sendOnce==='function'&&typeof client.recoverPreCall==='function','NORMAL_RPC_CLIENT_REQUIRED');
     const runner=config.createLiveRunner(transport,{client,createWitness:config.createWitness,
       centralTaskId:config.centralTaskId,runId:config.runId,references,nativeExpectations:bundle.native,
       binding:bundle.binding,recovery:config.recovery});

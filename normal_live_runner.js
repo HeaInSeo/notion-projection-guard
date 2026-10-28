@@ -28,11 +28,12 @@
   }
   async function send(request,permit,live){
     const now=Date.now(),at=Date.parse(permit?.observedAt),until=Date.parse(permit?.validUntil);
-    if(!permit||permit.dispatchId!==live.dispatchId||permit.executor!==live.executor||
+    if(!config.client.sendOnce&&(!permit||permit.dispatchId!==live.dispatchId||permit.executor!==live.executor||
       permit.pageId!==request.page_id||!Number.isFinite(at)||!Number.isFinite(until)||
-      at>now||now-at>=30000||until<=now)throw Error('SEND_PERMIT_EXPIRED_OR_FENCED');
+      at>now||now-at>=30000||until<=now))throw Error('SEND_PERMIT_EXPIRED_OR_FENCED');
     // There is no await between the permit check and this sole native mutation.
-    let raw=await tools.mcp__codex_apps__notion_notion_update_page(request),data=unwrap(raw);
+    const invoke=()=>tools.mcp__codex_apps__notion_notion_update_page(request);
+    let raw=await (config.client.sendOnce?config.client.sendOnce(request,permit,live,invoke):invoke()),data=unwrap(raw);
     const task=data?.async_task??data?.result?.async_task;
     if(task){
       if(typeof task.task_id!=='string'||!task.task_id)throw Error('ASYNC_RESULT_UNKNOWN');
@@ -59,11 +60,15 @@
       if(checked.status==='HALTED'){
         if(config.recovery?.apply!==true)throw Error('EXPLICIT_UNPERMITTED_RECOVERY_REQUIRED');
         const page=await read(edits[next].pageId);
-        const operation={...copy(config.recovery),action:'normal_reconcile_unpermitted',batchId,page};
+        const permitRecovery=config.recovery.kind==='PRE_CALL_EXPIRED';
+        const operation={...copy(config.recovery),action:permitRecovery?'normal_reconcile_permit_expiry':'normal_reconcile_unpermitted',batchId,page};
         delete operation.apply;
+        delete operation.kind;
+        if(permitRecovery)operation.pages=await Promise.all(edits.slice(0,next).map(e=>read(e.pageId)));
         const assessment=await owned({...operation,apply:false});
         if(assessment.eligible!==true)throw Error('NORMAL_RECOVERY_INELIGIBLE');
-        prepared=await owned({...operation,page:await read(edits[next].pageId),apply:true});
+        prepared=await owned({...operation,page:await read(edits[next].pageId),
+          ...(permitRecovery?{pages:await Promise.all(edits.slice(0,next).map(e=>read(e.pageId)))}:{}),apply:true});
         live={batchId,executor:prepared.executor,planHash:prepared.planHash};
       }else{
         if(checked.status!=='READY')throw Error('UNRESOLVED_BATCH: '+checked.status);
@@ -77,15 +82,24 @@
         const edit=edits[i];live.ticket=null;live.dispatchId=null;
         const p=prepared&&i===next?prepared:await owned({...live,action:'fence_prepare',page:await read(edit.pageId)});
         live.ticket=p.ticket;
+        for(let renewal=0;;renewal++){
         await owned({...live,action:'fence_authorize',page:await read(edit.pageId)});
         const dispatch=await owned({...live,action:'fence_dispatch',page:await read(edit.pageId)});
         live.dispatchId=dispatch.dispatchId;
         const confirmed=await rpc({action:'case_live_send',batchId,operation:{...live,action:'fence_confirm_send'},
           liveSource:await witness({batchId})});
-        const provider=await send(dispatch.request,confirmed.permit,live);
+        let provider;
+        try{provider=await send(dispatch.request,confirmed.permit,live);}
+        catch(error){
+          if(error.message!=='NORMAL_PRE_CALL_PERMIT_EXPIRED'||!config.client.recoverPreCall||renewal>=2)throw error;
+          await config.client.recoverPreCall(error,owned,await read(edit.pageId));
+          continue;
+        }
         await rpc({...live,action:'fence_ack',provider});
         const verified=await rpc({...live,action:'fence_verify',page:await read(edit.pageId)});
         receipts.push({pageId:edit.pageId,...verified,snapshot:p.snapshot});
+        break;
+        }
       }
       return {status:'COMPLETED',receipts};
     }catch(error){
