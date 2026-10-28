@@ -9,6 +9,7 @@
   const metadata=new Set(['case_consume_live','case_live_send','fence_ack','fence_observe','fence_halt','close']);
   let pid=null,sequence=0,closed=false,busy=false,grant=null,dispatch=null;
   const unsent=new WeakMap();
+  const expiredSources=new WeakSet();
   function parse(r,id){
     if(r?.isError||r?.error||r?.call_id||r?.structuredContent?.call_id)throw Error('NORMAL_RPC_TRANSPORT_UNKNOWN');
     const lines=text(r).split('\n').map(l=>l.trim()).filter(l=>l.startsWith('NPG/2 '));
@@ -42,7 +43,12 @@
       let v=parse(await interact({pid,input,timeout_ms:bounded?3000:500,wait_for_prompt:bounded}),requestId);
       for(let i=0;!v&&i<12;i++)v=parse(await read({pid,offset:-2,length:2,timeout_ms:0}),requestId);
       if(!v)throw Error('NORMAL_RPC_RESPONSE_UNKNOWN');
-      if(v.ok!==true){const e=Error(v.code+': '+v.error);e.code=v.code;throw e;}
+      if(v.ok!==true){const e=Error(v.code+': '+v.error);e.code=v.code;
+        const context=q.action==='case_consume_live'?{action:q.action,stageId:q.stageId,inputHash:q.inputHash}:
+          q.action==='case_live_send'?{action:q.action,operation:q.operation}:null;
+        if(context&&v.code==='NORMAL_SOURCE_EXPIRED_NO_ACTION'&&v.error==='NORMAL_LIVE_EXPIRED'&&
+          JSON.stringify(v.retryBeforeAction)===JSON.stringify(context))expiredSources.add(e);
+        throw e;}
       const result=v.result;
       if(result?.request&&result?.dispatchId)dispatch=clone(result);
       if(q.action==='case_live_send'){
@@ -76,5 +82,6 @@
       permit:g.permit,page});
   }
   return {broker:q=>rpc(q),sendOnce,recoverPreCall,
+    consumeSourceExpiry(error){return expiredSources.delete(error);},
     async close(){if(!closed&&pid!==null){await rpc({action:'close'});closed=true;grant=null;}}};
 })

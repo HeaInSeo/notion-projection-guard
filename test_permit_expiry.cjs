@@ -210,7 +210,7 @@ for(const [name,change] of [
  assert.throws(()=>f.reconcile(f.b,{...f.input,apply:true}));assert.equal(fs.readFileSync(f.b.file,'utf8'),before);
 });
 
-function preparedFixture(t,{prefix=0,revoked=false,halted=false,sameExecutor=false}={}){
+function preparedFixture(t,{prefix=0,revoked=false,halted=false,sameExecutor=false,unprepared=false}={}){
  const root=fs.mkdtempSync(path.join(os.tmpdir(),'npg-prepared-resume-')),
   policy={productionEnabled:true,productionPages:ids,canaryPages:[],headingPrefixes:['## CURRENT CENTRAL OBSERVATION']};
  let b=new core.Broker(root,policy);const pages=new Map(ids.map(id=>[id,page(id)])),start=b.handle({action:'fence_begin',batchId,edits,ownerProof:proof()});
@@ -221,7 +221,7 @@ function preparedFixture(t,{prefix=0,revoked=false,halted=false,sameExecutor=fal
   call('fence_confirm_send');call('fence_ack',{provider:{status:'SUCCEEDED',pageId:ids[i],taskId:null}});
   pages.set(ids[i],page(ids[i],'NEW','2026-10-28T00:00:01Z'));call('fence_verify',{page:pages.get(ids[i])});
  }
- live.ticket=call('fence_prepare',{page:pages.get(ids[prefix])}).ticket;
+ if(!unprepared)live.ticket=call('fence_prepare',{page:pages.get(ids[prefix])}).ticket;
  class ExpiredDate extends Date{static now(){return Date.now()+16000;}}
  const unsent=compiled('normal_unsent.cjs',{Date:ExpiredDate});
  if(revoked){call('fence_authorize',{page:pages.get(ids[prefix])});
@@ -233,7 +233,7 @@ function preparedFixture(t,{prefix=0,revoked=false,halted=false,sameExecutor=fal
  const original=fs.readFileSync(b.file,'utf8'),oldExecutor=b.executor;
  if(!sameExecutor){b.close();b=new core.Broker(root,policy);}
  t.after(()=>{b.close();fs.rmSync(root,{recursive:true,force:true});});
- return {b,root,pages,original,oldExecutor,resume:unsent.createPreparedResumer(core),
+ return {b,root,pages,original,oldExecutor,resume:unprepared?unsent.createUnpreparedResumer(core):unsent.createPreparedResumer(core),
   input:{batchId,planHash:start.planHash,apply:false,page:pages.get(ids[prefix]),
    pages:ids.slice(0,prefix).map(id=>pages.get(id)),ownerProof:proof()}};
 }
@@ -281,18 +281,23 @@ for(const [name,change] of [
 
 function preparedRunner(f,options={}){
  const bridge=createBridge({broker:f.b,installation:{root:f.root},resumePrepared:f.resume,
+  resumeUnprepared:options.unprepared?f.resume:undefined,
   restoreUnsent:compiled('normal_unsent.cjs').createUnsent(core),verifyExtensions(){},
   probe(){return {canonical:{exclusive:false,manifestHash:'e'.repeat(64)},brokerExecutor:f.b.executor,journalHash:sha(fs.readFileSync(f.b.file))};}});
- let writes=0,begins=0,pending='',savedStage=null;const refs=[ids[0],ids[1],router,wip];
+ let writes=0,begins=0,pending='',savedStage=null,expired=false,witnessReads=0,proofRejects=0;const refs=[ids[0],ids[1],router,wip];
  const tools={
   async mcp__codex_apps__dev_server___additional_mcp__dev_server_additional_mcp_start_process(){
    return {content:[{type:'text',text:'Process started with PID 789\nNPG/2 {"ready":true}\n'}]};},
   async mcp__codex_apps__dev_server___additional_mcp__dev_server_additional_mcp_interact_with_process(q){
    const input=JSON.parse(q.input);if(input.operation?.action==='fence_begin')begins++;
+   if(input.action===options.expireAction&&(!expired||options.alwaysExpired)){
+    input.liveSource.observedAt='2020-01-01T00:00:00Z';expired=true;proofRejects++;
+   }
    let result;try{result=bridge.handle(input);if(input.action==='case_stage_input')savedStage={...result};
     if(options.failStage&&input.operation?.action==='fence_authorize')throw Error('injected lost stage reply');}
    catch(e){if(e.message==='injected lost stage reply')throw e;
-    return {content:[{type:'text',text:'NPG/2 '+JSON.stringify({requestId:input.requestId,ok:false,error:e.message})+'\n'}]};}
+    return {content:[{type:'text',text:'NPG/2 '+JSON.stringify({requestId:input.requestId,ok:false,code:e.code,
+      error:e.message,retryBeforeAction:e.retryBeforeAction})+'\n'}]};}
    pending='NPG/2 '+JSON.stringify({requestId:input.requestId,ok:true,result})+'\n';
    if(q.wait_for_prompt){assert.equal(q.timeout_ms,3000);return {content:[{type:'text',text:pending}]};}
    return {content:[{type:'text',text:'Process running; no incremental output'}]};
@@ -301,17 +306,20 @@ function preparedRunner(f,options={}){
    assert.equal(q.offset,-2);assert.equal(q.length,2);return {content:[{type:'text',text:pending+'\n'}]};},
   async mcp__codex_apps__notion_fetch({id}){return f.pages.get(id);},
   async mcp__codex_apps__notion_notion_update_page(q){
-   writes++;assert.ok(ids.indexOf(q.page_id)>=f.input.pages.length);
+   writes++;if(options.nativeError)throw Error('NORMAL_SOURCE_EXPIRED_NO_ACTION: NORMAL_LIVE_EXPIRED');
+   assert.ok(ids.indexOf(q.page_id)>=f.input.pages.length);
    f.pages.set(q.page_id,page(q.page_id,'NEW','2026-10-28T00:00:01Z'));return {structuredContent:{page_id:q.page_id}};
   }
  };
  const client=factory('normal_rpc_client.js')(tools,{command:'synthetic-only'}),runner=factory('normal_live_runner.js')(tools,
   {client,centralTaskId:central,runId:run,references:refs.map(pageId=>({pageId})),nativeExpectations:[],
    binding:{repository:'nodekit',source:{pr:149}},recovery:options.recovery,createWitness:(_,c)=>async()=>{
+    witnessReads++;if(options.witnessExpired&&(witnessReads===1||options.alwaysWitnessExpired))throw Error('NORMAL_LIVE_EXPIRED');
     const observedAt=new Date().toISOString();return {observedAt,referenceToken:c.referenceToken,
      nativeChecks:refs.map(pageId=>({pageId,observedAt,matched:true,revision:'2026-10-28T00:00:00Z'})),
      central:{id:central,is_enabled:true,run:{id:run,recorded_status:'in_progress'}}};}});
- return {runner,bridge,get writes(){return writes;},get begins(){return begins;},get savedStage(){return savedStage;}};
+ return {runner,bridge,client,get writes(){return writes;},get begins(){return begins;},get savedStage(){return savedStage;},
+  get witnessReads(){return witnessReads;},get proofRejects(){return proofRejects;}};
 }
 for(const options of [{},{prefix:2,revoked:true},{prefix:2,halted:true,revoked:true}])
 test('real runner resumes closed PREPARED transaction without beginning it again '+JSON.stringify(options),async t=>{
@@ -334,4 +342,56 @@ test('a lost staged authorize reply can halt without consuming the stage or maki
  const discarded=JSON.parse(x.readDetail).unconsumedStageDiscarded;
  assert.equal(discarded.action,'fence_authorize');assert.equal(discarded.stageId,r.savedStage.stageId);
  assert.equal(discarded.inputHash,r.savedStage.inputHash);assert.equal(x.receipt.ticket,JSON.parse(f.original).batches[batchId].receipt.ticket);
+});
+
+for(const options of [{unprepared:true},{unprepared:true,prefix:1},{unprepared:true,prefix:2,halted:true}])
+test('real runner continues an audited UNSENT closed executor without replaying earlier native writes '+JSON.stringify(options),async t=>{
+ const f=preparedFixture(t,options),before=JSON.parse(f.original).batches[batchId];
+ assert.equal(f.resume(f.b,f.input).eligible,true);assert.equal(fs.readFileSync(f.b.file,'utf8'),f.original);
+ const r=preparedRunner(f,{unprepared:true,...(options.halted?{recovery:{apply:true,kind:'UNPREPARED_NO_SEND'}}:{})});
+ const out=await r.runner.run(batchId,edits),now=f.b.state.batches[batchId];
+ assert.equal(out.status,'COMPLETED');assert.equal(r.writes,6-(options.prefix??0));assert.equal(r.begins,0);
+ assert.deepEqual(now.verifications.slice(0,options.prefix??0),before.verifications??[]);
+ const audit=now.reconciliations.at(-1);assert.equal(audit.kind,'UNPREPARED_NO_SEND_CONTINUATION');
+ assert.equal(audit.ticketsCreated,0);assert.equal(audit.pageAdvances,0);assert.equal(audit.notionWrites,0);
+ assert.equal(now.error,before.error);assert.equal(now.haltedFrom,before.haltedFrom);
+});
+for(const [name,change] of [
+ ['a current send attempt',f=>{const x=f.b.state.batches[batchId];x.dispatch.attempts.push({index:x.next,phase:'SEND_INTENT'});f.b.save();}],
+ ['a receipt',f=>{f.b.state.batches[batchId].receipt={ticket:'unknown'};f.b.save();}],
+ ['a pending provider',f=>{f.b.state.batches[batchId].dispatch.provider.status='PENDING';f.b.save();}],
+ ['a changed prior page',f=>f.input.pages[0]=page(ids[0],'CHANGED')],
+ ['an inconsistent plan',f=>f.input.planHash='0'.repeat(64)],
+ ['a future pending snapshot',f=>fs.writeFileSync(f.b.snapshot(batchId,4),'{}',{mode:0o600})],
+ ['an unexpected earlier sidecar',f=>fs.writeFileSync(f.b.snapshot(batchId,0)+'.actual.json','{}',{mode:0o600})],
+ ['a current unsent snapshot',f=>fs.writeFileSync(f.b.snapshot(batchId,2),'{}',{mode:0o600})]
+])test('UNSENT continuation refuses '+name+' without canonical mutation',t=>{
+ const f=preparedFixture(t,{unprepared:true,prefix:2,halted:true});change(f);
+ const before=fs.readFileSync(f.b.file,'utf8');assert.throws(()=>f.resume(f.b,{...f.input,apply:true}));
+ assert.equal(fs.readFileSync(f.b.file,'utf8'),before);
+});
+test('a prepared continuation refuses unexpected future evidence',t=>{
+ const f=preparedFixture(t,{prefix:2,revoked:true});fs.writeFileSync(f.b.snapshot(batchId,4),'{}',{mode:0o600});
+ assert.throws(()=>f.resume(f.b,{...f.input,apply:true}),/NO_SEND_UNEXPECTED_EVIDENCE/);
+ assert.equal(fs.readFileSync(f.b.file,'utf8'),f.original);
+});
+for(const action of ['case_consume_live','case_live_send'])test('attributed stale proof before '+action+' re-reads actual sources once without native replay',async t=>{
+ const f=preparedFixture(t,{prefix:2}),r=preparedRunner(f,{expireAction:action});
+ assert.equal((await r.runner.run(batchId,edits)).status,'COMPLETED');assert.equal(r.proofRejects,1);
+ assert.equal(r.writes,4);assert.equal(f.b.state.batches[batchId].dispatch.attempts.length,6);
+ assert.ok(r.witnessReads>0);assert.equal(r.client.consumeSourceExpiry(Error('NORMAL_SOURCE_EXPIRED_NO_ACTION')),false);
+});
+test('persistent pre-action proof expiry is bounded and writes no native page',async t=>{
+ const f=preparedFixture(t,{prefix:2}),r=preparedRunner(f,{expireAction:'case_consume_live',alwaysExpired:true});
+ await assert.rejects(r.runner.run(batchId,edits),/NORMAL_LIVE_EXPIRED/);assert.equal(r.proofRejects,3);assert.equal(r.writes,0);
+ assert.equal(fs.readFileSync(f.b.file,'utf8'),f.original);
+});
+test('a slow source read gets new reads rather than a renewed timestamp',async t=>{
+ const f=preparedFixture(t,{prefix:2}),r=preparedRunner(f,{witnessExpired:true});
+ assert.equal((await r.runner.run(batchId,edits)).status,'COMPLETED');assert.equal(r.writes,4);assert.ok(r.witnessReads>2);
+});
+test('a native exception using source-expiry text never retries the native invocation',async t=>{
+ const f=preparedFixture(t,{prefix:2}),r=preparedRunner(f,{nativeError:true});
+ await assert.rejects(r.runner.run(batchId,edits),/NORMAL_SOURCE_EXPIRED_NO_ACTION/);assert.equal(r.writes,1);
+ assert.equal(f.b.state.batches[batchId].status,'HALTED');
 });

@@ -21,10 +21,23 @@
       nativeExpectations:config.nativeExpectations});return r;
   }
   async function owned(operation){
-    const stage=await rpc({action:'case_stage_input',batchId:operation.batchId,operation});
-    // Full payload transport has finished before actual native/central reads.
-    return await rpc({action:'case_consume_live',batchId:operation.batchId,...stage,
-      liveSource:await witness({batchId:operation.batchId})});
+    for(let attempt=0;;attempt++){
+      const stage=await rpc({action:'case_stage_input',batchId:operation.batchId,operation});
+      // Only an attributed proof rejection BEFORE invoking the operation can
+      // obtain a new stage and fresh reads. Transport uncertainty never retries.
+      try{return await rpc({action:'case_consume_live',batchId:operation.batchId,...stage,
+        liveSource:await freshWitness(operation.batchId)});}
+      catch(error){if(attempt>=2||!config.client.consumeSourceExpiry?.(error))throw error;}
+    }
+  }
+  async function freshWitness(batchId){
+    for(let attempt=0;;attempt++)try{return await witness({batchId});}
+    catch(error){if(attempt>=2||error.message!=='NORMAL_LIVE_EXPIRED')throw error;}
+  }
+  async function confirm(live){
+    for(let attempt=0;;attempt++)try{return await rpc({action:'case_live_send',batchId:live.batchId,
+      operation:{...live,action:'fence_confirm_send'},liveSource:await freshWitness(live.batchId)});}
+    catch(error){if(attempt>=2||!config.client.consumeSourceExpiry?.(error))throw error;}
   }
   async function send(request,permit,live){
     const now=Date.now(),at=Date.parse(permit?.observedAt),until=Date.parse(permit?.validUntil);
@@ -58,24 +71,27 @@
       if(checked.status==='COMPLETED')return {status:'COMPLETED',alreadyConsumed:true,receipts};
       let prepared=null,next=checked.next;
       const preparedResume=checked.status==='PREPARED'||checked.status==='HALTED'&&config.recovery?.kind==='PREPARED_NO_SEND';
-      if(checked.status==='HALTED'||preparedResume){
+      const unpreparedResume=checked.status==='READY'&&initial.continuation==='UNSENT'||
+        checked.status==='HALTED'&&config.recovery?.kind==='UNPREPARED_NO_SEND';
+      if(checked.status==='HALTED'||preparedResume||unpreparedResume){
         if(checked.status==='HALTED'&&config.recovery?.apply!==true)throw Error('EXPLICIT_UNPERMITTED_RECOVERY_REQUIRED');
         const page=await read(edits[next].pageId);
         const permitRecovery=config.recovery?.kind==='PRE_CALL_EXPIRED'&&!preparedResume;
-        const operation={...copy(config.recovery??{}),action:preparedResume?'normal_reconcile_prepared':
+        const operation={...copy(config.recovery??{}),action:unpreparedResume?'normal_reconcile_unprepared':preparedResume?'normal_reconcile_prepared':
           permitRecovery?'normal_reconcile_permit_expiry':'normal_reconcile_unpermitted',batchId,page,
-          ...(preparedResume?{planHash:initial.planHash}:{})};
+          ...(preparedResume||unpreparedResume?{planHash:initial.planHash}:{})};
         delete operation.apply;
         delete operation.kind;
-        if(permitRecovery||preparedResume)operation.pages=await Promise.all(edits.slice(0,next).map(e=>read(e.pageId)));
+        if(permitRecovery||preparedResume||unpreparedResume)operation.pages=await Promise.all(edits.slice(0,next).map(e=>read(e.pageId)));
         const assessment=await owned({...operation,apply:false});
         if(assessment.eligible!==true)throw Error('NORMAL_RECOVERY_INELIGIBLE');
         prepared=await owned({...operation,page:await read(edits[next].pageId),
-          ...(permitRecovery||preparedResume?{pages:await Promise.all(edits.slice(0,next).map(e=>read(e.pageId)))}:{}),apply:true});
+          ...(permitRecovery||preparedResume||unpreparedResume?{pages:await Promise.all(edits.slice(0,next).map(e=>read(e.pageId)))}:{}),apply:true});
         live={batchId,executor:prepared.executor,planHash:prepared.planHash};
+        if(unpreparedResume)prepared=null;
       }else{
         if(checked.status!=='READY')throw Error('UNRESOLVED_BATCH: '+checked.status);
-        await witness({batchId});
+        await freshWitness(batchId);
         for(let i=next;i<edits.length;i++)await rpc({action:'preflight',batchId,edit:edits[i],page:await read(edits[i].pageId)});
         const begin=await owned({action:'fence_begin',batchId,edits});
         live={batchId,executor:begin.executor,planHash:begin.planHash};next=begin.next;
@@ -89,8 +105,7 @@
         await owned({...live,action:'fence_authorize',page:await read(edit.pageId)});
         const dispatch=await owned({...live,action:'fence_dispatch',page:await read(edit.pageId)});
         live.dispatchId=dispatch.dispatchId;
-        const confirmed=await rpc({action:'case_live_send',batchId,operation:{...live,action:'fence_confirm_send'},
-          liveSource:await witness({batchId})});
+        const confirmed=await confirm(live);
         let provider;
         try{provider=await send(dispatch.request,confirmed.permit,live);}
         catch(error){

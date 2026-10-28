@@ -2,6 +2,26 @@
 const fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto');
 const hash=x=>crypto.createHash('sha256').update(x).digest('hex');
 const need=(v,c)=>{if(!v)throw Error(c);};
+const privateRead=file=>{const s=fs.lstatSync(file);
+  need(s.isFile()&&!s.isSymbolicLink()&&s.uid===process.geteuid()&&!(s.mode&0o077),'NO_SEND_PRIVATE');
+  return fs.readFileSync(file,'utf8');};
+function priorEvidence(b,x,pages,pageData,pending){
+  need(Array.isArray(pages)&&pages.length===x.next&&(x.verifications??[]).length===x.next,'NO_SEND_PRIOR_PAGES');
+  const prior=[],prefix=hash(b.state.active)+'-',allowed=new Set(pending?[prefix+x.next+'.json']:[]);
+  for(let index=0;index<x.next;index++){
+    const p=b.snapshot(b.state.active,index),ps=privateRead(p),pv=privateRead(p+'.verified.json'),
+      snapshot=JSON.parse(ps),verified=JSON.parse(pv),fingerprint=b.verifiedFingerprint(snapshot,verified,x,index),
+      native=pageData(pages[index],x.edits[index].pageId);
+    need(snapshot.batchId===b.state.active&&hash(ps)===fingerprint.snapshotHash&&hash(pv)===fingerprint.verifiedHash&&
+      native.body===verified.page.body&&native.properties===verified.page.properties&&
+      Date.parse(native.revision)>=Date.parse(verified.page.revision),'NO_SEND_PRIOR_CHANGED');
+    allowed.add(prefix+index+'.json');allowed.add(prefix+index+'.json.verified.json');
+    if(verified.reconciliation?.kind==='REVIEWED_CENTRAL_ARROW_ESCAPING')allowed.add(prefix+index+'.json.actual.json');
+    prior.push(fingerprint);
+  }
+  for(const name of fs.readdirSync(b.root))need(!name.startsWith(prefix)||allowed.has(name),'NO_SEND_UNEXPECTED_EVIDENCE');
+  return prior;
+}
 function createUnsent({pageData,plan,atomic}){
   return function restore(b,input,{exact=false,diagnostic=null}={}){
     b.assertLock();b.ownerProof(input.ownerProof);
@@ -50,9 +70,7 @@ function createUnsent({pageData,plan,atomic}){
   };
 }
 function createPreparedResumer({pageData,plan,atomic}){
-  const read=file=>{const st=fs.lstatSync(file);
-    need(st.isFile()&&!st.isSymbolicLink()&&st.uid===process.geteuid()&&!(st.mode&0o077),
-      'PREPARED_RESUME_PRIVATE');return fs.readFileSync(file,'utf8');};
+  const read=privateRead;
   return function resume(b,input){
     b.assertLock();b.ownerProof(input.ownerProof);
     const raw=read(b.file),state=JSON.parse(raw),x=state.batches[input.batchId],d=x?.dispatch;
@@ -112,18 +130,7 @@ function createPreparedResumer({pageData,plan,atomic}){
         'PREPARED_RESUME_REVOCATION_AUDIT');
       revocations.push({dispatchId:a.dispatchId,record:revoked.record,sha256:hash(bytes)});
     }
-    need(Array.isArray(input.pages)&&input.pages.length===x.next&&
-      (x.verifications??[]).length===x.next,'PREPARED_RESUME_PRIOR_PAGES');
-    const prior=[];
-    for(let index=0;index<x.next;index++){
-      const p=b.snapshot(input.batchId,index),ps=read(p),pv=read(p+'.verified.json'),
-        snapshot=JSON.parse(ps),verified=JSON.parse(pv),fingerprint=b.verifiedFingerprint(snapshot,verified,x,index),
-        native=pageData(input.pages[index],x.edits[index].pageId);
-      need(hash(ps)===fingerprint.snapshotHash&&hash(pv)===fingerprint.verifiedHash&&
-        native.body===verified.page.body&&native.properties===verified.page.properties&&
-        Date.parse(native.revision)>=Date.parse(verified.page.revision),'PREPARED_RESUME_PRIOR_CHANGED');
-      prior.push(fingerprint);
-    }
+    const prior=priorEvidence(b,x,input.pages,pageData,true);
     const audit={kind:'PREPARED_NO_SEND_CONTINUATION',at:new Date().toISOString(),batchId:input.batchId,
       planHash:x.planHash,index:x.next,ticket:s.ticket,snapshotHash:x.receipt.snapshotHash,
       oldExecutor:d.executor,newExecutor:b.executor,owner:input.ownerProof,journalBeforeHash:hash(raw),
@@ -142,4 +149,38 @@ function createPreparedResumer({pageData,plan,atomic}){
       auditPath,notionWrites:0,pageAdvances:0,ticketsCreated:0};
   };
 }
-module.exports={createUnsent,createPreparedResumer};
+function createUnpreparedResumer({pageData,plan,atomic}){
+  return function resume(b,input){
+    b.assertLock();b.ownerProof(input.ownerProof);
+    const raw=privateRead(b.file),state=JSON.parse(raw),x=state.batches[input.batchId],d=x?.dispatch;
+    need(typeof input.apply==='boolean'&&state.active===input.batchId&&JSON.stringify(state)===JSON.stringify(b.state)&&
+      x?.receipt===null&&(x.status==='READY'||x.status==='HALTED'&&x.haltedFrom==='READY')&&
+      d?.version===1&&d.phase==='UNSENT'&&typeof d.executor==='string'&&d.executor!==b.executor&&
+      Number.isSafeInteger(x.next)&&x.next>=0&&x.next<x.edits.length&&input.planHash===x.planHash&&
+      hash(JSON.stringify(x.edits))===x.planHash&&d.owner?.ownerId===input.ownerProof.ownerId&&
+      d.owner.scope===input.ownerProof.scope&&input.ownerProof.scope===input.batchId&&
+      Array.isArray(d.attempts)&&d.attempts.every(a=>Number.isSafeInteger(a.index)&&a.index>=0&&a.index<x.next),
+      'UNPREPARED_RESUME_BOUNDARY');
+    const previous=d.attempts.at(-1);
+    need(x.next===0?!previous&&!d.provider:
+      previous?.index===x.next-1&&previous.phase==='ACKNOWLEDGED'&&d.provider?.status==='SUCCEEDED'&&
+      d.provider.pageId===x.edits[x.next-1].pageId&&JSON.stringify(previous.provider)===JSON.stringify(d.provider),
+      'UNPREPARED_RESUME_PROVIDER');
+    const prior=priorEvidence(b,x,input.pages,pageData,false),fresh=pageData(input.page,x.edits[x.next].pageId),
+      generated=plan(fresh,x.edits[x.next]);
+    const audit={kind:'UNPREPARED_NO_SEND_CONTINUATION',at:new Date().toISOString(),batchId:input.batchId,
+      planHash:x.planHash,index:x.next,oldExecutor:d.executor,newExecutor:b.executor,owner:input.ownerProof,
+      journalBeforeHash:hash(raw),prior,bodyHash:hash(fresh.body),propertiesHash:hash(fresh.properties),
+      revision:fresh.revision,expectedHash:hash(generated.expected),notionWrites:0,pageAdvances:0,ticketsCreated:0};
+    if(!input.apply)return {eligible:true,checkOnly:true,status:x.status,next:x.next,audit};
+    const auditPath=path.join(b.root,'unprepared-resume-'+hash(input.batchId)+'-'+crypto.randomUUID()+'.json'),fd=fs.openSync(auditPath,'wx',0o600);
+    try{fs.writeFileSync(fd,JSON.stringify({audit,journalBefore:state,freshPage:input.page,priorPages:input.pages}));fs.fsyncSync(fd);}finally{fs.closeSync(fd);}
+    const next=JSON.parse(raw),out=next.batches[input.batchId];out.status='READY';out.dispatch.executor=b.executor;
+    out.dispatch.owner=JSON.parse(JSON.stringify(input.ownerProof));out.reconciliations=[...(out.reconciliations??[]),audit];
+    b.assertLock();b.ownerProof(input.ownerProof);need(privateRead(b.file)===raw,'UNPREPARED_RESUME_CHANGED');
+    atomic(b.file,next);b.state=next;
+    return {status:'READY',next:out.next,executor:b.executor,planHash:out.planHash,auditPath,
+      notionWrites:0,pageAdvances:0,ticketsCreated:0};
+  };
+}
+module.exports={createUnsent,createPreparedResumer,createUnpreparedResumer};

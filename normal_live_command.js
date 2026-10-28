@@ -37,11 +37,12 @@
     const load=n=>{const m={exports:{}};new Function('require','module','exports',data[n])(require,m,m.exports);return m.exports;};
     const probe=load('normal_projection_probe.cjs').probe;
     const reconcile=load('reconcile_unpermitted_dispatch.cjs').createReconciler({...core,runtime:c.runtime});
-    const unsent=load('normal_unsent.cjs'),restoreUnsent=unsent.createUnsent(core),resumePrepared=unsent.createPreparedResumer(core);
+    const unsent=load('normal_unsent.cjs'),restoreUnsent=unsent.createUnsent(core),resumePrepared=unsent.createPreparedResumer(core),
+      resumeUnprepared=unsent.createUnpreparedResumer(core);
     const reconcilePermitExpiry=load('reconcile_permit_expiry.cjs').createReconciler({...core,runtime:c.runtime,restoreUnsent});
     const b=new core.Broker(c.root,JSON.parse(trusted(path.join(c.runtime,'policy.json'))));
     const bridge=load('normal_bridge.cjs').createBridge({broker:b,probe,installation:c,
-      reconcileUnpermitted:reconcile,reconcilePermitExpiry,restoreUnsent,resumePrepared,verifyExtensions});
+      reconcileUnpermitted:reconcile,reconcilePermitExpiry,restoreUnsent,resumePrepared,resumeUnprepared,verifyExtensions});
     process.stdout.write('NPG/2 {"ready":true}\n');
     const rl=readline.createInterface({input:process.stdin,crlfDelay:Infinity});
     rl.on('line',line=>{let q;try{q=JSON.parse(line);const result=bridge.handle(q);
@@ -49,7 +50,8 @@
       need(reply.length<=32760,'NORMAL_RPC_REPLY_TOO_LARGE');
       process.stdout.write('NPG/2 '+reply+'\n',()=>{
         if(q.action==='close'){rl.close();process.stdin.destroy();process.exit(0);}});
-    }catch(e){process.stdout.write('NPG/2 '+JSON.stringify({requestId:q?.requestId,ok:false,code:e.code??'ERROR',error:e.message})+'\n');}});
+    }catch(e){process.stdout.write('NPG/2 '+JSON.stringify({requestId:q?.requestId,ok:false,code:e.code??'ERROR',error:e.message,
+      ...(e.retryBeforeAction?{retryBeforeAction:e.retryBeforeAction}:{})})+'\n');}});
     let closed=false;const close=()=>{if(!closed){closed=true;b.close();}};
     rl.on('close',close);process.on('exit',close);
     for(const signal of ['SIGTERM','SIGINT','SIGHUP'])process.on(signal,()=>{close();process.exit(0);});
