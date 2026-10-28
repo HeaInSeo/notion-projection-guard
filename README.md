@@ -659,3 +659,11 @@ Markdown round-trips unchanged. Explicit links retain the existing admission
 rules; every unexpected rendering/content/property difference still halts exact
 verification. No normalization or looser protected comparison is introduced.
 The helper defaults to check-only and cannot be called automatically by run/resume.
+
+## Ordinary landing follow-through
+
+See [AUTOMATIC_FOLLOWTHROUGH.md](AUTOMATIC_FOLLOWTHROUGH.md) for the additive
+scheduled projection entry, current original/pair binding, preserved case
+controls and actual successor-intake acceptance. Its installation and real
+scheduled adoption require separate evidence; source availability is not a
+runtime completion claim.
