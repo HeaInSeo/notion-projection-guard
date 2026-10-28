@@ -1,5 +1,47 @@
 # Ordinary landing and successor intake
 
+## Bounded replies and pre-call permit expiry
+
+The current ordinary entry uses `normal_rpc_client.js` as `createClient`.
+Install all fourteen files declared by `normal_live_command.js` from the same
+reviewed source. This entry uses Additional MCP directly and bounded `NPG/2`
+reply frames. Retained reads request only the final output line, rather than
+returning a preceding multi-megabyte input echo. Requests are never resent.
+The original eighteen control files, source freshness of thirty seconds and
+send validity of at most fifteen seconds remain unchanged.
+
+The bridge binds one private no-call token to each confirmed dispatch. The
+client keeps that token out of the runner's result and consumes it before
+invoking the native update. Only its own synchronous expired-permit branch can
+offer the one-use token to a fresh ownership-bound continuation. A forged error,
+native exception, lost result, mismatched request, provider task or different
+executor cannot enter that branch. The continuation verifies the entire pending
+preimage, revision, immutable request, ticket and current attempt. It privately
+audits and revokes only the expired, uncalled attempt, restores the same ticket
+to PREPARED and authorizes a new permit. At most two such renewals are allowed
+per page; persistent delay halts without calling Notion. No native invocation
+is retried, and a crash loses the process-local token and remains blocked.
+
+`reconcile_permit_expiry.cjs` separately admits only the legacy NodeKit149
+index-three incident. Its literal journal, driver, diagnostic, failure-trace,
+ticket, snapshot, dispatch and original three receipt fingerprints must match.
+All three earlier complete native bodies and properties are freshly checked
+against their immutable full verification receipts, and the pending page must
+still equal its complete original preimage and revision. Check-only writes
+nothing. Explicit apply saves a full private audit and restores PREPARED on the
+same index, plan and ticket under actual fresh central ownership. It neither
+acknowledges a write nor advances a page. The original five attempts and their
+permits, prior failure, earlier receipts and other journal state are retained.
+Run the existing bundle with `recovery: {apply:true,kind:'PRE_CALL_EXPIRED'}`
+only after independent source review, current-head Codex, CI, normal landing
+and verified installation. Ordinary native ACK and full readback then apply to
+the remaining pages. Other HALTs and unknown native outcomes remain blocked.
+
+Tests exercise the real runner, RPC client and bridge through delayed permit
+renewal, a lost native result, bounded exhaustion and the full HALTED legacy
+recovery through completion of only the remaining three pages. These tests do
+not substitute for actual scheduled projection and genuine successor intake.
+
 ## Local ownership consumption under slow transport
 
 The first scheduled adoption of PR16 halted at `SEND_INTENT` before a send

@@ -2,7 +2,8 @@
   'use strict';
   const names=['additional_mcp_transport.js','landed_task_projection.js','normal_projection_prerequisites.js',
     'normal_projection_probe.cjs','ordinary_followthrough.js','normal_bridge.cjs','normal_live_owner.js',
-    'normal_live_runner.js','normal_followthrough_v2.js','normal_live_command.js','reconcile_unpermitted_dispatch.cjs'];
+    'normal_live_runner.js','normal_followthrough_v2.js','normal_live_command.js','reconcile_unpermitted_dispatch.cjs',
+    'normal_rpc_client.js','normal_unsent.cjs','reconcile_permit_expiry.cjs'];
   const c=JSON.parse(JSON.stringify(installation));
   if(!c||!/^[a-f0-9]{40}$/.test(c.sourceHead??'')||!/^[a-f0-9]{64}$/.test(c.caseModuleHash??'')||
     ![c.root,c.runtime,c.extensionDirectory].every(p=>typeof p==='string'&&p.startsWith('/')&&!p.includes('\0'))||
@@ -15,7 +16,8 @@
     const hash=x=>crypto.createHash('sha256').update(x).digest('hex');
     const names=['additional_mcp_transport.js','landed_task_projection.js','normal_projection_prerequisites.js',
       'normal_projection_probe.cjs','ordinary_followthrough.js','normal_bridge.cjs','normal_live_owner.js',
-      'normal_live_runner.js','normal_followthrough_v2.js','normal_live_command.js','reconcile_unpermitted_dispatch.cjs'];
+      'normal_live_runner.js','normal_followthrough_v2.js','normal_live_command.js','reconcile_unpermitted_dispatch.cjs',
+      'normal_rpc_client.js','normal_unsent.cjs','reconcile_permit_expiry.cjs'];
     const data={};
     const trusted=file=>{const s=fs.lstatSync(file);need(s.isFile()&&!s.isSymbolicLink()&&
       s.uid===process.geteuid()&&!(s.mode&0o022),'NORMAL_RUNTIME_FILE');return fs.readFileSync(file);};
@@ -35,15 +37,19 @@
     const load=n=>{const m={exports:{}};new Function('require','module','exports',data[n])(require,m,m.exports);return m.exports;};
     const probe=load('normal_projection_probe.cjs').probe;
     const reconcile=load('reconcile_unpermitted_dispatch.cjs').createReconciler({...core,runtime:c.runtime});
+    const restoreUnsent=load('normal_unsent.cjs').createUnsent(core);
+    const reconcilePermitExpiry=load('reconcile_permit_expiry.cjs').createReconciler({...core,runtime:c.runtime,restoreUnsent});
     const b=new core.Broker(c.root,JSON.parse(trusted(path.join(c.runtime,'policy.json'))));
     const bridge=load('normal_bridge.cjs').createBridge({broker:b,probe,installation:c,
-      reconcileUnpermitted:reconcile,verifyExtensions});
-    process.stdout.write('NPG/1 {"ready":true}\n');
+      reconcileUnpermitted:reconcile,reconcilePermitExpiry,restoreUnsent,verifyExtensions});
+    process.stdout.write('NPG/2 {"ready":true}\n');
     const rl=readline.createInterface({input:process.stdin,crlfDelay:Infinity});
     rl.on('line',line=>{let q;try{q=JSON.parse(line);const result=bridge.handle(q);
-      process.stdout.write('NPG/1 '+JSON.stringify({requestId:q.requestId,ok:true,result})+'\n',()=>{
+      const reply=JSON.stringify({requestId:q.requestId,ok:true,result});
+      need(reply.length<=32760,'NORMAL_RPC_REPLY_TOO_LARGE');
+      process.stdout.write('NPG/2 '+reply+'\n',()=>{
         if(q.action==='close'){rl.close();process.stdin.destroy();process.exit(0);}});
-    }catch(e){process.stdout.write('NPG/1 '+JSON.stringify({requestId:q?.requestId,ok:false,code:e.code??'ERROR',error:e.message})+'\n');}});
+    }catch(e){process.stdout.write('NPG/2 '+JSON.stringify({requestId:q?.requestId,ok:false,code:e.code??'ERROR',error:e.message})+'\n');}});
     let closed=false;const close=()=>{if(!closed){closed=true;b.close();}};
     rl.on('close',close);process.on('exit',close);
     for(const signal of ['SIGTERM','SIGINT','SIGHUP'])process.on(signal,()=>{close();process.exit(0);});

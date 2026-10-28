@@ -315,15 +315,15 @@ for(const repository of ['nodekit','sori'])test('local ordinary ownership comple
   async mcp__codex_apps__dev_server___additional_mcp__dev_server_additional_mcp_start_process(){
    b=new Broker(root,scope);bridge=createBridge({broker:b,installation:{root},verifyExtensions(){},
     probe(){return {canonical:{exclusive:false,manifestHash:'f'.repeat(64)},brokerExecutor:b.executor,journalHash:'e'.repeat(64)};}});
-   return {content:[{type:'text',text:'Process started with PID '+process.pid+'\nNPG/1 {"ready":true}'}]};},
+   return {content:[{type:'text',text:'Process started with PID '+process.pid+'\nNPG/2 {"ready":true}'}]};},
   async mcp__codex_apps__dev_server___additional_mcp__dev_server_additional_mcp_interact_with_process({input}){
    const q=JSON.parse(input);events.push(q.action);let r;
    try{r={requestId:q.requestId,ok:true,result:bridge.handle(q)};}catch(e){r={requestId:q.requestId,ok:false,error:e.message,code:e.code};}
-   return {content:[{type:'text',text:'NPG/1 '+JSON.stringify(r)}]};},
+   return {content:[{type:'text',text:'NPG/2 '+JSON.stringify(r)}]};},
   async mcp__codex_apps__dev_server___additional_mcp__dev_server_additional_mcp_read_process_output(){throw Error('No replay');}
  };
  const references=[f.bundle.binding.writer.pageId,f.bundle.binding.reviewer.pageId,router,policy].map(pageId=>({pageId,page:raw(pageId,f.pages.get(pageId))}));
- const client=factory('normal_followthrough_v2.js')(tools,{createTransport:transport,createClient:factory('runner.js'),
+ const client=factory('normal_followthrough_v2.js')(tools,{createTransport:transport,createClient:factory('normal_rpc_client.js'),
   createLiveRunner:factory('normal_live_runner.js'),createWitness:factory('normal_live_owner.js'),createLandedProjection:landed,
   createCommand:()=> 'SYNTHETIC_VERIFIED_LIVE_COMMAND',installation:{},centralTaskId:'1'.repeat(32),runId:'actual-run',runnerConfig:{}});
  const result=await client.run(f.bundle,references);
