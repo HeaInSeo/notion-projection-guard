@@ -1,5 +1,34 @@
 # Ordinary landing and successor intake
 
+## Expired source proof before an action
+
+A stale witness never grants authority. Before invoking a staged operation or
+send confirmation, the bridge can return a correlated
+`NORMAL_SOURCE_EXPIRED_NO_ACTION` rejection. Only the real RPC reply, matching
+that request's stage or confirmation identity, brands a one-use client error.
+The runner may obtain entirely new native/central reads and try that uninvoked
+operation at most twice more. It neither changes an old timestamp nor replays a
+native call. A source reader that itself exceeds thirty seconds likewise reads
+anew within a bounded budget. Changed sources, transport uncertainty, broker
+failures after action entry and forged/native exceptions do not qualify.
+
+If an executor already closed at READY/UNSENT without a current receipt or send
+attempt, `normal_reconcile_unprepared` verifies every earlier complete native
+page/receipt, the same plan/owner/scope and a fresh pending-page literal plan.
+It requires terminal acknowledged provider correlation for the previous page,
+or no attempts/provider at index zero. Check-only writes nothing. Apply privately
+audits the full preimage, transfers only executor/owner and restores READY at the
+same index, without a ticket, native call, ACK or page advance. The ordinary
+prepare then creates its first pending ticket. A HALTED-from-READY entry requires
+explicit `recovery:{apply:true,kind:'UNPREPARED_NO_SEND'}`. It cannot admit a
+current uncertain send, AUTHORIZED state, pending provider or changed prior page.
+
+Both prepared and unprepared continuations now scan all `hash(batch)-*` evidence
+against the exact allowed set. Unexpected current/future snapshots or sidecars
+are refused. A prior actual sidecar is allowed only by its validated historical
+central-arrow reconciliation. This closes the PR19 evidence-directory parity
+follow-up without changing any original control or timing limit.
+
 ## Continuing a prepared transaction after transport loss
 
 An ordinary entry may encounter the same active batch at PREPARED after its
