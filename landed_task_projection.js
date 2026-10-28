@@ -96,11 +96,14 @@
     }
     return pages;
   }
-  function ownRelease(p,expected,role,binding){
+  function ownRelease(p,expected,role,binding,native){
     const props=p.props;
     must(props['작업 ID']===expected.taskId&&props['이벤트 ID']===expected.eventId&&
       props['세션 ID']===expected.sessionId&&props['체크포인트 버전']===expected.version&&
-      props['Authority Gate']==='READY'&&props['작업 상태']!=='종료','Current native own identity/authority required');
+      props['Authority Gate']==='READY','Current native own identity/authority required');
+    must(props['작업 상태']!=='종료'||(native?.properties['작업 상태']==='종료'&&
+      native.properties['다음 담당자']==='없음'&&native.properties['큐 구획']==='완료 이력'),
+      'Closed current task must remain closed with no next owner');
     const events=[...p.body.matchAll(/```json\n([\s\S]*?)\n```/g)].flatMap(m=>{
       try{
         const literal=m[1],e=literal.startsWith('QUEUE_EVENT_V1 ')?JSON.parse(literal.slice(15)):
@@ -125,7 +128,8 @@
   }
   function bindingProof(bundle,pages){
     const b=bundle.binding,w=pages.get(b.writer.pageId),r=pages.get(b.reviewer.pageId);
-    ownRelease(w,b.writer,'operator',b);ownRelease(r,b.reviewer,'guardrail',b);
+    ownRelease(w,b.writer,'operator',b,bundle.native.find(n=>n.pageId===b.writer.pageId));
+    ownRelease(r,b.reviewer,'guardrail',b,bundle.native.find(n=>n.pageId===b.reviewer.pageId));
     const current=r.body.split(/\n## /)[0].replace(/<[^>]*>/g,'');
     must(/Verdict:\s*PASS\b/.test(current)&&/P0=0,\s*P1=0,\s*P2=0/.test(current),
       'Current independent pair PASS with no P0-P2 required');

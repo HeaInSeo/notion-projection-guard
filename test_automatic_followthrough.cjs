@@ -82,6 +82,13 @@ for(const [name,change] of [
 for(const fault of ['new-own-claim','lost-ack'])test('no certificate or replay after '+fault,async()=>{
  const f=projectionFixture();f.fault=fault;await assert.rejects(f.client.run(f.bundle));assert.equal(f.writes,1);
 });
+test('a final current-task landing can project terminal metadata without reopening its row',async()=>{
+ const f=projectionFixture();
+ for(const n of f.bundle.native){Object.assign(n.properties,{'작업 상태':'종료','다음 담당자':'없음','큐 구획':'완료 이력'});
+  Object.assign(f.pages.get(n.pageId).props,n.properties);}
+ assert.equal((await f.client.run(f.bundle)).status,'COMPLETE');
+ assert.equal(f.pages.get(writer).props['작업 상태'],'종료');
+});
 function providerFixture() {
  const canonical={manifestHash:'e'.repeat(64),exclusive:false,authority:{ownerId:'old-manual',generation:'old'}};
  const pages=new Map([writer,reviewer,router,policy].map(id=>[id,{props:{'이벤트 ID':'real-release'},body:'complete authority'}]));
@@ -93,7 +100,7 @@ function providerFixture() {
  const tools={async mcp__codex_apps__notion_fetch({id}){const p=raw(id,pages.get(id));
   if(fault==='truncated'){const d=JSON.parse(p.content[0].text);d.truncated=true;p.content[0].text=JSON.stringify(d);}return p;},
   async mcp__codex_apps__dev_server___additional_mcp__dev_server_additional_mcp_start_process(){calls++;
-   const observedAt=new Date(Date.now()-(fault==='stale'?31000:0)).toISOString();
+   const observedAt=new Date(Date.now()+(fault==='future'?31000:fault==='stale'?-31000:0)).toISOString();
    return {content:[{type:'text',text:'NPG-NORMAL/1 '+JSON.stringify({schema:'NORMAL_PROJECTION_PROBE_V1',
     batchId:config.batchId,root:config.root,brokerPid:fault==='other-lock'?456:123,brokerExecutor:'same-executor',
     observedAt,validUntil:new Date(Date.parse(observedAt)+30000).toISOString(),canonical,
@@ -107,7 +114,7 @@ test('ordinary provider accepts exclusive=false with real enabled in-progress sc
  const f=providerFixture(),p=await provider(f.tools,f.config)({batchId:f.config.batchId,canonical:f.canonical});
  assert.equal(p.allowed,true);assert.match(p.scope,/PROJECTION_ONLY/);assert.equal(f.calls,1);
 });
-for(const fault of ['stale','other-lock','other-run','completed','disabled','truncated'])test('ordinary provider rejects '+fault,async()=>{
+for(const fault of ['stale','future','other-lock','other-run','completed','disabled','truncated'])test('ordinary provider rejects '+fault,async()=>{
  const f=providerFixture();f.fault=fault;await assert.rejects(provider(f.tools,f.config)({batchId:f.config.batchId,canonical:f.canonical}));
 });
 for(const id of [writer,reviewer,router,policy])test('ordinary provider preserves complete protected source '+id,async()=>{
