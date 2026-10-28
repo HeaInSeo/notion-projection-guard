@@ -15,7 +15,11 @@
     const runner=config.createLiveRunner(transport,{client,createWitness:config.createWitness,
       centralTaskId:config.centralTaskId,runId:config.runId,references,nativeExpectations:bundle.native,
       binding:bundle.binding,recovery:config.recovery});
+    let failure=null;
     try{return await config.createLandedProjection(tools,{createRunner:()=>runner,runnerConfig:{}}).run(bundle);}
-    finally{await client.close();}
+    catch(error){failure=error;throw error;}
+    finally{try{await client.close();}catch(error){
+      if(!failure)throw error;failure.closeError={message:error.message,code:error.code??null};
+    }}
   }};
 })

@@ -64,7 +64,7 @@
     return {status:'SUCCEEDED',pageId:request.page_id,taskId:task?.task_id??null};
   }
   return {async run(batchId,edits){
-    edits=copy(edits);let live=null;const receipts=[];
+    edits=copy(edits);let live=null,failure=null;const receipts=[];
     try{
       const initial=await init(batchId,edits);
       const checked=await rpc({action:'validate_batch',batchId,edits});
@@ -121,8 +121,11 @@
       }
       return {status:'COMPLETED',receipts};
     }catch(error){
+      failure=error;
       if(live)try{error.recovery=await rpc({...live,action:'fence_halt',reason:error.message});}catch{}
       throw error;
-    }finally{await config.client.close();}
+    }finally{try{await config.client.close();}catch(error){
+      if(!failure)throw error;failure.closeError={message:error.message,code:error.code??null};
+    }}
   }};
 })

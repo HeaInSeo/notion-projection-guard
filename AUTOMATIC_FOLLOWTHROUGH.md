@@ -1,5 +1,18 @@
 # Ordinary landing and successor intake
 
+## Recovering a control reply without replaying input
+
+After a failed or deferred control envelope, the client may read only the same
+process's retained two-line reply. The frame must match that one request ID and
+the existing bounded protocol. Input is sent once. Up to twelve retained reads
+may tolerate transport failures; an absent/mismatched reply remains unknown.
+Malformed or oversized frames fail immediately. This does not follow a deferred
+provider task, retry a native call or change ownership/permit deadlines.
+
+Close is attempted once per client, even if its reply stays unknown. The runner
+and adopting entry preserve a primary failure and attach a separate closeError;
+cleanup cannot replace the reason that originally stopped the operation.
+
 ## Expired source proof before an action
 
 A stale witness never grants authority. Before invoking a staged operation or

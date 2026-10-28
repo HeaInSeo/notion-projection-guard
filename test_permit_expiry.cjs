@@ -284,7 +284,8 @@ function preparedRunner(f,options={}){
   resumeUnprepared:options.unprepared?f.resume:undefined,
   restoreUnsent:compiled('normal_unsent.cjs').createUnsent(core),verifyExtensions(){},
   probe(){return {canonical:{exclusive:false,manifestHash:'e'.repeat(64)},brokerExecutor:f.b.executor,journalHash:sha(fs.readFileSync(f.b.file))};}});
- let writes=0,begins=0,pending='',savedStage=null,expired=false,witnessReads=0,proofRejects=0;const refs=[ids[0],ids[1],router,wip];
+ let writes=0,begins=0,pending='',savedStage=null,expired=false,witnessReads=0,proofRejects=0,
+  rpcEnvelopeFailed=false,retainedErrors=0,closes=0,closeUnreadable=false;const refs=[ids[0],ids[1],router,wip];
  const tools={
   async mcp__codex_apps__dev_server___additional_mcp__dev_server_additional_mcp_start_process(){
    return {content:[{type:'text',text:'Process started with PID 789\nNPG/2 {"ready":true}\n'}]};},
@@ -299,14 +300,20 @@ function preparedRunner(f,options={}){
     return {content:[{type:'text',text:'NPG/2 '+JSON.stringify({requestId:input.requestId,ok:false,code:e.code,
       error:e.message,retryBeforeAction:e.retryBeforeAction})+'\n'}]};}
    pending='NPG/2 '+JSON.stringify({requestId:input.requestId,ok:true,result})+'\n';
+   if(input.action==='close'){closes++;if(options.loseClose){closeUnreadable=true;return {isError:true};}}
+   if(input.action===options.rpcErrorAction&&!rpcEnvelopeFailed){rpcEnvelopeFailed=true;
+    return options.deferredEnvelope?{call_id:'synthetic-control-envelope'}:{isError:true};}
    if(q.wait_for_prompt){assert.equal(q.timeout_ms,3000);return {content:[{type:'text',text:pending}]};}
    return {content:[{type:'text',text:'Process running; no incremental output'}]};
   },
   async mcp__codex_apps__dev_server___additional_mcp__dev_server_additional_mcp_read_process_output(q){
-   assert.equal(q.offset,-2);assert.equal(q.length,2);return {content:[{type:'text',text:pending+'\n'}]};},
+   assert.equal(q.offset,-2);assert.equal(q.length,2);
+   if(closeUnreadable||rpcEnvelopeFailed&&retainedErrors++<(options.retainedErrors??0))return {isError:true};
+   return {content:[{type:'text',text:pending+'\n'}]};},
   async mcp__codex_apps__notion_fetch({id}){return f.pages.get(id);},
   async mcp__codex_apps__notion_notion_update_page(q){
    writes++;if(options.nativeError)throw Error('NORMAL_SOURCE_EXPIRED_NO_ACTION: NORMAL_LIVE_EXPIRED');
+   if(options.nativeDeferred)return {call_id:'synthetic-unknown-native-result'};
    assert.ok(ids.indexOf(q.page_id)>=f.input.pages.length);
    f.pages.set(q.page_id,page(q.page_id,'NEW','2026-10-28T00:00:01Z'));return {structuredContent:{page_id:q.page_id}};
   }
@@ -319,7 +326,7 @@ function preparedRunner(f,options={}){
      nativeChecks:refs.map(pageId=>({pageId,observedAt,matched:true,revision:'2026-10-28T00:00:00Z'})),
      central:{id:central,is_enabled:true,run:{id:run,recorded_status:'in_progress'}}};}});
  return {runner,bridge,client,get writes(){return writes;},get begins(){return begins;},get savedStage(){return savedStage;},
-  get witnessReads(){return witnessReads;},get proofRejects(){return proofRejects;}};
+  get witnessReads(){return witnessReads;},get proofRejects(){return proofRejects;},get closes(){return closes;}};
 }
 for(const options of [{},{prefix:2,revoked:true},{prefix:2,halted:true,revoked:true}])
 test('real runner resumes closed PREPARED transaction without beginning it again '+JSON.stringify(options),async t=>{
@@ -336,7 +343,8 @@ test('HALTED PREPARED continuation requires explicit applied kind',async t=>{
 });
 test('a lost staged authorize reply can halt without consuming the stage or making a native call',async t=>{
  const f=preparedFixture(t,{revoked:true}),r=preparedRunner(f,{failStage:true});
- await assert.rejects(r.runner.run(batchId,edits),/injected lost stage reply/);
+ await assert.rejects(r.runner.run(batchId,edits),error=>error.message==='NORMAL_RPC_RESPONSE_UNKNOWN'&&
+  error.transportError==='injected lost stage reply');
  const x=f.b.state.batches[batchId];assert.equal(x.status,'HALTED');assert.equal(x.haltedFrom,'PREPARED');
  assert.equal(x.dispatch.phase,'PREPARED');assert.equal(r.writes,0);
  const discarded=JSON.parse(x.readDetail).unconsumedStageDiscarded;
@@ -394,4 +402,60 @@ test('a native exception using source-expiry text never retries the native invoc
  const f=preparedFixture(t,{prefix:2}),r=preparedRunner(f,{nativeError:true});
  await assert.rejects(r.runner.run(batchId,edits),/NORMAL_SOURCE_EXPIRED_NO_ACTION/);assert.equal(r.writes,1);
  assert.equal(f.b.state.batches[batchId].status,'HALTED');
+});
+
+for(const options of [{rpcErrorAction:'case_consume_live'},{rpcErrorAction:'fence_ack',retainedErrors:2},
+ {rpcErrorAction:'case_live_send',deferredEnvelope:true},{rpcErrorAction:'close'}])
+test('a failed control envelope reads the same correlated retained frame without replay '+JSON.stringify(options),async t=>{
+ const f=preparedFixture(t,{prefix:2}),r=preparedRunner(f,options);
+ assert.equal((await r.runner.run(batchId,edits)).status,'COMPLETED');assert.equal(r.writes,4);
+ assert.equal(f.b.state.batches[batchId].dispatch.attempts.length,6);assert.equal(r.closes,1);
+ await r.client.close();assert.equal(r.closes,1);
+});
+test('an unreadable close reply cannot mask the primary native error or send another close',async t=>{
+ const f=preparedFixture(t,{prefix:2}),r=preparedRunner(f,{nativeError:true,loseClose:true});
+ let failure;try{await r.runner.run(batchId,edits);}catch(error){failure=error;}
+ assert.match(failure.message,/NORMAL_SOURCE_EXPIRED_NO_ACTION/);assert.equal(failure.closeError.message,'NORMAL_RPC_RESPONSE_UNKNOWN');
+ assert.equal(r.writes,1);assert.equal(r.closes,1);await r.client.close();assert.equal(r.closes,1);
+ assert.equal(f.b.state.batches[batchId].status,'HALTED');
+});
+test('a deferred native result is never recovered from a broker control frame or sent twice',async t=>{
+ const f=preparedFixture(t,{prefix:2}),r=preparedRunner(f,{nativeDeferred:true});
+ await assert.rejects(r.runner.run(batchId,edits),/NOTION_RESULT_UNKNOWN/);assert.equal(r.writes,1);
+ assert.equal(f.b.state.batches[batchId].status,'HALTED');assert.equal(r.closes,1);
+});
+test('missing correlated replies stop after bounded read-only polls and one input send',async()=>{
+ let sends=0,reads=0;
+ const tools={async mcp__codex_apps__dev_server___additional_mcp__dev_server_additional_mcp_start_process(){
+  return {content:[{type:'text',text:'Process started with PID 123\nNPG/2 {"ready":true}\n'}]};},
+  async mcp__codex_apps__dev_server___additional_mcp__dev_server_additional_mcp_interact_with_process(){sends++;return {isError:true};},
+  async mcp__codex_apps__dev_server___additional_mcp__dev_server_additional_mcp_read_process_output(){reads++;
+   return {content:[{type:'text',text:'NPG/2 {"requestId":"wrong-request","ok":true,"result":{}}\n'}]};}};
+ const client=factory('normal_rpc_client.js')(tools,{command:'synthetic-only'});
+ await assert.rejects(client.broker({action:'status',batchId}),/NORMAL_RPC_RESPONSE_UNKNOWN/);
+ assert.equal(sends,1);assert.equal(reads,12);
+});
+test('malformed protocol frames are refused rather than replaced with a later result',async()=>{
+ let reads=0;
+ const tools={async mcp__codex_apps__dev_server___additional_mcp__dev_server_additional_mcp_start_process(){
+  return {content:[{type:'text',text:'Process started with PID 123\nNPG/2 {"ready":true}\n'}]};},
+  async mcp__codex_apps__dev_server___additional_mcp__dev_server_additional_mcp_interact_with_process(){
+   return {content:[{type:'text',text:'NPG/2 {bad-json}\n'}]};},
+  async mcp__codex_apps__dev_server___additional_mcp__dev_server_additional_mcp_read_process_output(){reads++;return {};}};
+ const client=factory('normal_rpc_client.js')(tools,{command:'synthetic-only'});
+ await assert.rejects(client.broker({action:'status',batchId}));assert.equal(reads,0);
+});
+for(const [name,change,sameExecutor] of [
+ ['same live executor',()=>{},true],
+ ['AUTHORIZED write boundary',f=>{const x=f.b.state.batches[batchId];x.status='WRITE_PENDING';x.dispatch.phase='AUTHORIZED';f.b.save();}],
+ ['HALTED from a different boundary',f=>{const x=f.b.state.batches[batchId];x.status='HALTED';x.haltedFrom='WRITE_PENDING';f.b.save();}]
+])test('UNSENT refusal boundary remains closed: '+name,t=>{
+ const f=preparedFixture(t,{unprepared:true,prefix:2,sameExecutor});change(f);
+ const before=fs.readFileSync(f.b.file,'utf8');assert.throws(()=>f.resume(f.b,{...f.input,apply:true}),/UNPREPARED_RESUME_BOUNDARY/);
+ assert.equal(fs.readFileSync(f.b.file,'utf8'),before);
+});
+test('HALTED UNSENT with apply but no explicit kind cannot enter the continuation',async t=>{
+ const f=preparedFixture(t,{unprepared:true,prefix:2,halted:true}),r=preparedRunner(f,{unprepared:true,recovery:{apply:true}});
+ await assert.rejects(r.runner.run(batchId,edits),/NORMAL_RECOVERY_UNAVAILABLE/);assert.equal(r.writes,0);
+ assert.equal(fs.readFileSync(f.b.file,'utf8'),f.original);
 });
