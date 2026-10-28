@@ -28,7 +28,7 @@
   }
   const c=copy(config),centralProps=new Set(['작업 상태','다음 담당자','큐 구획','차단 대상','재개 지시',
     '큐 정리 근거','설계에이전트 답변','저장소 식별자','date:큐 정리 시각:start','date:큐 정리 시각:is_datetime']);
-  need(/^[a-f0-9]{32}$/.test(c.centralTaskId??'')&&typeof config.getBrokerPid==='function'&&
+  need(/^[a-f0-9]{32}$/.test(c.centralTaskId??'')&&/^[a-f0-9]{40}$/.test(c.extensionSourceHead??'')&&typeof config.getBrokerPid==='function'&&
     Array.isArray(c.references)&&c.references.length>=4&&Array.isArray(c.nativePageIds)&&c.nativePageIds.length===2&&
     c.nativePageIds[0]!==c.nativePageIds[1]&&Array.isArray(c.edits)&&
     Array.isArray(c.nativeExpectations)&&c.nativeExpectations.length===2&&
@@ -55,7 +55,7 @@
     const pagesJob=Promise.all(c.references.map(async ref=>{
       const live=page(await tools.mcp__codex_apps__notion_fetch({id:ref.pageId}),ref.pageId),fixed=page(ref.page,ref.pageId);
       const edit=c.edits.find(e=>e.pageId===ref.pageId);
-      const original=fixed.body,changed=edit?original.replace(edit.oldStr,edit.newStr):original;
+      const original=fixed.body,changed=edit?original.replace(edit.oldStr,()=>edit.newStr):original;
       need(live.body===original||live.body===changed,'NORMAL_AUTHORITY_BODY_CHANGED');
       const expected=c.nativeExpectations.find(n=>n.pageId===ref.pageId);
       const properties={...fixed.properties,...(expected?.properties??{})};
@@ -73,6 +73,7 @@
     const proof=JSON.parse(lines[0].slice(13));
     need(!proof.error&&proof.schema==='NORMAL_PROJECTION_PROBE_V1'&&proof.batchId===batchId&&
       proof.root===c.root&&proof.brokerPid===brokerPid&&proof.controlsVerified>=7&&
+      proof.extensionsVerified===5&&proof.sourceHead===c.extensionSourceHead&&
       proof.notionWrites===0&&proof.canonicalWrites===0&&proof.workerStarts===0&&
       stable(proof.canonical)===stable(canonical),'NORMAL_PROBE_MISMATCH');
     // A successful read does not grant scheduled ownership. Observe the actual

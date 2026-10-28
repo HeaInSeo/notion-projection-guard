@@ -58,7 +58,10 @@
       ['writer','reviewer'].every(role=>{
         const p=binding[role];return p&&/^[a-f0-9]{32}$/.test(p.pageId??'')&&
           ['taskId','phase','eventId','sessionId'].every(k=>typeof p[k]==='string'&&p[k].length>0)&&
-          Number.isSafeInteger(p.version)&&p.version>0;
+          Number.isSafeInteger(p.version)&&p.version>0&&(!p.sourceRelease||
+            (p.sourceRelease.taskId===p.taskId&&['phase','eventId','sessionId'].every(k=>
+              typeof p.sourceRelease[k]==='string'&&p.sourceRelease[k].length>0)&&
+              Number.isSafeInteger(p.sourceRelease.version)&&p.sourceRelease.version>0&&p.sourceRelease.version<p.version));
       })&&binding.writer.pageId!==binding.reviewer.pageId&&binding.writer.taskId!==binding.reviewer.taskId&&
       binding.writer.sessionId!==binding.reviewer.sessionId,
       'Linked current task/pair and frozen merged source required');
@@ -104,23 +107,33 @@
     must(props['작업 상태']!=='종료'||(native?.properties['작업 상태']==='종료'&&
       native.properties['다음 담당자']==='없음'&&native.properties['큐 구획']==='완료 이력'),
       'Closed current task must remain closed with no next owner');
-    const events=[...p.body.matchAll(/```json\n([\s\S]*?)\n```/g)].flatMap(m=>{
+    const records=[...p.body.matchAll(/```json\n([\s\S]*?)\n```/g)].flatMap(m=>{
       try{
         const literal=m[1],e=literal.startsWith('QUEUE_EVENT_V1 ')?JSON.parse(literal.slice(15)):
           JSON.parse(literal).QUEUE_EVENT_V1;
-        return e?[e]:[];
+        return e?[{event:e,end:m.index+m[0].length}]:[];
       }catch{return [];}
     });
+    const events=records.map(r=>r.event);
     const matches=events.filter(e=>e.event_id===expected.eventId);
     must(matches.length===1,'Exactly one matching own event required');
     const e=matches[0],latest=Math.max(...events.filter(e=>e.task_id===expected.taskId).map(e=>e.version));
     must(e.task_id===expected.taskId&&e.phase===expected.phase&&e.session_id===expected.sessionId&&
       e.version===expected.version&&e.version===latest&&e.role===role&&e.kind==='RELEASE'&&
-      e.lease_state==='RELEASED'&&Number.isFinite(Date.parse(e.event_at_utc))&&Date.parse(e.event_at_utc)<=Date.now()&&
-      typeof e.head_or_digest==='string'&&e.head_or_digest.split(/[^a-f0-9]+/).includes(binding.source.head)&&
-      typeof e.repo_pr==='string'&&e.repo_pr.toLowerCase().includes(repos[binding.repository].github.toLowerCase())&&
-      new RegExp('#'+binding.source.pr+'(?:\\D|$)').test(e.repo_pr),'Frozen current-head own RELEASE required');
-    return e;
+      e.lease_state==='RELEASED'&&Number.isFinite(Date.parse(e.event_at_utc))&&Date.parse(e.event_at_utc)<=Date.now(),
+      'Frozen latest own RELEASE required');
+    // A successor may have completed before an older merge's projection. Bind
+    // the immutable source RELEASE separately, without making it current again.
+    const frozen=expected.sourceRelease??expected,source=records.filter(r=>r.event.event_id===frozen.eventId);
+    must(source.length===1,'Exactly one frozen source RELEASE required');
+    const s=source[0].event;
+    must(s.task_id===expected.taskId&&s.phase===frozen.phase&&s.session_id===frozen.sessionId&&
+      s.version===frozen.version&&s.role===role&&s.kind==='RELEASE'&&s.lease_state==='RELEASED'&&
+      Number.isFinite(Date.parse(s.event_at_utc))&&Date.parse(s.event_at_utc)<=Date.parse(e.event_at_utc)&&
+      typeof s.head_or_digest==='string'&&s.head_or_digest.split(/[^a-f0-9]+/).includes(binding.source.head)&&
+      typeof s.repo_pr==='string'&&s.repo_pr.toLowerCase().includes(repos[binding.repository].github.toLowerCase())&&
+      new RegExp('#'+binding.source.pr+'(?:\\D|$)').test(s.repo_pr),'Frozen merged-source own RELEASE required');
+    return source[0];
   }
   function linked(p,id){
     return ['대상 행','후속 행'].some(k=>Array.isArray(p.props[k])&&p.props[k].some(v=>
@@ -128,11 +141,19 @@
   }
   function bindingProof(bundle,pages){
     const b=bundle.binding,w=pages.get(b.writer.pageId),r=pages.get(b.reviewer.pageId);
-    ownRelease(w,b.writer,'operator',b,bundle.native.find(n=>n.pageId===b.writer.pageId));
-    ownRelease(r,b.reviewer,'guardrail',b,bundle.native.find(n=>n.pageId===b.reviewer.pageId));
-    const current=r.body.split(/\n## /)[0].replace(/<[^>]*>/g,'');
-    must(/Verdict:\s*PASS\b/.test(current)&&/P0=0,\s*P1=0,\s*P2=0/.test(current),
-      'Current independent pair PASS with no P0-P2 required');
+    const writerSource=ownRelease(w,b.writer,'operator',b,bundle.native.find(n=>n.pageId===b.writer.pageId));
+    const reviewerSource=ownRelease(r,b.reviewer,'guardrail',b,bundle.native.find(n=>n.pageId===b.reviewer.pageId));
+    must(writerSource.event.session_id!==reviewerSource.event.session_id,'Independent source sessions required');
+    const end=r.body.indexOf('\n## ',reviewerSource.end);
+    const section=r.body.slice(reviewerSource.end,end<0?r.body.length:end);
+    let fence=null;
+    const lines=section.replace(/<code>[\s\S]*?<\/code>/g,'').split('\n').filter(line=>{
+      const m=line.match(/^\s*(`{3,}|~{3,})/);
+      if(m){if(!fence)fence=m[1];else if(m[1][0]===fence[0]&&m[1].length>=fence.length)fence=null;return false;}
+      return !fence;
+    }).map(l=>l.replace(/<[^>]*>/g,'').replace(/^\*\*(.*?)\*\*$/,'$1'));
+    must(lines.some(l=>/^Verdict:\s*PASS\b.*P0=0,\s*P1=0,\s*P2=0/.test(l)),
+      'Bound source independent verdict line with no P0-P2 required');
     must(linked(w,b.reviewer.pageId)&&linked(r,b.writer.pageId),'Reciprocal original/pair relationship required');
   }
   async function mergedSource(bundle){
@@ -148,6 +169,16 @@
     must(p&&(p.merged===true||p.merged_at)&&
       (p.head_sha??p.head?.sha)===b.source.head&&
       (p.merge_commit_sha??p.merge_sha)===b.source.mergeSha,'Actual merged PR/head/tree lineage required');
+    const base=typeof p.base==='string'?p.base:p.base?.ref;
+    let repo=await tools.mcp__codex_apps__github_fetch({url:'https://api.github.com/repos/'+repos[b.repository].github});
+    for(let n=0;n<8;n++){
+      must(!repo?.isError&&!repo?.error,'GitHub repository source failed');
+      if(repo?.structuredContent){repo=repo.structuredContent;continue;}
+      if(Array.isArray(repo?.content)){try{repo=JSON.parse(repo.content.filter(x=>x.type==='text').map(x=>x.text).join('\n'));continue;}catch{}}
+      if(typeof repo?.content==='string'){try{repo=JSON.parse(repo.content);continue;}catch{}}
+      break;
+    }
+    must(typeof base==='string'&&base===repo?.default_branch,'Merged source must target the current default branch');
   }
   function metadata(bundle,pages){
     for(const n of bundle.native)for(const [k,v] of Object.entries(n.properties))
@@ -170,7 +201,7 @@
     bindingProof(bundle,after);await mergedSource(bundle);
     for(const id of m.ids){
       const a=before.get(id),b=after.get(id),e=m.edits.find(e=>e.pageId===id);
-      const expected=e&&count(a.body,e.newStr)!==1?a.body.replace(e.oldStr,e.newStr):a.body;
+      const expected=e&&count(a.body,e.newStr)!==1?a.body.replace(e.oldStr,()=>e.newStr):a.body;
       must(b.body===expected&&stable(b.props)===stable(a.props),'Source/protected content changed: '+id);
       if(e)must(count(b.body,e.newStr)===1,'Final target absent: '+id);
     }

@@ -45,8 +45,10 @@ function projectionFixture(repository='nodekit',n=1) {
  let writes=0,reads=0,sourceReads=0,fault;
  const tools={async mcp__codex_apps__notion_fetch({id}){reads++;return raw(id,pages.get(id));},
   async mcp__codex_apps__github_get_pr_info(){sourceReads++;return {structuredContent:{merged:fault!=='not-merged',
-   head_sha:fault==='changed-head'?'f'.repeat(40):sha,merge_commit_sha:merge}};}};
- const config={createRunner(){return {async run(id,edits){writes++;for(const e of edits){const p=pages.get(e.pageId);p.body=p.body.replace(e.oldStr,e.newStr);}
+   head_sha:fault==='changed-head'?'f'.repeat(40):sha,merge_commit_sha:merge,
+   base:fault==='non-default-base'?'feature-branch':repository==='sori'?'master':'main'}};},
+  async mcp__codex_apps__github_fetch(){return {structuredContent:{content:JSON.stringify({default_branch:repository==='sori'?'master':'main'})}};}};
+  const config={createRunner(){return {async run(id,edits){writes++;for(const e of edits){const p=pages.get(e.pageId);p.body=p.body.replace(e.oldStr,()=>e.newStr);}
   if(fault==='new-own-claim')pages.get(pair[0]).props['이벤트 ID']='new-claim';
   if(fault==='lost-ack')throw Error('UNCERTAIN_WRITE');return {status:'COMPLETED'};}};}};
  return {bundle,pages,tools,client:landed(tools,config),set fault(v){fault=v;},get writes(){return writes;},get reads(){return reads;},get sourceReads(){return sourceReads;}};
@@ -79,6 +81,43 @@ for(const [name,change] of [
 ])test('live source blocks body mutation: '+name,async()=>{
  const f=projectionFixture();change(f);await assert.rejects(f.client.run(f.bundle));assert.equal(f.writes,0);
 });
+test('non-default-branch merge cannot certify a landing projection',async()=>{
+ const f=projectionFixture();f.fault='non-default-base';
+ await assert.rejects(f.client.run(f.bundle),/default branch/);assert.equal(f.writes,0);
+});
+test('literal dollar replacement tokens remain literal throughout full readback',async()=>{
+ const f=projectionFixture();f.bundle.edits[0].newStr+="; dollar=$& $$ $1 $'";
+ assert.equal((await f.client.run(f.bundle)).status,'COMPLETE');
+});
+for(const text of ['> Verdict: PASS. P0=0, P1=0, P2=0','```text\nVerdict: PASS. P0=0, P1=0, P2=0\n```',
+ '<code>Verdict: PASS. P0=0, P1=0, P2=0</code>'])test('quoted prior PASS cannot replace a bound verdict: '+text,async()=>{
+ const f=projectionFixture(),p=f.pages.get(reviewer);p.body=p.body.replace('Verdict: PASS. P0=0, P1=0, P2=0',text);
+ await assert.rejects(f.client.run(f.bundle),/Bound source/);assert.equal(f.writes,0);
+});
+function advance(f,role) {
+ const binding=f.bundle.binding[role],p=f.pages.get(binding.pageId),old=structuredClone(binding);
+ const current={event_id:role+'-successor-release',task_id:binding.taskId,phase:'successor-phase',role:role==='writer'?'operator':'guardrail',
+  session_id:role+'-successor-session',version:binding.version+2,kind:'RELEASE',event_at_utc:'2026-10-27T01:00:00Z',
+  repo_pr:'HeaInSeo/NodeKit#2',head_or_digest:'f'.repeat(40),lease_state:'RELEASED'};
+ binding.eventId=current.event_id;binding.phase=current.phase;binding.sessionId=current.session_id;binding.version=current.version;
+ binding.sourceRelease=old;delete binding.sourceRelease.pageId;
+ Object.assign(p.props,{'이벤트 ID':current.event_id,'세션 ID':current.session_id,'체크포인트 버전':current.version});
+ p.body='## SUCCESSOR CURRENT\n```json\n'+JSON.stringify({QUEUE_EVENT_V1:current})+'\n```\n'+
+  (role==='reviewer'?'Verdict: NOT ACCEPTED. P2=1\n':'')+'\n## HISTORY SOURCE\n'+p.body.replace(/^## OWN CURRENT\n/,'');
+}
+test('a newer successor release is preserved while the prior merge source is projected',async()=>{
+ const f=projectionFixture();advance(f,'writer');const own=structuredClone(f.pages.get(writer).props);
+ assert.equal((await f.client.run(f.bundle)).status,'COMPLETE');assert.deepEqual(f.pages.get(writer).props,own);
+});
+test('source PASS is bound to its historical event, not a successor verdict',async()=>{
+ const f=projectionFixture();advance(f,'writer');advance(f,'reviewer');
+ assert.equal((await f.client.run(f.bundle)).status,'COMPLETE');
+ assert.match(f.pages.get(reviewer).body,/Verdict: NOT ACCEPTED/);
+});
+test('an invented historical release cannot authorize source catchup',async()=>{
+ const f=projectionFixture();advance(f,'writer');f.bundle.binding.writer.sourceRelease.eventId='not-in-source';
+ await assert.rejects(f.client.run(f.bundle),/frozen source RELEASE/);assert.equal(f.writes,0);
+});
 for(const fault of ['new-own-claim','lost-ack'])test('no certificate or replay after '+fault,async()=>{
  const f=projectionFixture();f.fault=fault;await assert.rejects(f.client.run(f.bundle));assert.equal(f.writes,1);
 });
@@ -92,7 +131,7 @@ test('a final current-task landing can project terminal metadata without reopeni
 function providerFixture() {
  const canonical={manifestHash:'e'.repeat(64),exclusive:false,authority:{ownerId:'old-manual',generation:'old'}};
  const pages=new Map([writer,reviewer,router,policy].map(id=>[id,{props:{'이벤트 ID':'real-release'},body:'complete authority'}]));
- const config={batchId:'NORMAL-TEST-1',centralTaskId:'1'.repeat(32),runId:'actual-run',root:'/synthetic-state',
+ const config={batchId:'NORMAL-TEST-1',centralTaskId:'1'.repeat(32),runId:'actual-run',root:'/synthetic-state',extensionSourceHead:sha,
   nativePageIds:[writer,reviewer],nativeExpectations:[writer,reviewer].map(pageId=>({pageId,properties:{}})),
   references:[...pages].map(([pageId,p])=>({pageId,page:raw(pageId,p)})),edits:[],
   probeCommand:'node /reviewed/probe.cjs --output json',getBrokerPid:()=>123};
@@ -104,7 +143,7 @@ function providerFixture() {
    return {content:[{type:'text',text:'NPG-NORMAL/1 '+JSON.stringify({schema:'NORMAL_PROJECTION_PROBE_V1',
     batchId:config.batchId,root:config.root,brokerPid:fault==='other-lock'?456:123,brokerExecutor:'same-executor',
     observedAt,validUntil:new Date(Date.parse(observedAt)+30000).toISOString(),canonical,
-    controlsVerified:18,notionWrites:0,canonicalWrites:0,workerStarts:0,journalHash:'f'.repeat(64)})}]};},
+    controlsVerified:18,extensionsVerified:5,sourceHead:sha,notionWrites:0,canonicalWrites:0,workerStarts:0,journalHash:'f'.repeat(64)})}]};},
   async mcp__codex_apps__automations_peek(){return {structuredContent:{automations:[{id:config.centralTaskId,
    is_enabled:fault!=='disabled',run_details:{last_run:{id:fault==='other-run'?'other':config.runId,
     recorded_status:fault==='completed'?'completed':'in_progress'}}}]}};}};
@@ -131,6 +170,11 @@ test('ordinary provider allows only its exact planned central literal and native
  const p=provider(f.tools,f.config);f.pages.get(writer).body='planned central projection';f.pages.get(writer).props['작업 상태']='실행재개';
  assert.equal((await p({batchId:f.config.batchId,canonical:f.canonical})).allowed,true);
  f.pages.get(writer).body+=' worker was edited';await assert.rejects(p({batchId:f.config.batchId,canonical:f.canonical}),/BODY_CHANGED/);
+});
+test('native source comparison treats replacement dollar tokens literally',async()=>{
+ const f=providerFixture();f.config.edits=[{pageId:writer,oldStr:'complete authority',newStr:"literal $& $1 $$ $'"}];
+ const p=provider(f.tools,f.config);f.pages.get(writer).body=f.config.edits[0].newStr;
+ assert.equal((await p({batchId:f.config.batchId,canonical:f.canonical})).allowed,true);
 });
 test('concurrent central HOLD cannot be hidden by a metadata allowlist',async()=>{
  const f=providerFixture(),p=provider(f.tools,f.config);f.pages.get(writer).props['차단 대상']='new real HOLD';
@@ -199,7 +243,7 @@ for(const repository of ['nodekit','sori'])test('composite ordinary entry uses r
    }
    assert.match(command,/^node \/reviewed\/probe.cjs --output json --broker-pid \d+ --batch NORMAL-TEST-1$/);
    probeCalls++;return {content:[{type:'text',text:'NPG-NORMAL/1 '+JSON.stringify({schema:'NORMAL_PROJECTION_PROBE_V1',
-    batchId:f.bundle.observationId,root,brokerPid:process.pid,brokerExecutor:broker.executor,controlsVerified:18,
+    batchId:f.bundle.observationId,root,brokerPid:process.pid,brokerExecutor:broker.executor,controlsVerified:18,extensionsVerified:5,sourceHead:sha,
     observedAt:new Date().toISOString(),validUntil:new Date(Date.now()+30000).toISOString(),canonical:authority,
     journalHash:'f'.repeat(64),notionWrites:0,canonicalWrites:0,workerStarts:0})}]};
   },
@@ -217,10 +261,34 @@ for(const repository of ['nodekit','sori'])test('composite ordinary entry uses r
  const client=factory('ordinary_followthrough.js')(tools,{
   createTransport:transport,createRunner:factory('runner.js'),createCaseOwner:factory('central_case_owner.js'),
   createPrerequisites:provider,createLandedProjection:landed,centralTaskId:'1'.repeat(32),runId:'actual-run',root,
-  probeCommand:'node /reviewed/probe.cjs --output json',runnerConfig:{command:'SYNTHETIC_REVIEWED_BROKER'}
+  createProbeCommand:()=> 'node /reviewed/probe.cjs --output json',installation:{sourceHead:sha},runnerConfig:{command:'SYNTHETIC_REVIEWED_BROKER'}
  });
  const out=await client.run(f.bundle,references);
  assert.equal(out.status,'COMPLETE');assert.equal(updates,repository==='sori'?8:6);assert.equal(brokerStarts,1);
  assert.ok(probeCalls>updates*3);assert.equal(broker.state.active,null);
  assert.equal(broker.state.batches[f.bundle.observationId].status,'COMPLETED');
+});
+function bootstrapFixture(t){
+ const f=probeFixture(t),head='a'.repeat(40),dir=path.join(f.runtime,'extensions',head);fs.mkdirSync(dir,{recursive:true,mode:0o700});
+ const names=['additional_mcp_transport.js','landed_task_projection.js','normal_projection_prerequisites.js',
+  'normal_projection_probe.cjs','ordinary_followthrough.js'],files={};
+ for(const n of names){const content=n==='normal_projection_probe.cjs'?fs.readFileSync(path.join(__dirname,n),'utf8'):'// synthetic immutable module\n';
+  fs.writeFileSync(path.join(dir,n),content,{mode:0o600});files[n]=crypto.createHash('sha256').update(content).digest('hex');}
+ return {...f,dir,installation:{root:f.root,runtime:f.runtime,sourceHead:head,extensionDirectory:dir,
+  caseModuleHash:f.input.caseModuleHash,files}};
+}
+test('literal bootstrap verifies all five extension files before invoking the real read-only probe',t=>{
+ const f=bootstrapFixture(t),cp=require('node:child_process'),command=factory('ordinary_probe_command.js')(f.installation);
+ const r=cp.spawnSync('/bin/sh',['-c',command+' --broker-pid '+process.pid+' --batch NORMAL-TEST-1'],{encoding:'utf8'});
+ assert.equal(r.status,0,r.stderr);const p=JSON.parse(r.stdout.trim().slice(13));
+ assert.equal(p.extensionsVerified,5);assert.equal(p.sourceHead,f.installation.sourceHead);assert.equal(p.canonicalWrites,0);
+});
+for(const mutation of ['changed','symlink','writable'])test('literal bootstrap refuses extension '+mutation+' before probe execution',t=>{
+ const f=bootstrapFixture(t),cp=require('node:child_process'),file=path.join(f.dir,'ordinary_followthrough.js');
+ if(mutation==='changed')fs.appendFileSync(file,'changed');
+ if(mutation==='symlink'){fs.unlinkSync(file);fs.symlinkSync(path.join(f.dir,'landed_task_projection.js'),file);}
+ if(mutation==='writable')fs.chmodSync(file,0o666);
+ const cmd=factory('ordinary_probe_command.js')(f.installation)+' --broker-pid '+process.pid+' --batch NORMAL-TEST-1';
+ const r=cp.spawnSync('/bin/sh',['-c',cmd],{encoding:'utf8'});
+ assert.notEqual(r.status,0);assert.equal(r.stdout.includes('NPG-NORMAL/1'),false);assert.match(r.stderr,/ORDINARY_(FILE_PIN|EXTENSION_FILE)/);
 });

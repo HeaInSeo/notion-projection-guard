@@ -29,6 +29,14 @@ binding contains repository, writer/reviewer page IDs, task IDs, exact phases,
 event IDs, versions and sessions, plus `source: {kind:'MERGED',pr,head,mergeSha}`.
 The entry verifies both latest native own RELEASEs, released leases, current
 authority, distinct worker sessions, the pair's PASS and actual GitHub merge.
+When a successor already has a newer own RELEASE, keep that latest identity in
+the binding and explicitly provide `writer.sourceRelease` and/or
+`reviewer.sourceRelease` with the older same-task event identity. Both events
+must exist in the complete native body; the frozen source matches the merged
+head, while the latest native identity stays current and is never rolled back.
+The verdict is read only from the section following its bound review event;
+quoted or code-example PASS text is not a verdict. The actual merged PR must
+target the repository's current default branch.
 It rejects BORI, whose dedicated writer remains under its existing contract.
 No PR number, batch name or NodeKit phase is hardcoded in the new path.
 
@@ -54,18 +62,23 @@ Use `ordinary_followthrough.js` as the adopting entry. It constructs one transpo
 and runner per transaction in Code Mode and derives provider native scope from
 the same task binding. All factories
 below are evaluated from their pinned function-expression source. `runner` and
-`caseOwner` are the unchanged installed sources. `probeCommand` is an audited,
-fixed shell-quoted installation prefix ending in ` --output json`, containing
-`--root`, `--runtime` and `--case-module-sha256`. The provider appends only a
-validated broker PID and literal batch ID.
+`caseOwner` are the unchanged installed sources. Load the hosted
+`ordinary_probe_command.js` factory from the same immutable reviewed source.
+It constructs a literal bootstrap that verifies all five remote extension files
+against the approved installation manifest before evaluating the exact verified
+probe buffer. Symlinks, writable files, path drift and any hash mismatch block
+the probe. This hosted factory is not a sixth installed runtime file.
+`installation` contains `root`, `runtime`, `sourceHead`, `caseModuleHash`,
+`extensionDirectory=runtime+'/extensions/'+sourceHead`, and the five SHA256
+values in `files`. The provider appends only a validated PID and batch ID.
 
 ```js
 const ordinary = ordinaryFollowthrough(tools, {
   createTransport: additionalTransport, createRunner: runner,
   createCaseOwner: caseOwner, createPrerequisites: normalPrerequisites,
-  createLandedProjection: landedProjection,
+  createLandedProjection: landedProjection, createProbeCommand: ordinaryProbeCommand,
   centralTaskId, runId: actualScheduledRun.id, root: canonicalRoot,
-  probeCommand, runnerConfig: existingRunnerConfig
+  installation, runnerConfig: existingRunnerConfig
 });
 const certificate = await ordinary.run(bundle, references);
 ```

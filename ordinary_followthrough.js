@@ -3,7 +3,7 @@
   // The adoption entry wires the new pieces to the unchanged runner. There is
   // no caller-selectable native scope separate from the validated task binding.
   const need=(ok,code)=>{if(!ok)throw Error(code);};
-  for(const name of ['createTransport','createRunner','createCaseOwner','createPrerequisites','createLandedProjection'])
+  for(const name of ['createTransport','createRunner','createCaseOwner','createPrerequisites','createLandedProjection','createProbeCommand'])
     need(typeof config[name]==='function','ORDINARY_FACTORY_REQUIRED');
   return {async run(bundle,references) {
     bundle=JSON.parse(JSON.stringify(bundle));references=JSON.parse(JSON.stringify(references));
@@ -20,7 +20,8 @@
       const prerequisites=config.createPrerequisites(tools,{
         batchId:bundle.observationId,centralTaskId:config.centralTaskId,runId:config.runId,
         root:config.root,references,nativePageIds,nativeExpectations:bundle.native,edits:bundle.edits,
-        probeCommand:config.probeCommand,getBrokerPid:transport.getNpgBrokerPid
+        extensionSourceHead:config.installation?.sourceHead,
+        probeCommand:config.createProbeCommand(config.installation),getBrokerPid:transport.getNpgBrokerPid
       });
       assertOwnership=config.createCaseOwner(tools,client.broker,{
         centralTaskId:config.centralTaskId,
