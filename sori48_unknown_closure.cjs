@@ -24,7 +24,12 @@ function preflight(input){
   approval(input.approvalBytes);
   need(typeof input.beforeBytes==='string'&&sha(input.beforeBytes)===proposal.journalSha256,
     'JOURNAL_PREIMAGE');
-  need(input.priorExecutorAbsent===true,'OLD_EXECUTOR');
+  const executor=input.priorExecutorEvidence;
+  need(executor?.schema==='SORI48_PRIOR_EXECUTOR_EVIDENCE_V1'&&
+    executor.status==='ABSENT_VERIFIED'&&executor.batchId===proposal.batchId&&
+    executor.ticket===proposal.ticket&&executor.dispatchId===proposal.dispatchId&&
+    executor.oldExecutor===proposal.oldExecutor&&executor.attributableTerminalResult===null,
+    'OLD_EXECUTOR');
   need(input.originalEvidencePreserved===true&&input.verifiedReceiptCount===3&&
     input.original18Verified===true,'PRESERVATION_EVIDENCE');
   const sources=input.freshSources;

@@ -36,7 +36,10 @@ function fixture(){
   vm.runInNewContext(closureSource,{require:closureRequire,module:cm});
   const input={apply:false,approvalBytes,beforeBytes,
     owner:{actor:cm.exports.OWNER,runId:'scheduled-run',scheduledProofSha256:'a'.repeat(64)},
-    priorExecutorAbsent:true,originalEvidencePreserved:true,verifiedReceiptCount:3,original18Verified:true,
+    priorExecutorEvidence:{schema:'SORI48_PRIOR_EXECUTOR_EVIDENCE_V1',status:'ABSENT_VERIFIED',
+      batchId:proposal.batchId,ticket:proposal.ticket,dispatchId:proposal.dispatchId,
+      oldExecutor:proposal.oldExecutor,attributableTerminalResult:null},
+    originalEvidencePreserved:true,verifiedReceiptCount:3,original18Verified:true,
     freshSources:{original:{readOk:true},child:{readOk:true},pair:{readOk:true},
       github:{readOk:true,head:'c'.repeat(40)}},
     lateObservation:{batchId:proposal.batchId,ticket:proposal.ticket,dispatchId:proposal.dispatchId,
@@ -61,7 +64,9 @@ test('apply persists audit before one atomic compare/write and preserves UNKNOWN
 });
 for(const [name,mutate] of [
   ['approval',i=>i.approvalBytes+='\n'],['owner',i=>i.owner.actor='manual:other'],
-  ['preimage',i=>i.beforeBytes+='\n'],['executor',i=>i.priorExecutorAbsent=false],
+  ['preimage',i=>i.beforeBytes+='\n'],['executor',i=>i.priorExecutorEvidence.status='NOT_ASSESSED'],
+  ['executor identity',i=>i.priorExecutorEvidence.dispatchId='other'],
+  ['executor terminal',i=>i.priorExecutorEvidence.attributableTerminalResult={status:'done'}],
   ['receipts',i=>i.verifiedReceiptCount=2],['original18',i=>i.original18Verified=false],
   ['source',i=>i.freshSources.child.readOk=false],['head',i=>i.freshSources.github.head='other'],
   ['terminal',i=>i.lateObservation.attributableTerminalResult={status:'done'}],

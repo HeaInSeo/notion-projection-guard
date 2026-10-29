@@ -37,6 +37,8 @@ test('fresh local collection preserves bytes and does not infer executor absence
   const f=fixture(t),before=fs.readFileSync(f.journalPath,'utf8'),r=f.collect();
   assert.equal(r.beforeBytes,before);assert.equal(r.verifiedReceiptCount,3);assert.equal(r.original18Verified,true);
   assert.equal(r.retentionEvidence.files.length,7);assert.equal(r.retentionEvidence.priorExecutorStatus,'NOT_ASSESSED');
+  assert.equal(r.priorExecutorEvidence.status,'NOT_ASSESSED');
+  assert.equal(r.priorExecutorEvidence.dispatchId,f.spec.dispatchId);
   assert.equal(r.retentionEvidence.applyAuthorized,false);assert.equal(f.controlCalls,2);
   assert.equal(fs.readFileSync(f.journalPath,'utf8'),before);
 });

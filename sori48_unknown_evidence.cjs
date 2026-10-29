@@ -63,6 +63,9 @@ function createCollector({root,runtime,caseModuleHash}){
     ce.controls(manifest);
     need(read(journalPath,true)===beforeBytes&&sha(read(modulePath))===caseModuleHash,'CHANGED');
     return {beforeBytes,originalEvidencePreserved:true,verifiedReceiptCount:3,original18Verified:true,
+      priorExecutorEvidence:{schema:'SORI48_PRIOR_EXECUTOR_EVIDENCE_V1',status:'NOT_ASSESSED',
+        batchId:proposal.batchId,ticket:proposal.ticket,dispatchId:proposal.dispatchId,
+        oldExecutor:proposal.oldExecutor,attributableTerminalResult:null},
       retentionEvidence:{schema:'SORI48_LOCAL_RETENTION_EVIDENCE_V1',observedAt:new Date().toISOString(),
         journalSha256:sha(beforeBytes),receipts,files,controlFiles:manifest.controls.files,
         priorExecutorStatus:'NOT_ASSESSED',freshSourcesStatus:'NOT_ASSESSED',applyAuthorized:false}};
