@@ -70,7 +70,7 @@ executor, plan, original controls and canonical lock checks.
 ## Bounded replies and pre-call permit expiry
 
 The current ordinary entry uses `normal_rpc_client.js` as `createClient`.
-Install all fourteen files declared by `normal_live_command.js` from the same
+Install all fifteen files declared by `normal_live_command.js` from the same
 reviewed source. This entry uses Additional MCP directly and bounded `NPG/2`
 reply frames. Retained reads request the final frame and its trailing blank
 line, rather than returning a preceding multi-megabyte input echo. Only bounded
@@ -124,16 +124,21 @@ window while waiting for multiple control-plane replies. Its timestamps must
 not be renewed, and the halted transaction must not be replayed.
 
 `normal_followthrough_v2.js` is the corrected ordinary entry. Load its factories
-from the same reviewed immutable source and install all eleven files declared
-by `normal_live_command.js` in a new versioned directory. The literal command
+from the same reviewed immutable source and install every file declared
+by that source's `normal_live_command.js` in a new versioned directory. The literal command
 bootstrap checks every extension before evaluating it, validates the original
 case manifest and all original controls, then starts `normal_bridge.cjs` under
 the original canonical broker lock. No original control file is replaced.
 
-Wire `createTransport`, the unchanged `runner.js` as `createClient`,
+For every current ordinary entry, wire `additional_mcp_transport.js` as
+`createTransport`, `normal_rpc_client.js` as `createClient`,
 `normal_live_runner.js` as `createLiveRunner`, `normal_live_owner.js` as
 `createWitness`, `landed_task_projection.js` as `createLandedProjection`, and
-`normal_live_command.js` as `createCommand`. Supply the installation manifest,
+`normal_live_command.js` as `createCommand`. The original `runner.js` is retained
+for pinned historical cases only; it is not a current ordinary client. Both the
+adopting entry and the live runner reject an incomplete client before broker
+initialization. Never build an ordinary transaction with a raw core broker or
+recreate this adapter inline to bypass a missing reviewed phase provider. Supply the installation manifest,
 actual central task/run identifiers and the existing device configuration.
 Call `run(bundle, references)` with the same validated merged-task binding and
 fresh original/pair/Router/WIP references used by the first entry.
