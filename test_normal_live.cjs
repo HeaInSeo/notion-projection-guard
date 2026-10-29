@@ -142,18 +142,31 @@ for(const fault of ['delayed-permit','native-result-lost'])test('live runner ret
   }
   if(q.action==='case_live_send'){
    const permit={...live,dispatchId:'one-dispatch',pageId:A,observedAt:new Date(clock).toISOString(),validUntil:new Date(clock+15000).toISOString()};
-   if(fault==='delayed-permit')clock+=16000;return {permit};
+   if(fault==='delayed-permit')clock+=16000;return {permit,noCallToken:'one-use-token'};
   }
   if(q.action==='fence_halt'){halted++;return {status:'HALTED'};}
+  if(q.action==='close'){closed++;return {status:'CLOSED'};}
   if(q.action==='fence_verify'){verified++;return {};}
   throw Error('unexpected '+q.action);
  };
  const tools={async mcp__codex_apps__notion_fetch(){return page();},
   async mcp__codex_apps__notion_notion_update_page(){writes++;throw Error('lost native response');}};
+ // Exercise the actual RPC client and its private no-call token, including
+ // the delayed confirmation path; do not fall back to a broker-only stub.
+ let retained;
+ const client=factory('normal_rpc_client.js',{Date:ClockDate})({
+  async mcp__codex_apps__dev_server___additional_mcp__dev_server_additional_mcp_start_process(){
+   return {content:[{type:'text',text:'PID 700\nNPG/2 {"ready":true}\n'}]};
+  },
+  async mcp__codex_apps__dev_server___additional_mcp__dev_server_additional_mcp_interact_with_process({input}){
+   const q=JSON.parse(input);retained={content:[{type:'text',text:'NPG/2 '+JSON.stringify({requestId:q.requestId,ok:true,result:await rpc(q)})+'\n'}]};return retained;
+  },
+  async mcp__codex_apps__dev_server___additional_mcp__dev_server_additional_mcp_read_process_output(){return retained;}
+ },{command:'synthetic-control-command'});
  const runner=factory('normal_live_runner.js',{Date:ClockDate,setTimeout})(tools,{
-  client:{broker:rpc,async close(){closed++;}},centralTaskId:central,runId:run,references:[{pageId:A}],
+  client,centralTaskId:central,runId:run,references:[{pageId:A}],
   nativeExpectations:[],binding:{repository:'nodekit',source:{pr:149}},createWitness:()=>async()=>({actual:true})});
- await assert.rejects(runner.run(batchId,[edit]),fault==='delayed-permit'?/SEND_PERMIT_EXPIRED/:/lost native response/);
+ await assert.rejects(runner.run(batchId,[edit]),fault==='delayed-permit'?/NORMAL_PRE_CALL_PERMIT_EXPIRED/:/lost native response/);
  assert.equal(writes,fault==='delayed-permit'?0:1);assert.equal(halted,1);assert.equal(verified,0);assert.equal(closed,1);
 });
 

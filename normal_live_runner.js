@@ -1,6 +1,13 @@
 (function createNormalLiveRunner(tools,config){
   'use strict';
-  const rpc=config.client.broker,copy=x=>JSON.parse(JSON.stringify(x));
+  const client=config.client;
+  // The reviewed client owns the one-use no-call proof. Refuse a legacy or
+  // incomplete adapter before init can create any durable send intent.
+  if(!client||!['broker','close','sendOnce','recoverPreCall','consumeSourceExpiry'].every(k=>typeof client[k]==='function'))
+    throw Error('NORMAL_RPC_CLIENT_REQUIRED');
+  const rpc=client.broker.bind(client),sendOnce=client.sendOnce.bind(client),
+    recoverPreCall=client.recoverPreCall.bind(client),consumeSourceExpiry=client.consumeSourceExpiry.bind(client),
+    close=client.close.bind(client),copy=x=>JSON.parse(JSON.stringify(x));
   const text=r=>(r?.content??[]).filter(v=>v.type==='text').map(v=>v.text).join('\n');
   function unwrap(r){for(let i=0;i<10;i++){
     if(r?.isError||r?.error)throw Error('NORMAL_NATIVE_ERROR');
@@ -29,7 +36,7 @@
       // obtain a new stage and fresh reads. Transport uncertainty never retries.
       try{return await rpc({action:'case_consume_live',batchId:operation.batchId,...stage,
         liveSource:await freshWitness(operation.batchId)});}
-      catch(error){if(attempt>=2||!config.client.consumeSourceExpiry?.(error))throw error;}
+      catch(error){if(attempt>=2||!consumeSourceExpiry(error))throw error;}
     }
   }
   async function freshWitness(batchId){
@@ -39,16 +46,13 @@
   async function confirm(live){
     for(let attempt=0;;attempt++)try{return await rpc({action:'case_live_send',batchId:live.batchId,
       operation:{...live,action:'fence_confirm_send'},liveSource:await freshWitness(live.batchId)});}
-    catch(error){if(attempt>=2||!config.client.consumeSourceExpiry?.(error))throw error;}
+    catch(error){if(attempt>=2||!consumeSourceExpiry(error))throw error;}
   }
   async function send(request,permit,live){
-    const now=Date.now(),at=Date.parse(permit?.observedAt),until=Date.parse(permit?.validUntil);
-    if(!config.client.sendOnce&&(!permit||permit.dispatchId!==live.dispatchId||permit.executor!==live.executor||
-      permit.pageId!==request.page_id||!Number.isFinite(at)||!Number.isFinite(until)||
-      at>now||now-at>=30000||until<=now))throw Error('SEND_PERMIT_EXPIRED_OR_FENCED');
-    // There is no await between the permit check and this sole native mutation.
+    // Only the captured reviewed client's synchronous send boundary may invoke
+    // Notion. There is no legacy fallback or await before that boundary.
     const invoke=()=>tools.mcp__codex_apps__notion_notion_update_page(request);
-    let raw=await (config.client.sendOnce?config.client.sendOnce(request,permit,live,invoke):invoke()),data=unwrap(raw);
+    let raw=await sendOnce(request,permit,live,invoke),data=unwrap(raw);
     const task=data?.async_task??data?.result?.async_task;
     if(task){
       if(typeof task.task_id!=='string'||!task.task_id)throw Error('ASYNC_RESULT_UNKNOWN');
@@ -112,8 +116,8 @@
         let provider;
         try{provider=await send(dispatch.request,confirmed.permit,live);}
         catch(error){
-          if(error.message!=='NORMAL_PRE_CALL_PERMIT_EXPIRED'||!config.client.recoverPreCall||renewal>=2)throw error;
-          await config.client.recoverPreCall(error,owned,await read(edit.pageId));
+          if(error.message!=='NORMAL_PRE_CALL_PERMIT_EXPIRED'||renewal>=2)throw error;
+          await recoverPreCall(error,owned,await read(edit.pageId));
           continue;
         }
         await rpc({...live,action:'fence_ack',provider});
@@ -127,7 +131,7 @@
       failure=error;
       if(live)try{error.recovery=await rpc({...live,action:'fence_halt',reason:error.message});}catch{}
       throw error;
-    }finally{try{await config.client.close();}catch(error){
+    }finally{try{await close();}catch(error){
       if(!failure)throw error;failure.closeError={message:error.message,code:error.code??null};
     }}
   }};

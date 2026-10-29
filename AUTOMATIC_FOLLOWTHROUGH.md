@@ -70,7 +70,7 @@ executor, plan, original controls and canonical lock checks.
 ## Bounded replies and pre-call permit expiry
 
 The current ordinary entry uses `normal_rpc_client.js` as `createClient`.
-Install all fourteen files declared by `normal_live_command.js` from the same
+Install all fifteen files declared by `normal_live_command.js` from the same
 reviewed source. This entry uses Additional MCP directly and bounded `NPG/2`
 reply frames. Retained reads request the final frame and its trailing blank
 line, rather than returning a preceding multi-megabyte input echo. Only bounded
@@ -124,16 +124,21 @@ window while waiting for multiple control-plane replies. Its timestamps must
 not be renewed, and the halted transaction must not be replayed.
 
 `normal_followthrough_v2.js` is the corrected ordinary entry. Load its factories
-from the same reviewed immutable source and install all eleven files declared
-by `normal_live_command.js` in a new versioned directory. The literal command
+from the same reviewed immutable source and install every file declared
+by that source's `normal_live_command.js` in a new versioned directory. The literal command
 bootstrap checks every extension before evaluating it, validates the original
 case manifest and all original controls, then starts `normal_bridge.cjs` under
 the original canonical broker lock. No original control file is replaced.
 
-Wire `createTransport`, the unchanged `runner.js` as `createClient`,
+For every current ordinary entry, wire `additional_mcp_transport.js` as
+`createTransport`, `normal_rpc_client.js` as `createClient`,
 `normal_live_runner.js` as `createLiveRunner`, `normal_live_owner.js` as
 `createWitness`, `landed_task_projection.js` as `createLandedProjection`, and
-`normal_live_command.js` as `createCommand`. Supply the installation manifest,
+`normal_live_command.js` as `createCommand`. The original `runner.js` is retained
+for pinned historical cases only; it is not a current ordinary client. Both the
+adopting entry and the live runner reject an incomplete client before broker
+initialization. Never build an ordinary transaction with a raw core broker or
+recreate this adapter inline to bypass a missing reviewed phase provider. Supply the installation manifest,
 actual central task/run identifiers and the existing device configuration.
 Call `run(bundle, references)` with the same validated merged-task binding and
 fresh original/pair/Router/WIP references used by the first entry.
@@ -233,38 +238,31 @@ own proof, authority, policy,
 unknown/truncated block or other source change fails closed. Do not refresh the
 reference to hide a failed comparison during a live batch.
 
-Use `ordinary_followthrough.js` as the adopting entry. It constructs one transport
-and runner per transaction in Code Mode and derives provider native scope from
-the same task binding. All factories
-below are evaluated from their pinned function-expression source. `runner` and
-`caseOwner` are the unchanged installed sources. Load the hosted
-`ordinary_probe_command.js` factory from the same immutable reviewed source.
-It constructs a literal bootstrap that verifies all five remote extension files
-against the approved installation manifest before evaluating the exact verified
-probe buffer. Symlinks, writable files, path drift and any hash mismatch block
-the probe. This hosted factory is not a sixth installed runtime file.
-`installation` contains `root`, `runtime`, `sourceHead`, `caseModuleHash`,
-`extensionDirectory=runtime+'/extensions/'+sourceHead`, and the five SHA256
-values in `files`. The provider appends only a validated PID and batch ID.
+Use `normal_followthrough_v2.js` as the current adopting entry. It constructs
+one reviewed NPG/2 client and live runner per transaction; the same task binding
+still supplies native scope and fresh ownership references. Load every factory
+from the same pinned source and use the complete fifteen-file manifest of
+`normal_live_command.js`:
 
 ```js
-const ordinary = ordinaryFollowthrough(tools, {
-  createTransport: additionalTransport, createRunner: runner,
-  createCaseOwner: caseOwner, createPrerequisites: normalPrerequisites,
-  createLandedProjection: landedProjection, createProbeCommand: ordinaryProbeCommand,
-  centralTaskId, runId: actualScheduledRun.id, root: canonicalRoot,
+const ordinary = normalFollowthroughV2(tools, {
+  createTransport: additionalTransport, createClient: normalRpcClient,
+  createLiveRunner: normalLiveRunner, createWitness: normalLiveOwner,
+  createLandedProjection: landedProjection, createCommand: normalLiveCommand,
+  centralTaskId, runId: actualScheduledRun.id,
   installation, runnerConfig: existingRunnerConfig
 });
 const certificate = await ordinary.run(bundle, references);
 ```
 
-The probe independently validates the unchanged case controls, same live broker
-lock, ordinary ownership and same canonical batch. It writes nothing. The hosted
-provider and existing case owner independently observe the real enabled,
-`in_progress` central run. No manual session may supply a synthetic scheduled
-generation. The existing broker retains send permits, ACK uncertainty handling,
-durable pending state and full preservation readbacks. Unknown writes are never
-retried using another batch or root.
+The former `ordinary_followthrough.js` / `ordinary_probe_command.js` five-file
+entry, original `runner.js` client and direct NPG/1 broker are retained historical
+source, not alternative current wiring. Do not select them when a current phase
+provider is absent. The current bridge independently checks unchanged controls,
+the canonical lock, bound sources and actual enabled in-progress central owner.
+No manual session may supply a synthetic scheduled generation. The ordinary
+client preserves send permits, ACK uncertainty, durable pending state and full
+protected readbacks; unknown writes cannot be retried using another batch/root.
 
 ## Finish the cycle
 

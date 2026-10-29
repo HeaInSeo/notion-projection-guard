@@ -100,9 +100,20 @@ test('normal admission packet changes after init block consumption before begin'
   assert.equal(fs.existsSync(f.b.file),false);
 });
 test('live driver chooses explicit control admission without a fake PR',async()=>{
-  const calls=[];const runner=factory('normal_live_runner.js')({},
-    {client:{broker:async q=>{calls.push(q);return q.action==='normal_control_init'?{referenceToken:'real-token'}:
-      {status:'COMPLETED'};},close:async()=>{}},centralTaskId:production.admission.centralTaskId,runId:run,
+  const calls=[];let retained;
+  const client=factory('normal_rpc_client.js')({
+    async mcp__codex_apps__dev_server___additional_mcp__dev_server_additional_mcp_start_process(){
+      return {content:[{type:'text',text:'PID 701\nNPG/2 {"ready":true}\n'}]};
+    },
+    async mcp__codex_apps__dev_server___additional_mcp__dev_server_additional_mcp_interact_with_process({input}){
+      const q=JSON.parse(input);calls.push(q);
+      const result=q.action==='normal_control_init'?{referenceToken:'real-token'}:{status:'COMPLETED'};
+      retained={content:[{type:'text',text:'NPG/2 '+JSON.stringify({requestId:q.requestId,ok:true,result})+'\n'}]};return retained;
+    },
+    async mcp__codex_apps__dev_server___additional_mcp__dev_server_additional_mcp_read_process_output(){return retained;}
+  },{command:'synthetic-control-command'});
+  const runner=factory('normal_live_runner.js')({},
+    {client,centralTaskId:production.admission.centralTaskId,runId:run,
       references:production.admission.referenceIds.map(pageId=>({pageId})),nativeExpectations:[],
       controlAdmissionId:production.admission.id,createWitness:()=>async()=>{throw Error('completed must not read/send');}});
   const result=await runner.run(production.admission.batchId,[edit]);assert.equal(result.alreadyConsumed,true);
