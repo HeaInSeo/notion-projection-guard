@@ -28,7 +28,12 @@ function preflight(input){
   need(executor?.schema==='SORI48_PRIOR_EXECUTOR_EVIDENCE_V1'&&
     executor.status==='ABSENT_VERIFIED'&&executor.batchId===proposal.batchId&&
     executor.ticket===proposal.ticket&&executor.dispatchId===proposal.dispatchId&&
-    executor.oldExecutor===proposal.oldExecutor&&executor.attributableTerminalResult===null,
+    executor.oldExecutor===proposal.oldExecutor&&executor.oldBrokerPid===2680832&&
+    executor.absenceScope==='LOCAL_OLD_PROCESS_AND_CURRENT_CANONICAL_LOCK_ONLY'&&
+    executor.oldProcessPresent===false&&Number.isInteger(executor.currentLock?.pid)&&
+    typeof executor.currentLock.executor==='string'&&
+    executor.currentLock.executor!==proposal.oldExecutor&&
+    executor.attributableTerminalResult===null,
     'OLD_EXECUTOR');
   need(input.originalEvidencePreserved===true&&input.verifiedReceiptCount===3&&
     input.original18Verified===true,'PRESERVATION_EVIDENCE');

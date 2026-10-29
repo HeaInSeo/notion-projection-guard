@@ -1,8 +1,10 @@
 'use strict';
-// Local retention evidence only. This cannot establish prior-executor absence,
+// Local retention evidence plus a bounded old-executor probe. The probe can
+// establish only local old-process/current-lock absence; it cannot establish
 // scheduler ownership, fresh product sources or a provider terminal result.
 const fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto');
 const proposal=require('./SORI48_UNKNOWN_CLOSURE_PROPOSAL.json');
+const OLD_BROKER_PID=2680832;
 const sha=x=>crypto.createHash('sha256').update(x).digest('hex');
 const need=(ok,why)=>{if(!ok)throw Error('SORI48_EVIDENCE_'+why);};
 function read(file,privateOnly=false){
@@ -11,7 +13,7 @@ function read(file,privateOnly=false){
     !(st.mode&(privateOnly?0o077:0o022))&&fs.realpathSync(file)===file,'FILE');
   return fs.readFileSync(file,'utf8');
 }
-function createCollector({root,runtime,caseModuleHash}){
+function createCollector({root,runtime,caseModuleHash,executorProbe}){
   for(const dir of [root,runtime]){
     need(typeof dir==='string'&&path.isAbsolute(dir),'PATH');
     const st=fs.lstatSync(dir);
@@ -19,6 +21,15 @@ function createCollector({root,runtime,caseModuleHash}){
       !(st.mode&0o022)&&fs.realpathSync(dir)===dir,'DIRECTORY');
   }
   need(/^[a-f0-9]{64}$/.test(caseModuleHash??''),'CASE_PIN');
+  need(executorProbe===undefined||typeof executorProbe==='function','EXECUTOR_PROBE');
+  const probe=executorProbe??(()=>{
+    const oldProcessPresent=fs.existsSync('/proc/'+OLD_BROKER_PID),lockPath=path.join(root,'broker.lock');
+    if(oldProcessPresent||!fs.existsSync(lockPath))return {status:'NOT_ASSESSED',oldProcessPresent};
+    const lock=JSON.parse(read(lockPath,true));
+    if(lock.pid!==process.pid||lock.executor===proposal.oldExecutor)
+      return {status:'NOT_ASSESSED',oldProcessPresent,currentLock:lock};
+    return {status:'ABSENT_VERIFIED',oldProcessPresent:false,currentLock:lock};
+  });
   return function collect(){
     const journalPath=path.join(root,'journal.json'),beforeBytes=read(journalPath,true);
     need(sha(beforeBytes)===proposal.journalSha256,'JOURNAL');
@@ -62,13 +73,18 @@ function createCollector({root,runtime,caseModuleHash}){
     for(const file of files)need(sha(read(file.path,true))===file.sha256,'EVIDENCE_CHANGED');
     ce.controls(manifest);
     need(read(journalPath,true)===beforeBytes&&sha(read(modulePath))===caseModuleHash,'CHANGED');
+    const executor=probe();
+    need(executor&&['ABSENT_VERIFIED','NOT_ASSESSED'].includes(executor.status),'EXECUTOR_RESULT');
     return {beforeBytes,originalEvidencePreserved:true,verifiedReceiptCount:3,original18Verified:true,
-      priorExecutorEvidence:{schema:'SORI48_PRIOR_EXECUTOR_EVIDENCE_V1',status:'NOT_ASSESSED',
+      priorExecutorEvidence:{schema:'SORI48_PRIOR_EXECUTOR_EVIDENCE_V1',status:executor.status,
         batchId:proposal.batchId,ticket:proposal.ticket,dispatchId:proposal.dispatchId,
-        oldExecutor:proposal.oldExecutor,attributableTerminalResult:null},
+        oldExecutor:proposal.oldExecutor,oldBrokerPid:OLD_BROKER_PID,
+        absenceScope:'LOCAL_OLD_PROCESS_AND_CURRENT_CANONICAL_LOCK_ONLY',
+        oldProcessPresent:executor.oldProcessPresent,currentLock:executor.currentLock??null,
+        attributableTerminalResult:null},
       retentionEvidence:{schema:'SORI48_LOCAL_RETENTION_EVIDENCE_V1',observedAt:new Date().toISOString(),
         journalSha256:sha(beforeBytes),receipts,files,controlFiles:manifest.controls.files,
-        priorExecutorStatus:'NOT_ASSESSED',freshSourcesStatus:'NOT_ASSESSED',applyAuthorized:false}};
+        priorExecutorStatus:executor.status,freshSourcesStatus:'NOT_ASSESSED',applyAuthorized:false}};
   };
 }
-module.exports={createCollector};
+module.exports={createCollector,OLD_BROKER_PID};

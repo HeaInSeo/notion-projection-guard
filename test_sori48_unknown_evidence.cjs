@@ -3,7 +3,7 @@ const {test}=require('node:test'),assert=require('node:assert/strict');
 const fs=require('node:fs'),os=require('node:os'),path=require('node:path'),crypto=require('node:crypto'),vm=require('node:vm');
 const {createRequire}=require('node:module');
 const sha=x=>crypto.createHash('sha256').update(x).digest('hex');
-function fixture(t){
+function fixture(t,executorProbe){
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'sori48-retention-')),runtime=path.join(root,'runtime');
   fs.chmodSync(root,0o700);fs.mkdirSync(runtime,{mode:0o700});
   t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
@@ -30,7 +30,7 @@ function fixture(t){
   const source=fs.readFileSync(path.join(__dirname,'sori48_unknown_evidence.cjs'),'utf8'),m={exports:{}};
   const native=createRequire(__filename),req=id=>id==='./SORI48_UNKNOWN_CLOSURE_PROPOSAL.json'?spec:id===modulePath?ce:native(id);
   vm.runInNewContext(source,{require:req,module:m,process});
-  const collect=m.exports.createCollector({root,runtime,caseModuleHash:sha(moduleBytes)});
+  const collect=m.exports.createCollector({root,runtime,caseModuleHash:sha(moduleBytes),executorProbe});
   return {root,journalPath,prefix,collect,b,spec,write,modulePath,ce,setControls:v=>controlsOk=v,get controlCalls(){return controlCalls;}};
 }
 test('fresh local collection preserves bytes and does not infer executor absence or apply permission',t=>{
@@ -40,6 +40,17 @@ test('fresh local collection preserves bytes and does not infer executor absence
   assert.equal(r.priorExecutorEvidence.status,'NOT_ASSESSED');
   assert.equal(r.priorExecutorEvidence.dispatchId,f.spec.dispatchId);
   assert.equal(r.retentionEvidence.applyAuthorized,false);assert.equal(f.controlCalls,2);
+  assert.equal(fs.readFileSync(f.journalPath,'utf8'),before);
+});
+test('bounded probe can verify only local old-process and current-lock absence',t=>{
+  const f=fixture(t,()=>({status:'ABSENT_VERIFIED',oldProcessPresent:false,
+    currentLock:{pid:process.pid,executor:'current-executor'}}));
+  const before=fs.readFileSync(f.journalPath,'utf8'),r=f.collect();
+  assert.equal(r.priorExecutorEvidence.status,'ABSENT_VERIFIED');
+  assert.equal(r.priorExecutorEvidence.oldBrokerPid,2680832);
+  assert.equal(r.priorExecutorEvidence.absenceScope,'LOCAL_OLD_PROCESS_AND_CURRENT_CANONICAL_LOCK_ONLY');
+  assert.equal(r.priorExecutorEvidence.attributableTerminalResult,null);
+  assert.equal(r.retentionEvidence.priorExecutorStatus,'ABSENT_VERIFIED');
   assert.equal(fs.readFileSync(f.journalPath,'utf8'),before);
 });
 for(const [name,change] of [
