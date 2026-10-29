@@ -195,6 +195,29 @@ test('ordinary bootstrap verifies every extension before starting and closes wit
  assert.equal(r.status,0,r.stderr);assert.match(r.stdout,/"ready":true/);assert.match(r.stdout,/"requestId":"close-once","ok":true/);
  assert.equal(fs.readFileSync(path.join(f.root,'journal.json'),'utf8'),before);
 });
+test('ordinary bootstrap separately pins the exact Sori48 phase-provider source set',t=>{
+ const f=liveBootstrapFixture(t),phaseNames=['SORI48_UNKNOWN_CLOSURE_PROPOSAL.json',
+  'sori48_unknown_state.cjs','sori48_unknown_closure.cjs'];
+ f.installation.phaseProviders={};
+ for(const n of phaseNames){const bytes=fs.readFileSync(path.join(__dirname,n));
+  fs.writeFileSync(path.join(f.dir,n),bytes,{mode:0o600});f.installation.phaseProviders[n]=sha(bytes);}
+ let r=require('node:child_process').spawnSync('/bin/sh',['-c',factory('normal_live_command.js')(f.installation)],
+  {input:'{"action":"close","requestId":"close-phase"}\n',encoding:'utf8'});
+ assert.equal(r.status,0,r.stderr);assert.match(r.stdout,/"ready":true/);
+ fs.appendFileSync(path.join(f.dir,'sori48_unknown_state.cjs'),'\nchanged');
+ r=require('node:child_process').spawnSync('/bin/sh',['-c',factory('normal_live_command.js')(f.installation)],{encoding:'utf8'});
+ assert.notEqual(r.status,0);assert.equal(r.stdout.includes('"ready":true'),false);
+});
+test('ordinary command rejects partial phase-provider manifests',()=>{
+ const names=['additional_mcp_transport.js','landed_task_projection.js','normal_projection_prerequisites.js',
+  'normal_projection_probe.cjs','ordinary_followthrough.js','normal_bridge.cjs','normal_live_owner.js',
+  'normal_live_runner.js','normal_followthrough_v2.js','normal_live_command.js','reconcile_unpermitted_dispatch.cjs',
+  'normal_rpc_client.js','normal_unsent.cjs','reconcile_permit_expiry.cjs','sori_startup_control.cjs'];
+ const f={root:'/r',runtime:'/r/t',sourceHead:'a'.repeat(40),extensionDirectory:'/r/t/extensions/'+('a'.repeat(40)),
+  caseModuleHash:'b'.repeat(64),files:Object.fromEntries(names.map(n=>[n,'c'.repeat(64)])),
+  phaseProviders:{'sori48_unknown_state.cjs':'d'.repeat(64)}};
+ assert.throws(()=>factory('normal_live_command.js')(f),/NORMAL_INSTALLATION_MANIFEST/);
+});
 for(const fault of ['changed','symlink','writable'])test('ordinary bootstrap rejects '+fault+' extension before starting a broker',t=>{
  const f=liveBootstrapFixture(t),file=path.join(f.dir,'normal_bridge.cjs');
  if(fault==='changed')fs.appendFileSync(file,'\nchanged');

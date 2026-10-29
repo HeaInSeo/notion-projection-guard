@@ -4,12 +4,16 @@
     'normal_projection_probe.cjs','ordinary_followthrough.js','normal_bridge.cjs','normal_live_owner.js',
     'normal_live_runner.js','normal_followthrough_v2.js','normal_live_command.js','reconcile_unpermitted_dispatch.cjs',
     'normal_rpc_client.js','normal_unsent.cjs','reconcile_permit_expiry.cjs','sori_startup_control.cjs'];
+  const phaseNames=['SORI48_UNKNOWN_CLOSURE_PROPOSAL.json','sori48_unknown_state.cjs','sori48_unknown_closure.cjs'];
   const c=JSON.parse(JSON.stringify(installation));
   if(!c||!/^[a-f0-9]{40}$/.test(c.sourceHead??'')||!/^[a-f0-9]{64}$/.test(c.caseModuleHash??'')||
     ![c.root,c.runtime,c.extensionDirectory].every(p=>typeof p==='string'&&p.startsWith('/')&&!p.includes('\0'))||
     c.extensionDirectory!==c.runtime+'/extensions/'+c.sourceHead||!c.files||
     Object.keys(c.files).sort().join(',')!==names.slice().sort().join(',')||
-    !names.every(n=>/^[a-f0-9]{64}$/.test(c.files[n])))throw Error('NORMAL_INSTALLATION_MANIFEST');
+    !names.every(n=>/^[a-f0-9]{64}$/.test(c.files[n]))||
+    (c.phaseProviders!==undefined&&(!c.phaseProviders||
+      Object.keys(c.phaseProviders).sort().join(',')!==phaseNames.slice().sort().join(',')||
+      !phaseNames.every(n=>/^[a-f0-9]{64}$/.test(c.phaseProviders[n])))))throw Error('NORMAL_INSTALLATION_MANIFEST');
   const bootstrap=String.raw`
     const fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto'),readline=require('node:readline');
     const c=JSON.parse(process.argv[1]),need=(v,k)=>{if(!v)throw Error(k);};
@@ -18,6 +22,7 @@
       'normal_projection_probe.cjs','ordinary_followthrough.js','normal_bridge.cjs','normal_live_owner.js',
       'normal_live_runner.js','normal_followthrough_v2.js','normal_live_command.js','reconcile_unpermitted_dispatch.cjs',
       'normal_rpc_client.js','normal_unsent.cjs','reconcile_permit_expiry.cjs','sori_startup_control.cjs'];
+    const phaseNames=['SORI48_UNKNOWN_CLOSURE_PROPOSAL.json','sori48_unknown_state.cjs','sori48_unknown_closure.cjs'];
     const data={};
     const trusted=file=>{const s=fs.lstatSync(file);need(s.isFile()&&!s.isSymbolicLink()&&
       s.uid===process.geteuid()&&!(s.mode&0o022),'NORMAL_RUNTIME_FILE');return fs.readFileSync(file);};
@@ -27,6 +32,8 @@
         fs.realpathSync(c.extensionDirectory)===c.extensionDirectory,'NORMAL_EXTENSION_DIRECTORY');
       for(const n of names){const bytes=trusted(path.join(c.extensionDirectory,n));
         need(hash(bytes)===c.files[n],'NORMAL_EXTENSION_PIN');data[n]=bytes.toString('utf8');}
+      if(c.phaseProviders)for(const n of phaseNames){const bytes=trusted(path.join(c.extensionDirectory,n));
+        need(hash(bytes)===c.phaseProviders[n],'NORMAL_PHASE_PROVIDER_PIN');data[n]=bytes.toString('utf8');}
     }
     verifyExtensions();
     const casePath=path.join(c.runtime,'case_exception.cjs');
