@@ -195,6 +195,14 @@ test('ordinary bootstrap verifies every extension before starting and closes wit
  assert.equal(r.status,0,r.stderr);assert.match(r.stdout,/"ready":true/);assert.match(r.stdout,/"requestId":"close-once","ok":true/);
  assert.equal(fs.readFileSync(path.join(f.root,'journal.json'),'utf8'),before);
 });
+test('ordinary RPC awaits an asynchronous bridge result before serialization',t=>{
+ const f=liveBootstrapFixture(t);
+ fs.writeFileSync(path.join(f.runtime,'broker.cjs'),
+  'module.exports={Broker:class{handle(){return Promise.resolve({closed:true,async:true});}close(){}}};',{mode:0o600});
+ const r=require('node:child_process').spawnSync('/bin/sh',['-c',factory('normal_live_command.js')(f.installation)],
+  {input:'{"action":"close","requestId":"close-async"}\n',encoding:'utf8'});
+ assert.equal(r.status,0,r.stderr);assert.match(r.stdout,/"requestId":"close-async","ok":true,"result":\{"closed":true,"async":true\}/);
+});
 test('ordinary bootstrap separately pins the exact Sori48 phase-provider source set',t=>{
  const f=liveBootstrapFixture(t),phaseNames=['SORI48_UNKNOWN_CLOSURE_PROPOSAL.json',
   'sori48_unknown_state.cjs','sori48_unknown_closure.cjs'];

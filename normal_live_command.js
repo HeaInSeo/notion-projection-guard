@@ -57,7 +57,7 @@
       validateControlInit,assessControlPermit,continueApprovedControl});
     process.stdout.write('NPG/2 {"ready":true}\n');
     const rl=readline.createInterface({input:process.stdin,crlfDelay:Infinity});
-    rl.on('line',line=>{let q;try{q=JSON.parse(line);const result=bridge.handle(q);
+    rl.on('line',async line=>{let q;try{q=JSON.parse(line);const result=await bridge.handle(q);
       const reply=JSON.stringify({requestId:q.requestId,ok:true,result});
       need(reply.length<=32760,'NORMAL_RPC_REPLY_TOO_LARGE');
       process.stdout.write('NPG/2 '+reply+'\n',()=>{
