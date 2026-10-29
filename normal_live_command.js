@@ -44,6 +44,11 @@
     ce.controls(manifest);
     const core=require(path.join(c.runtime,'broker.cjs'));ce.controls(manifest);verifyExtensions();
     const load=n=>{const m={exports:{}};new Function('require','module','exports',data[n])(require,m,m.exports);return m.exports;};
+    const phaseCache={};
+    const loadPhase=n=>{if(phaseCache[n])return phaseCache[n];need(phaseNames.includes(n),'NORMAL_PHASE_REQUIRE');
+      if(n.endsWith('.json'))return phaseCache[n]=JSON.parse(data[n]);
+      const m={exports:{}},localRequire=id=>id.startsWith('./')?loadPhase(path.basename(id)):require(id);
+      new Function('require','module','exports',data[n])(localRequire,m,m.exports);return phaseCache[n]=m.exports;};
     const probe=load('normal_projection_probe.cjs').probe;
     const reconcile=load('reconcile_unpermitted_dispatch.cjs').createReconciler({...core,runtime:c.runtime});
     const unsent=load('normal_unsent.cjs'),restoreUnsent=unsent.createUnsent(core),resumePrepared=unsent.createPreparedResumer(core),
@@ -53,10 +58,19 @@
     const validateControlInit=control.createAdmission({runtime:c.runtime});
     const assessControlPermit=control.createAssessor({...core,runtime:c.runtime});
     const continueApprovedControl=control.createUserCase({...core,runtime:c.runtime});
+    let sori48ClosureCheck;
+    if(c.phaseProviders){
+      const runtime=loadPhase('sori48_unknown_runtime.cjs').createRuntime({root:c.root});
+      const provider=loadPhase('sori48_unknown_closure.cjs').createProvider(runtime);
+      const approvalPath=path.join(c.root,'manual-audits','sori48-closure-20261029','USER_APPROVAL.json');
+      sori48ClosureCheck=input=>provider({...input,
+        approvalBytes:trusted(approvalPath).toString('utf8'),
+        beforeBytes:trusted(path.join(c.root,'journal.json')).toString('utf8')});
+    }
     const b=new core.Broker(c.root,JSON.parse(trusted(path.join(c.runtime,'policy.json'))));
     const bridge=load('normal_bridge.cjs').createBridge({broker:b,probe,installation:c,
       reconcileUnpermitted:reconcile,reconcilePermitExpiry,restoreUnsent,resumePrepared,resumeUnprepared,verifyExtensions,
-      validateControlInit,assessControlPermit,continueApprovedControl});
+      validateControlInit,assessControlPermit,continueApprovedControl,sori48ClosureCheck});
     process.stdout.write('NPG/2 {"ready":true}\n');
     const rl=readline.createInterface({input:process.stdin,crlfDelay:Infinity});
     rl.on('line',async line=>{let q;try{q=JSON.parse(line);const result=await bridge.handle(q);

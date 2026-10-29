@@ -212,6 +212,11 @@ test('ordinary bootstrap separately pins the exact Sori48 phase-provider source 
  let r=require('node:child_process').spawnSync('/bin/sh',['-c',factory('normal_live_command.js')(f.installation)],
   {input:'{"action":"close","requestId":"close-phase"}\n',encoding:'utf8'});
  assert.equal(r.status,0,r.stderr);assert.match(r.stdout,/"ready":true/);
+ const closurePath=path.join(f.dir,'sori48_unknown_closure.cjs');
+ fs.writeFileSync(closurePath,'module.exports={};',{mode:0o600});
+ f.installation.phaseProviders['sori48_unknown_closure.cjs']=sha(fs.readFileSync(closurePath));
+ r=require('node:child_process').spawnSync('/bin/sh',['-c',factory('normal_live_command.js')(f.installation)],{encoding:'utf8'});
+ assert.notEqual(r.status,0);assert.equal(r.stdout.includes('"ready":true'),false);
  fs.appendFileSync(path.join(f.dir,'sori48_unknown_state.cjs'),'\nchanged');
  r=require('node:child_process').spawnSync('/bin/sh',['-c',factory('normal_live_command.js')(f.installation)],{encoding:'utf8'});
  assert.notEqual(r.status,0);assert.equal(r.stdout.includes('"ready":true'),false);
