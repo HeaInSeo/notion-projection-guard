@@ -205,12 +205,12 @@ test('ordinary RPC awaits an asynchronous bridge result before serialization',t=
 });
 test('ordinary bootstrap separately pins the exact Sori48 phase-provider source set',t=>{
  const f=liveBootstrapFixture(t),phaseNames=['SORI48_UNKNOWN_CLOSURE_PROPOSAL.json',
-  'sori48_unknown_state.cjs','sori48_unknown_closure.cjs','sori48_unknown_runtime.cjs'];
+  'sori48_unknown_state.cjs','sori48_unknown_closure.cjs','sori48_unknown_runtime.cjs','sori48_unknown_evidence.cjs'];
  f.installation.phaseProviders={};
  for(const n of phaseNames){const bytes=fs.readFileSync(path.join(__dirname,n));
   fs.writeFileSync(path.join(f.dir,n),bytes,{mode:0o600});f.installation.phaseProviders[n]=sha(bytes);}
  let r=require('node:child_process').spawnSync('/bin/sh',['-c',factory('normal_live_command.js')(f.installation)],
-  {input:'{"action":"close","requestId":"close-phase"}\n',encoding:'utf8'});
+  {input:'{"action":"close","requestId":"close-phase"}\n',encoding:'utf8',cwd:os.tmpdir()});
  assert.equal(r.status,0,r.stderr);assert.match(r.stdout,/"ready":true/);
  const closurePath=path.join(f.dir,'sori48_unknown_closure.cjs');
  fs.writeFileSync(closurePath,'module.exports={};',{mode:0o600});
