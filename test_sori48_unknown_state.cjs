@@ -54,3 +54,34 @@ for(const [name,change] of [
 test('changed canonical bytes refuse even if JSON is equivalent',()=>{
   const f=fixture();assert.throws(()=>f.helper.inspectTransition(f.beforeBytes+'\n',JSON.stringify(f.after)),/JOURNAL_PREIMAGE/);
 });
+function lateInput(){
+  const proposal=JSON.parse(fs.readFileSync(path.join(__dirname,'SORI48_UNKNOWN_CLOSURE_PROPOSAL.json')));
+  return {batchId:proposal.batchId,ticket:proposal.ticket,dispatchId:proposal.dispatchId,
+    attributableTerminalResult:null,freshSourcesComplete:true,
+    targets:proposal.observedUnwrittenTargets.targets.map(t=>({pageId:t.pageId,readOk:true,
+      oldLiteralCount:1,plannedLiteralCount:0}))};
+}
+test('late-result consumer keeps a clear read observational and UNKNOWN',()=>{
+  assert.deepEqual(real.inspectLateObservation(lateInput()),{classification:'CLEAR_OBSERVATION_ONLY',
+    stopAffectedActions:false,lateObservationRequired:true,originalOutcome:'UNKNOWN'});
+});
+test('late-result consumer stops on old payload drift without asserting an ACK',()=>{
+  const input=lateInput();input.targets[0].plannedLiteralCount=1;
+  assert.deepEqual(real.inspectLateObservation(input),{classification:'DRIFT',stopAffectedActions:true,
+    next:'REVIEWED_SOURCE_PRESERVING_REPAIR',originalOutcome:'UNKNOWN'});
+});
+test('failed target or source read is UNKNOWN and blocks affected actions',()=>{
+  const target=lateInput();target.targets[2].readOk=false;
+  assert.equal(real.inspectLateObservation(target).classification,'UNKNOWN');
+  const source=lateInput();source.freshSourcesComplete=false;
+  assert.equal(real.inspectLateObservation(source).classification,'UNKNOWN');
+});
+test('attributable terminal evidence stops the exception route',()=>{
+  const input=lateInput();input.attributableTerminalResult={status:'SUCCEEDED',providerTask:'old-task'};
+  assert.deepEqual(real.inspectLateObservation(input),{classification:'TERMINAL_EVIDENCE',stopException:true,
+    next:'REVIEWED_SAME_BATCH_RECONCILIATION',originalOutcome:'UNKNOWN'});
+});
+test('late-result consumer rejects a different batch, ticket, dispatch or target order',()=>{
+  for(const mutate of [x=>x.batchId='other',x=>x.ticket='other',x=>x.dispatchId='other',
+    x=>x.targets.reverse()]){const input=lateInput();mutate(input);assert.throws(()=>real.inspectLateObservation(input));}
+});

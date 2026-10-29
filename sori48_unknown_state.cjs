@@ -45,4 +45,32 @@ function classify(status){
     cleanTermination:false,productAccepted:false,capacityReleased:false,
     replayAllowed:false,ackAllowed:false};
 }
-module.exports={inspectTransition,classify,STATUS,PROPOSAL_SHA256};
+function inspectLateObservation(input){
+  need(input?.batchId===spec.batchId&&input.ticket===spec.ticket&&
+    input.dispatchId===spec.dispatchId,'LATE_SCOPE');
+  if(input.attributableTerminalResult!==null){
+    need(input.attributableTerminalResult&&typeof input.attributableTerminalResult==='object',
+      'LATE_RESULT');
+    return {classification:'TERMINAL_EVIDENCE',stopException:true,
+      next:'REVIEWED_SAME_BATCH_RECONCILIATION',originalOutcome:'UNKNOWN'};
+  }
+  need(Array.isArray(input.targets)&&input.targets.length===spec.observedUnwrittenTargets.targets.length,
+    'LATE_TARGETS');
+  let unknown=false,drift=false;
+  for(let i=0;i<input.targets.length;i++){
+    const observed=input.targets[i],expected=spec.observedUnwrittenTargets.targets[i];
+    need(observed?.pageId===expected.pageId,'LATE_TARGET_ORDER');
+    if(observed.readOk!==true){unknown=true;continue;}
+    need(Number.isSafeInteger(observed.oldLiteralCount)&&Number.isSafeInteger(observed.plannedLiteralCount)&&
+      observed.oldLiteralCount>=0&&observed.plannedLiteralCount>=0,'LATE_COUNTS');
+    if(observed.plannedLiteralCount>0)drift=true;
+  }
+  if(input.freshSourcesComplete!==true)unknown=true;
+  if(drift)return {classification:'DRIFT',stopAffectedActions:true,
+    next:'REVIEWED_SOURCE_PRESERVING_REPAIR',originalOutcome:'UNKNOWN'};
+  if(unknown)return {classification:'UNKNOWN',stopAffectedActions:true,
+    next:'REPEAT_READ_ONLY_OBSERVATION',originalOutcome:'UNKNOWN'};
+  return {classification:'CLEAR_OBSERVATION_ONLY',stopAffectedActions:false,
+    lateObservationRequired:true,originalOutcome:'UNKNOWN'};
+}
+module.exports={inspectTransition,classify,inspectLateObservation,STATUS,PROPOSAL_SHA256};
