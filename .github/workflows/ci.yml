@@ -29,7 +29,7 @@ jobs:
       - name: Verify local review-timeout candidate pins
         run: node verify_review_timeout_candidate.cjs
       - name: Ordinary landing and current-task projection regressions
-        run: node --test complete_projection_cases.cjs test_automatic_followthrough.cjs test_normal_live.cjs test_permit_expiry.cjs test_sori_control.cjs test_sori48_unknown_state.cjs test_normal_client_required.cjs
+        run: node --test complete_projection_cases.cjs test_automatic_followthrough.cjs test_normal_live.cjs test_permit_expiry.cjs test_sori_control.cjs test_sori48_unknown_state.cjs test_sori48_unknown_closure.cjs test_normal_client_required.cjs
       - name: Verify operational review-timeout candidate pins
         run: node verify_review_timeout_operational.cjs
       - name: Provenance gate regression tests
