@@ -203,3 +203,43 @@ for(const fault of ['changed','symlink','writable'])test('ordinary bootstrap rej
  const r=require('node:child_process').spawnSync('/bin/sh',['-c',factory('normal_live_command.js')(f.installation)],{encoding:'utf8'});
  assert.notEqual(r.status,0);assert.equal(r.stdout.includes('"ready":true'),false);assert.equal(fs.existsSync(path.join(f.root,'broker.lock')),false);
 });
+
+test('Sori48 closure bridge is check-only and binds scheduled owner proof',t=>{
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'normal-sori48-check-')),b=new core.Broker(root,policy);
+ t.after(()=>{b.close();fs.rmSync(root,{recursive:true,force:true});});
+ let received;const referenceIds=[A,'b'.repeat(32),router,policyId];
+ const bridge=createBridge({broker:b,installation:{root},verifyExtensions(){},
+  probe(){return {canonical:{exclusive:false,manifestHash:'e'.repeat(64)},brokerExecutor:b.executor,journalHash:'f'.repeat(64)};},
+  sori48ClosureCheck(input){received=input;return {eligible:true,applied:false};}});
+ const init=bridge.handle({action:'normal_sori48_closure_init',batchId:'SORI48-PAIR-ADMIT-20261029',
+  edits:[],centralTaskId:central,runId:run,referenceIds});
+ const operation={action:'normal_sori48_unknown_check',batchId:'SORI48-PAIR-ADMIT-20261029',apply:false};
+ const stage=bridge.handle({action:'case_stage_input',batchId:operation.batchId,operation});
+ const observedAt=new Date().toISOString(),liveSource={observedAt,referenceToken:init.referenceToken,
+  nativeChecks:referenceIds.map(pageId=>({pageId,observedAt,matched:true,revision:'2026-10-29T00:00:00Z'})),
+  central:{id:central,is_enabled:true,schedulerEvidenceSha256:'d'.repeat(64),
+    run:{id:run,recorded_status:'in_progress'}}};
+ const result=bridge.handle({action:'case_consume_live',batchId:operation.batchId,...stage,liveSource});
+ assert.deepEqual(result,{eligible:true,applied:false});assert.equal(received.apply,false);
+ assert.deepEqual(received.owner,{actor:'automation:'+central,runId:run,scheduledProofSha256:'d'.repeat(64)});
+ assert.equal(fs.existsSync(b.file),false);
+});
+test('Sori48 closure bridge rejects apply and missing scheduled proof before provider call',t=>{
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'normal-sori48-refuse-')),b=new core.Broker(root,policy);
+ t.after(()=>{b.close();fs.rmSync(root,{recursive:true,force:true});});
+ let calls=0;const referenceIds=[A,'b'.repeat(32),router,policyId];
+ const bridge=createBridge({broker:b,installation:{root},verifyExtensions(){},
+  probe(){return {canonical:{exclusive:false,manifestHash:'e'.repeat(64)},brokerExecutor:b.executor,journalHash:'f'.repeat(64)};},
+  sori48ClosureCheck(){calls++;}});
+ const init=bridge.handle({action:'normal_sori48_closure_init',batchId:'SORI48-PAIR-ADMIT-20261029',
+  edits:[],centralTaskId:central,runId:run,referenceIds});
+ assert.throws(()=>bridge.handle({action:'case_stage_input',batchId:'SORI48-PAIR-ADMIT-20261029',
+  operation:{action:'normal_sori48_unknown_check',batchId:'SORI48-PAIR-ADMIT-20261029',apply:true}}));
+ const operation={action:'normal_sori48_unknown_check',batchId:'SORI48-PAIR-ADMIT-20261029',apply:false};
+ const stage=bridge.handle({action:'case_stage_input',batchId:operation.batchId,operation});
+ const observedAt=new Date().toISOString(),liveSource={observedAt,referenceToken:init.referenceToken,
+  nativeChecks:referenceIds.map(pageId=>({pageId,observedAt,matched:true,revision:'2026-10-29T00:00:00Z'})),
+  central:{id:central,is_enabled:true,run:{id:run,recorded_status:'in_progress'}}};
+ assert.throws(()=>bridge.handle({action:'case_consume_live',batchId:operation.batchId,...stage,liveSource}),
+  /NORMAL_SORI48_SCHEDULED_PROOF/);assert.equal(calls,0);assert.equal(fs.existsSync(b.file),false);
+});
