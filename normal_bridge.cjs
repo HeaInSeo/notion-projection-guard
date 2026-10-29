@@ -33,7 +33,8 @@ function createBridge({broker,probe,installation,reconcileUnpermitted,reconcileP
   }
   function bound(op){
     need(op?.batchId===init.batchId&&!Object.hasOwn(op,'ownerProof'),'NORMAL_OPERATION_SCOPE');
-    if(op.action==='normal_sori48_unknown_check')need(init.closure===true&&op.batchId===init.batchId&&op.apply===false,'NORMAL_SORI48_CHECK_SCOPE');
+    if(op.action==='normal_sori48_unknown_check')need(init.closure===true&&op.batchId===init.batchId&&op.apply===false&&
+      Object.keys(op).sort().join(',')==='action,apply,batchId','NORMAL_SORI48_CHECK_SCOPE');
     else if(op.action==='fence_begin')need(JSON.stringify(op.edits)===JSON.stringify(init.edits),'NORMAL_PLAN_CHANGED');
     else if(['normal_reconcile_prepared','normal_reconcile_unprepared','normal_assess_control_permit','normal_user_case_control_continue'].includes(op.action))need(op.planHash===init.planHash&&
       broker.state.batches[init.batchId]?.planHash===init.planHash,'NORMAL_PLAN_CHANGED');

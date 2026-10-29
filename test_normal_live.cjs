@@ -266,6 +266,9 @@ test('Sori48 closure bridge rejects apply and missing scheduled proof before pro
   edits:[],centralTaskId:central,runId:run,referenceIds});
  assert.throws(()=>bridge.handle({action:'case_stage_input',batchId:'SORI48-PAIR-ADMIT-20261029',
   operation:{action:'normal_sori48_unknown_check',batchId:'SORI48-PAIR-ADMIT-20261029',apply:true}}));
+ assert.throws(()=>bridge.handle({action:'case_stage_input',batchId:'SORI48-PAIR-ADMIT-20261029',
+  operation:{action:'normal_sori48_unknown_check',batchId:'SORI48-PAIR-ADMIT-20261029',apply:false,
+    priorExecutorAbsent:true,freshSources:{github:{head:'caller-selected'}}}}),/NORMAL_SORI48_CHECK_SCOPE/);
  const operation={action:'normal_sori48_unknown_check',batchId:'SORI48-PAIR-ADMIT-20261029',apply:false};
  const stage=bridge.handle({action:'case_stage_input',batchId:operation.batchId,operation});
  const observedAt=new Date().toISOString(),liveSource={observedAt,referenceToken:init.referenceToken,
