@@ -205,7 +205,7 @@ test('ordinary RPC awaits an asynchronous bridge result before serialization',t=
 });
 test('ordinary bootstrap separately pins the exact Sori48 phase-provider source set',t=>{
  const f=liveBootstrapFixture(t),phaseNames=['SORI48_UNKNOWN_CLOSURE_PROPOSAL.json',
-  'sori48_unknown_state.cjs','sori48_unknown_closure.cjs'];
+  'sori48_unknown_state.cjs','sori48_unknown_closure.cjs','sori48_unknown_runtime.cjs'];
  f.installation.phaseProviders={};
  for(const n of phaseNames){const bytes=fs.readFileSync(path.join(__dirname,n));
   fs.writeFileSync(path.join(f.dir,n),bytes,{mode:0o600});f.installation.phaseProviders[n]=sha(bytes);}
