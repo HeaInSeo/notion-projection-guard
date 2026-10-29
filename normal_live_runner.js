@@ -6,7 +6,8 @@
   if(!client||!['broker','close','sendOnce','recoverPreCall','consumeSourceExpiry'].every(k=>typeof client[k]==='function'))
     throw Error('NORMAL_RPC_CLIENT_REQUIRED');
   const rpc=client.broker.bind(client),sendOnce=client.sendOnce.bind(client),
-    recoverPreCall=client.recoverPreCall.bind(client),copy=x=>JSON.parse(JSON.stringify(x));
+    recoverPreCall=client.recoverPreCall.bind(client),consumeSourceExpiry=client.consumeSourceExpiry.bind(client),
+    close=client.close.bind(client),copy=x=>JSON.parse(JSON.stringify(x));
   const text=r=>(r?.content??[]).filter(v=>v.type==='text').map(v=>v.text).join('\n');
   function unwrap(r){for(let i=0;i<10;i++){
     if(r?.isError||r?.error)throw Error('NORMAL_NATIVE_ERROR');
@@ -35,7 +36,7 @@
       // obtain a new stage and fresh reads. Transport uncertainty never retries.
       try{return await rpc({action:'case_consume_live',batchId:operation.batchId,...stage,
         liveSource:await freshWitness(operation.batchId)});}
-      catch(error){if(attempt>=2||!config.client.consumeSourceExpiry?.(error))throw error;}
+      catch(error){if(attempt>=2||!consumeSourceExpiry(error))throw error;}
     }
   }
   async function freshWitness(batchId){
@@ -45,7 +46,7 @@
   async function confirm(live){
     for(let attempt=0;;attempt++)try{return await rpc({action:'case_live_send',batchId:live.batchId,
       operation:{...live,action:'fence_confirm_send'},liveSource:await freshWitness(live.batchId)});}
-    catch(error){if(attempt>=2||!config.client.consumeSourceExpiry?.(error))throw error;}
+    catch(error){if(attempt>=2||!consumeSourceExpiry(error))throw error;}
   }
   async function send(request,permit,live){
     // Only the captured reviewed client's synchronous send boundary may invoke
@@ -130,7 +131,7 @@
       failure=error;
       if(live)try{error.recovery=await rpc({...live,action:'fence_halt',reason:error.message});}catch{}
       throw error;
-    }finally{try{await config.client.close();}catch(error){
+    }finally{try{await close();}catch(error){
       if(!failure)throw error;failure.closeError={message:error.message,code:error.code??null};
     }}
   }};
