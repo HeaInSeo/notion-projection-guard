@@ -205,7 +205,8 @@ test('ordinary RPC awaits an asynchronous bridge result before serialization',t=
 });
 test('ordinary bootstrap separately pins the exact Sori48 phase-provider source set',t=>{
  const f=liveBootstrapFixture(t),phaseNames=['SORI48_UNKNOWN_CLOSURE_PROPOSAL.json',
-  'sori48_unknown_state.cjs','sori48_unknown_closure.cjs','sori48_unknown_runtime.cjs','sori48_unknown_evidence.cjs'];
+  'sori48_unknown_state.cjs','sori48_unknown_closure.cjs','sori48_unknown_runtime.cjs','sori48_unknown_evidence.cjs',
+  'sori48_unknown_sources.js'];
  f.installation.phaseProviders={};
  for(const n of phaseNames){const bytes=fs.readFileSync(path.join(__dirname,n));
   fs.writeFileSync(path.join(f.dir,n),bytes,{mode:0o600});f.installation.phaseProviders[n]=sha(bytes);}
@@ -240,6 +241,23 @@ for(const fault of ['changed','symlink','writable'])test('ordinary bootstrap rej
  assert.notEqual(r.status,0);assert.equal(r.stdout.includes('"ready":true'),false);assert.equal(fs.existsSync(path.join(f.root,'broker.lock')),false);
 });
 
+test('Sori48 live witness binds one captured fresh collector result',async()=>{
+ const ids=[A,'b'.repeat(32),router,policyId],pageFor=id=>({structuredContent:{id,
+  page_last_edited_at:'2026-10-29T00:00:00Z',text:'<properties>\n{"title":"source"}\n</properties>\n<content>\nsource\n</content>'}});
+ const references=ids.map(pageId=>({pageId,page:pageFor(pageId)})),observation={
+  schema:'SORI48_FRESH_SOURCE_OBSERVATION_V1',batchId:'SORI48-PAIR-ADMIT-20261029',
+  classification:'CLEAR_OBSERVATION_ONLY',freshSourcesComplete:true,applyAuthorized:false,
+  attributableTerminalResult:null,freshSources:{original:{readOk:true}},targets:[]};
+ let collections=0;
+ const tools={mcp__codex_apps__notion_fetch:async({id})=>pageFor(id),
+  mcp__codex_apps__automations_peek:async()=>({structuredContent:{automations:[{id:central,is_enabled:true,
+   run_details:{last_run:{id:run,recorded_status:'in_progress'}}}]}})};
+ const witness=factory('normal_live_owner.js')(tools,{centralTaskId:central,runId:run,referenceToken:'token',
+  batchId:observation.batchId,references,edits:[],nativeExpectations:[],sori48Closure:true,
+  createSori48SourceCollector:()=>({async collect(){collections++;return observation;}})});
+ const result=await witness({batchId:observation.batchId});
+ assert.equal(collections,1);assert.equal(JSON.stringify(result.sori48Observation),JSON.stringify(observation));
+});
 test('Sori48 closure bridge is check-only and binds scheduled owner proof',t=>{
  const root=fs.mkdtempSync(path.join(os.tmpdir(),'normal-sori48-check-')),b=new core.Broker(root,policy);
  t.after(()=>{b.close();fs.rmSync(root,{recursive:true,force:true});});
@@ -255,8 +273,13 @@ test('Sori48 closure bridge is check-only and binds scheduled owner proof',t=>{
   nativeChecks:referenceIds.map(pageId=>({pageId,observedAt,matched:true,revision:'2026-10-29T00:00:00Z'})),
   central:{id:central,is_enabled:true,schedulerEvidenceSha256:'d'.repeat(64),
     run:{id:run,recorded_status:'in_progress'}}};
+ liveSource.sori48Observation={schema:'SORI48_FRESH_SOURCE_OBSERVATION_V1',batchId:operation.batchId,
+  ticket:'ticket',dispatchId:'dispatch',classification:'CLEAR_OBSERVATION_ONLY',freshSourcesComplete:true,
+  attributableTerminalResult:null,applyAuthorized:false,targets:[],freshSources:{original:{readOk:true}}};
  const result=bridge.handle({action:'case_consume_live',batchId:operation.batchId,...stage,liveSource});
  assert.deepEqual(result,{eligible:true,applied:false});assert.equal(received.apply,false);
+ assert.deepEqual(received.freshSources,{original:{readOk:true}});
+ assert.deepEqual(received.lateObservation,liveSource.sori48Observation);
  assert.deepEqual(received.owner,{actor:'automation:'+central,runId:run,scheduledProofSha256:'d'.repeat(64)});
  assert.equal(fs.existsSync(b.file),false);
 });
@@ -279,6 +302,9 @@ test('Sori48 closure bridge rejects apply and missing scheduled proof before pro
  const observedAt=new Date().toISOString(),liveSource={observedAt,referenceToken:init.referenceToken,
   nativeChecks:referenceIds.map(pageId=>({pageId,observedAt,matched:true,revision:'2026-10-29T00:00:00Z'})),
   central:{id:central,is_enabled:true,run:{id:run,recorded_status:'in_progress'}}};
+ liveSource.sori48Observation={schema:'SORI48_FRESH_SOURCE_OBSERVATION_V1',batchId:operation.batchId,
+  classification:'CLEAR_OBSERVATION_ONLY',freshSourcesComplete:true,attributableTerminalResult:null,
+  applyAuthorized:false,targets:[],freshSources:{}};
  assert.throws(()=>bridge.handle({action:'case_consume_live',batchId:operation.batchId,...stage,liveSource}),
   /NORMAL_SORI48_SCHEDULED_PROOF/);assert.equal(calls,0);assert.equal(fs.existsSync(b.file),false);
 });

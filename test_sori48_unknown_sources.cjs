@@ -31,7 +31,7 @@ test('collector reads exact4-source/5-target scope and grants no apply or no-sen
   assert.equal(r.targets.length,5);assert.equal(r.freshSources.original.event.version,93);
   assert.equal(f.calls.length,8);assert.equal(new Set(f.calls).size,8);
   assert.equal(r.applyAuthorized,false);assert.equal(r.originalOutcome,'UNKNOWN');
-  assert.equal(r.attributableTerminalResult,'NOT_ASSESSED');
+  assert.equal(r.attributableTerminalResult,null);
 });
 for(const [name,change] of [
   ['missing target',f=>f.pages.delete(proposal.observedUnwrittenTargets.targets[0].pageId)],

@@ -86,7 +86,7 @@
       elapsedMs:elapsed,batchId:facts.batchId,ticket:facts.ticket,dispatchId:facts.dispatchId,
       classification:drift?'DRIFT':complete?'CLEAR_OBSERVATION_ONLY':'UNKNOWN',
       stopAffectedActions:drift||!complete,freshSourcesComplete:complete,freshSources,targets,errors,
-      originalOutcome:'UNKNOWN',attributableTerminalResult:'NOT_ASSESSED',applyAuthorized:false,
+      originalOutcome:'UNKNOWN',attributableTerminalResult:null,applyAuthorized:false,
       readMeaning:'Complete returned page envelopes; native block identity and absence of an original provider call are not established.'};
   }});
 })

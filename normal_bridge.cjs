@@ -100,7 +100,13 @@ function createBridge({broker,probe,installation,reconcileUnpermitted,reconcileP
         need(init.closure&&typeof sori48ClosureCheck==='function','NORMAL_SORI48_CLOSURE_UNAVAILABLE');
         need(/^[a-f0-9]{64}$/.test(input.liveSource?.central?.schedulerEvidenceSha256??''),
           'NORMAL_SORI48_SCHEDULED_PROOF');
-        return sori48ClosureCheck({...op,apply:false,owner:{actor:ownerProof.ownerId,
+        const observation=input.liveSource?.sori48Observation;
+        need(observation?.schema==='SORI48_FRESH_SOURCE_OBSERVATION_V1'&&
+          observation.batchId===init.batchId&&observation.classification==='CLEAR_OBSERVATION_ONLY'&&
+          observation.freshSourcesComplete===true&&observation.applyAuthorized===false&&
+          observation.attributableTerminalResult===null,'NORMAL_SORI48_SOURCE_OBSERVATION');
+        return sori48ClosureCheck({...op,apply:false,freshSources:copy(observation.freshSources),
+          lateObservation:copy(observation),owner:{actor:ownerProof.ownerId,
           runId:ownerProof.generation,scheduledProofSha256:input.liveSource.central.schedulerEvidenceSha256}});
       }
       if(op.action==='normal_reconcile_unpermitted'){
