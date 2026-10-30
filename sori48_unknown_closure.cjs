@@ -71,11 +71,15 @@ function createProvider(deps){
       const audit={schema:'SORI48_SUPERSEDED_UNKNOWN_PRIVATE_AUDIT_V1',
         batchId:proposal.batchId,proposalSha256:state.PROPOSAL_SHA256,
         approvalSha256:APPROVAL_SHA256,journalBeforeSha256:proposal.journalSha256,
+        // Preserve exact bytes before any canonical write. A summary/hash alone
+        // cannot reconstruct the approved incident and its full captured input.
+        journalBeforeBytes:input.beforeBytes,approvalBytes:input.approvalBytes,
+        inputBytes:JSON.stringify(input),
         owner:input.owner,freshSources:checked.sources,lateObservation:checked.late,
         preserves:{next:proposal.before.next,originalOutcome:'UNKNOWN',receiptCount:3,
           exportedPayloadCancelled:false,lateObservationRequired:true}};
       const auditReceipt=await deps.persistAudit(audit);
-      need(/^[a-f0-9]{64}$/.test(auditReceipt?.sha256??''),'AUDIT_PERSIST');
+      need(auditReceipt?.sha256===sha(JSON.stringify(audit)),'AUDIT_PERSIST');
       const afterBytes=candidate(input.beforeBytes,auditReceipt.sha256);
       const readback=await deps.atomicWrite(proposal.journalSha256,afterBytes);
       need(typeof readback==='string'&&readback===afterBytes,'ATOMIC_READBACK');

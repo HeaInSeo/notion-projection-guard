@@ -52,7 +52,7 @@ function fixture(){
 }
 function deps(proposal){
   const calls={audit:0,write:0};
-  return {calls,withLock:fn=>fn(),persistAudit:async()=>{calls.audit++;return {sha256:'b'.repeat(64)};},
+  return {calls,withLock:fn=>fn(),persistAudit:async audit=>{calls.audit++;return {sha256:sha(JSON.stringify(audit))};},
     atomicWrite:async(expected,bytes)=>{calls.write++;assert.equal(expected,proposal.journalSha256);return bytes;}};
 }
 test('check-only authenticates exact scope and performs no audit or write',async()=>{
@@ -79,6 +79,19 @@ for(const [name,mutate] of [
 });
 test('audit failure prevents journal write',async()=>{
   const f=fixture(),d=deps(f.proposal);d.persistAudit=async()=>({sha256:'bad'});f.input.apply=true;
+  await assert.rejects(()=>f.closure.createProvider(d)(f.input),/AUDIT_PERSIST/);assert.equal(d.calls.write,0);
+});
+test('the private audit retains exact original journal, approval and complete captured input',async()=>{
+  const f=fixture(),d=deps(f.proposal);f.input.apply=true;f.input.retainedExtra={raw:'full native input'};
+  const expected=JSON.stringify(f.input);let audit;
+  d.persistAudit=async value=>{audit=value;return {sha256:sha(JSON.stringify(value))};};
+  await f.closure.createProvider(d)(f.input);
+  assert.equal(audit.journalBeforeBytes,f.input.beforeBytes);assert.equal(audit.approvalBytes,f.input.approvalBytes);
+  assert.equal(audit.inputBytes,expected);assert.equal(JSON.parse(audit.inputBytes).retainedExtra.raw,'full native input');
+});
+test('a durable audit hash for different contents refuses canonical mutation',async()=>{
+  const f=fixture(),d=deps(f.proposal);f.input.apply=true;
+  d.persistAudit=async()=>({sha256:'b'.repeat(64)});
   await assert.rejects(()=>f.closure.createProvider(d)(f.input),/AUDIT_PERSIST/);assert.equal(d.calls.write,0);
 });
 test('readback mismatch fails closed after one attempted atomic write',async()=>{
