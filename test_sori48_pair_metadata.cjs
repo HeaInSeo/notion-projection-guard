@@ -332,3 +332,27 @@ for(const loseNativeResult of [false,true])test('real body to native pipeline '+
  }
  assert.deepEqual(f.b.state.keepOriginalUnknown,{next:3,receipts:[1,2,3],outcome:'UNKNOWN'});
 });
+
+
+for(const lose of [false,true])test('generated installed command restarts across pair phases and '+
+ (lose?'preserves an uncertain native result without replay':'completes the exact body and native chain'),async t=>{
+ const helper=require('./test-fixtures/sori48_installed_chain.cjs'),f=await helper.createFixture(t,lose);
+ if(lose){
+  await assert.rejects(()=>f.entry.runSori48PairReconciliation(f.admission,f.refs),/LOST_INSTALLED_NATIVE_REPLY/);
+  let state=JSON.parse(fs.readFileSync(path.join(f.root,'journal.json')));
+  assert.equal(state.batches[helper.BATCH].status,'WRITE_PENDING');
+  assert.equal(state.batches[helper.BATCH].next,0);
+  await assert.rejects(()=>f.entry.runSori48PairReconciliation(f.admission,f.refs),/NORMAL_CANONICAL_BARRIER/);
+  assert.equal(f.writes,9);
+  state=JSON.parse(fs.readFileSync(path.join(f.root,'journal.json')));
+  assert.equal(state.batches[helper.BATCH].status,'WRITE_PENDING');
+ }else{
+  const result=await f.entry.runSori48PairReconciliation(f.admission,f.refs);
+  assert.equal(result.status,'PAIR_RECONCILED');
+  assert.equal(result.native.receipt.next,3);
+  assert.equal(f.writes,11);
+ }
+ assert.ok(new Set(f.starts).size>=2);
+ const state=JSON.parse(fs.readFileSync(path.join(f.root,'journal.json')));
+ assert.deepEqual(state.keepOriginalUnknown,{next:3,receipts:[1,2,3],outcome:'UNKNOWN'});
+});
