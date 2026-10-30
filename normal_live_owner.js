@@ -23,7 +23,8 @@
   need(/^[a-f0-9]{32}$/.test(c.centralTaskId??'')&&typeof c.runId==='string'&&
     typeof c.referenceToken==='string'&&Array.isArray(refs)&&refs.length>=4&&
     new Set(refs.map(r=>r.pageId)).size===refs.length&&
-    (c.sori48Closure!==true||typeof createSori48SourceCollector==='function'),'NORMAL_LIVE_CONFIG');
+    (c.sori48Closure!==true||(typeof createSori48SourceCollector==='function'&&
+      /^[a-f0-9]{64}$/.test(c.schedulerEvidenceSha256??''))),'NORMAL_LIVE_CONFIG');
   const frozen=refs.map(r=>({pageId:r.pageId,...page(r.page,r.pageId)}));
   const sori48Collector=c.sori48Closure===true?createSori48SourceCollector(tools):null;
   if(sori48Collector)need(typeof sori48Collector.collect==='function','NORMAL_SORI48_SOURCE_COLLECTOR');
@@ -52,7 +53,8 @@
       sori48Observation.attributableTerminalResult===null,'NORMAL_SORI48_SOURCE_OBSERVATION');
     need(Date.now()-Date.parse(observedAt)<30000,'NORMAL_LIVE_EXPIRED');
     return {observedAt,referenceToken:c.referenceToken,nativeChecks:checks,
-      central:{id:task.id,is_enabled:task.is_enabled,run:copy(run)},
+      central:{id:task.id,is_enabled:task.is_enabled,run:copy(run),
+        ...(c.sori48Closure===true?{schedulerEvidenceSha256:c.schedulerEvidenceSha256}:{})},
       ...(sori48Observation?{sori48Observation:copy(sori48Observation)}:{})};
   };
 })

@@ -254,9 +254,46 @@ test('Sori48 live witness binds one captured fresh collector result',async()=>{
    run_details:{last_run:{id:run,recorded_status:'in_progress'}}}]}})};
  const witness=factory('normal_live_owner.js')(tools,{centralTaskId:central,runId:run,referenceToken:'token',
   batchId:observation.batchId,references,edits:[],nativeExpectations:[],sori48Closure:true,
+  schedulerEvidenceSha256:'d'.repeat(64),
   createSori48SourceCollector:()=>({async collect(){collections++;return observation;}})});
  const result=await witness({batchId:observation.batchId});
  assert.equal(collections,1);assert.equal(JSON.stringify(result.sori48Observation),JSON.stringify(observation));
+ assert.equal(result.central.schedulerEvidenceSha256,'d'.repeat(64));
+});
+test('normal followthrough binds scheduler evidence into the closure runner',async()=>{
+ let seen,closed=0;
+ const client={sendOnce(){},recoverPreCall(){},async close(){closed++;}};
+ const ordinary=factory('normal_followthrough_v2.js')({},{
+   createTransport:()=>({}),createClient:()=>client,
+   createLiveRunner:(_,config)=>{seen=config;return {async checkSori48Closure(id){
+     return {id,checked:true};}};},createWitness(){},createLandedProjection(){},createCommand:()=> 'command',
+   centralTaskId:central,runId:run,installation:{},sori48Closure:true,
+   batchId:'SORI48-PAIR-ADMIT-20261029',schedulerEvidenceSha256:'d'.repeat(64),
+   createSori48SourceCollector:()=>({collect(){}})});
+ const references=[A,'b'.repeat(32),router,policyId].map(pageId=>({pageId}));
+ const result=await ordinary.checkSori48Closure(references);
+ assert.deepEqual(result,{id:'SORI48-PAIR-ADMIT-20261029',checked:true});assert.equal(closed,1);
+ assert.equal(seen.sori48Closure,true);assert.equal(seen.runId,run);
+ assert.equal(seen.witnessConfig.schedulerEvidenceSha256,'d'.repeat(64));
+ assert.equal(typeof seen.witnessConfig.createSori48SourceCollector,'function');
+});
+test('Sori48 live runner executes one check-only staged operation',async()=>{
+ const calls=[];let closed=0,witnessConfig;
+ const client={broker:async q=>{calls.push(q);
+   if(q.action==='normal_sori48_closure_init')return {referenceToken:'bound-token'};
+   if(q.action==='case_stage_input')return {stageId:'one-stage',inputHash:'bound-hash'};
+   if(q.action==='case_consume_live')return {eligible:true,applied:false};
+   throw Error('unexpected '+q.action);},sendOnce(){},recoverPreCall(){},consumeSourceExpiry(){return false;},
+   async close(){closed++;}};
+ const runner=factory('normal_live_runner.js')({}, {client,centralTaskId:central,runId:run,
+   references:[{pageId:A},{pageId:'b'.repeat(32)},{pageId:router},{pageId:policyId}],nativeExpectations:[],
+   sori48Closure:true,createWitness:(_,c)=>{witnessConfig=c;return async()=>({observed:true});}});
+ const result=await runner.checkSori48Closure('SORI48-PAIR-ADMIT-20261029');
+ assert.deepEqual(result,{eligible:true,applied:false});assert.equal(closed,1);
+ assert.equal(calls[0].action,'normal_sori48_closure_init');assert.equal(JSON.stringify(calls[0].edits),'[]');
+ assert.equal(JSON.stringify(calls[1].operation),JSON.stringify({action:'normal_sori48_unknown_check',
+   batchId:'SORI48-PAIR-ADMIT-20261029',apply:false}));
+ assert.equal(calls[2].liveSource.observed,true);assert.equal(witnessConfig.batchId,'SORI48-PAIR-ADMIT-20261029');
 });
 test('Sori48 closure bridge is check-only and binds scheduled owner proof',t=>{
  const root=fs.mkdtempSync(path.join(os.tmpdir(),'normal-sori48-check-')),b=new core.Broker(root,policy);

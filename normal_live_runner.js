@@ -20,10 +20,11 @@
   let witness,initialized=false;
   async function init(batchId,edits){
     if(initialized)throw Error('NORMAL_RUNNER_SINGLE_USE');initialized=true;
-    const control=config.controlAdmissionId!==undefined;
-    const r=await rpc({action:control?'normal_control_init':'normal_init',batchId,edits,centralTaskId:config.centralTaskId,
-      runId:config.runId,referenceIds:config.references.map(r=>r.pageId),
-      ...(control?{controlAdmissionId:config.controlAdmissionId}:
+    const control=config.controlAdmissionId!==undefined,closure=config.sori48Closure===true;
+    const r=await rpc({action:control?'normal_control_init':closure?'normal_sori48_closure_init':'normal_init',
+      batchId,edits,centralTaskId:config.centralTaskId,runId:config.runId,
+      referenceIds:config.references.map(r=>r.pageId),
+      ...(control?{controlAdmissionId:config.controlAdmissionId}:closure?{}:
         {repository:config.binding.repository,pr:config.binding.source.pr})});
     witness=config.createWitness(tools,{...config.witnessConfig,batchId,centralTaskId:config.centralTaskId,
       runId:config.runId,referenceToken:r.referenceToken,references:config.references,edits,
@@ -69,7 +70,18 @@
       throw Error('NOTION_RESULT_UNKNOWN');
     return {status:'SUCCEEDED',pageId:request.page_id,taskId:task?.task_id??null};
   }
-  return {async run(batchId,edits){
+  return {async checkSori48Closure(batchId){
+    let failure=null;
+    try{
+      await init(batchId,[]);
+      const operation={action:'normal_sori48_unknown_check',batchId,apply:false};
+      const stage=await rpc({action:'case_stage_input',batchId,operation});
+      return await rpc({action:'case_consume_live',batchId,...stage,liveSource:await freshWitness(batchId)});
+    }catch(error){failure=error;throw error;}
+    finally{try{await close();}catch(error){
+      if(!failure)throw error;failure.closeError={message:error.message,code:error.code??null};
+    }}
+  },async run(batchId,edits){
     edits=copy(edits);let live=null,failure=null;const receipts=[];
     try{
       const initial=await init(batchId,edits);
