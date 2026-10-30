@@ -169,4 +169,23 @@ function createExecutor({broker,inspectClosedUnknown,inspectBodyProjection}){
     }
   });
 }
-module.exports={createExecutor,BATCH,BODY_BATCH,HEAD,OLD_HEAD,ROWS,patches};
+function inspectBodyProjection(broker,validatePlan){
+  broker.assertLock();
+  const r=broker.state.batches[BODY_BATCH];
+  if(!r)return null;
+  need(typeof validatePlan==='function'&&validatePlan(r.edits)===true&&
+    r.status==='COMPLETED'&&r.next===8&&r.receipt===null&&
+    r.planHash===crypto.createHash('sha256').update(JSON.stringify(r.edits)).digest('hex')&&
+    Array.isArray(r.verifications)&&r.verifications.length===8,'BODY_RECEIPTS');
+  for(let i=0;i<8;i++){
+    const file=broker.snapshot(BODY_BATCH,i);
+    const read=name=>{
+      const stat=fs.lstatSync(name);
+      need(stat.isFile()&&!stat.isSymbolicLink()&&stat.uid===process.geteuid()&&!(stat.mode&0o022),'BODY_FILE');
+      return JSON.parse(fs.readFileSync(name,'utf8'));
+    };
+    broker.verifiedFingerprint(read(file),read(file+'.verified.json'),r,i);
+  }
+  return {valid:true,batchId:BODY_BATCH,status:'COMPLETED',verifiedTargets:8};
+}
+module.exports={createExecutor,inspectBodyProjection,BATCH,BODY_BATCH,HEAD,OLD_HEAD,ROWS,patches};

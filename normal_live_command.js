@@ -5,7 +5,7 @@
     'normal_live_runner.js','normal_followthrough_v2.js','normal_live_command.js','reconcile_unpermitted_dispatch.cjs',
     'normal_rpc_client.js','normal_unsent.cjs','reconcile_permit_expiry.cjs','sori_startup_control.cjs'];
   const phaseNames=['SORI48_UNKNOWN_CLOSURE_PROPOSAL.json','sori48_unknown_state.cjs','sori48_unknown_closure.cjs',
-    'sori48_unknown_runtime.cjs','sori48_unknown_evidence.cjs','sori48_unknown_sources.js','sori48_pair_provider.cjs'];
+    'sori48_unknown_runtime.cjs','sori48_unknown_evidence.cjs','sori48_unknown_sources.js','sori48_pair_provider.cjs','sori48_pair_metadata.cjs'];
   const c=JSON.parse(JSON.stringify(installation));
   if(!c||!/^[a-f0-9]{40}$/.test(c.sourceHead??'')||!/^[a-f0-9]{64}$/.test(c.caseModuleHash??'')||
     ![c.root,c.runtime,c.extensionDirectory].every(p=>typeof p==='string'&&p.startsWith('/')&&!p.includes('\0'))||
@@ -24,7 +24,7 @@
       'normal_live_runner.js','normal_followthrough_v2.js','normal_live_command.js','reconcile_unpermitted_dispatch.cjs',
       'normal_rpc_client.js','normal_unsent.cjs','reconcile_permit_expiry.cjs','sori_startup_control.cjs'];
     const phaseNames=['SORI48_UNKNOWN_CLOSURE_PROPOSAL.json','sori48_unknown_state.cjs','sori48_unknown_closure.cjs',
-    'sori48_unknown_runtime.cjs','sori48_unknown_evidence.cjs','sori48_unknown_sources.js','sori48_pair_provider.cjs'];
+    'sori48_unknown_runtime.cjs','sori48_unknown_evidence.cjs','sori48_unknown_sources.js','sori48_pair_provider.cjs','sori48_pair_metadata.cjs'];
     const data={};
     const trusted=file=>{const s=fs.lstatSync(file);need(s.isFile()&&!s.isSymbolicLink()&&
       s.uid===process.geteuid()&&!(s.mode&0o022),'NORMAL_RUNTIME_FILE');return fs.readFileSync(file);};
@@ -50,8 +50,9 @@
       const m={exports:{}},localRequire=id=>id.startsWith('./')?loadPhase(path.basename(id)):require(id);
       new Function('require','module','exports','__dirname',data[n])(localRequire,m,m.exports,c.extensionDirectory);return phaseCache[n]=m.exports;};
     const baseProbe=load('normal_projection_probe.cjs').probe;
-    let closureRuntime;
-    const probe=args=>baseProbe({...args,inspectClosedUnknown:()=>closureRuntime?.inspectCommitted()});
+    let closureRuntime,sori48Metadata;
+    const probe=args=>baseProbe({...args,inspectClosedUnknown:()=>closureRuntime?.inspectCommitted(),
+      inspectNativeMetadata:()=>sori48Metadata?.status()});
     const reconcile=load('reconcile_unpermitted_dispatch.cjs').createReconciler({...core,runtime:c.runtime});
     const unsent=load('normal_unsent.cjs'),restoreUnsent=unsent.createUnsent(core),resumePrepared=unsent.createPreparedResumer(core),
       resumeUnprepared=unsent.createUnpreparedResumer(core);
@@ -60,12 +61,16 @@
     const validateControlInit=control.createAdmission({runtime:c.runtime});
     const assessControlPermit=control.createAssessor({...core,runtime:c.runtime});
     const continueApprovedControl=control.createUserCase({...core,runtime:c.runtime});
-    let sori48ClosureCheck;
+    let sori48ClosureCheck,createSori48Metadata;
     if(c.phaseProviders){
       const runtime=loadPhase('sori48_unknown_runtime.cjs').createRuntime({root:c.root,getBroker:()=>b});
       closureRuntime=runtime;
       const provider=loadPhase('sori48_unknown_closure.cjs').createProvider(runtime);
       const pairProvider=loadPhase('sori48_pair_provider.cjs').createProvider();
+      const nativeModule=loadPhase('sori48_pair_metadata.cjs');
+      createSori48Metadata=broker=>nativeModule.createExecutor({broker,
+        inspectClosedUnknown:()=>runtime.inspectCommitted(),
+        inspectBodyProjection:()=>nativeModule.inspectBodyProjection(broker,pairProvider.validatePlan)});
       const collectRetention=loadPhase('sori48_unknown_evidence.cjs').createCollector({
         root:c.root,runtime:c.runtime,caseModuleHash:c.caseModuleHash});
       const approvalPath=path.join(c.root,'manual-audits','sori48-closure-20261029','USER_APPROVAL.json');
@@ -78,9 +83,10 @@
       };
     }
     const b=new core.Broker(c.root,JSON.parse(trusted(path.join(c.runtime,'policy.json'))));
+    if(createSori48Metadata)sori48Metadata=createSori48Metadata(b);
     const bridge=load('normal_bridge.cjs').createBridge({broker:b,probe,installation:c,
       reconcileUnpermitted:reconcile,reconcilePermitExpiry,restoreUnsent,resumePrepared,resumeUnprepared,verifyExtensions,
-      validateControlInit,assessControlPermit,continueApprovedControl,sori48ClosureCheck});
+      validateControlInit,assessControlPermit,continueApprovedControl,sori48ClosureCheck,sori48Metadata});
     process.stdout.write('NPG/2 {"ready":true}\n');
     const rl=readline.createInterface({input:process.stdin,crlfDelay:Infinity});
     rl.on('line',async line=>{let q;try{q=JSON.parse(line);const result=await bridge.handle(q);

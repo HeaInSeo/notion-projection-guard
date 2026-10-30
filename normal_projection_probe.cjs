@@ -4,7 +4,7 @@
 const fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto');
 const digest=x=>crypto.createHash('sha256').update(x).digest('hex');
 const need=(ok,code)=>{if(!ok)throw Error(code);};
-function probe({root,runtime,caseModuleHash,brokerPid,batchId,inspectClosedUnknown},clock=Date.now) {
+function probe({root,runtime,caseModuleHash,brokerPid,batchId,inspectClosedUnknown,inspectNativeMetadata},clock=Date.now) {
   const started=clock();
   need(path.isAbsolute(root??'')&&path.isAbsolute(runtime??'')&&root!==runtime,'NORMAL_PATH');
   need(Number.isSafeInteger(brokerPid)&&brokerPid>0&&/^[A-Za-z0-9-]{1,100}$/.test(batchId??''),'NORMAL_SCOPE');
@@ -23,7 +23,16 @@ function probe({root,runtime,caseModuleHash,brokerPid,batchId,inspectClosedUnkno
     'CLOSED_EXCEPTION_UNCONFIRMED']);
   const retainedUnknowns=[];
   for(const [id,b] of Object.entries(state.batches??{})){
-    if(b.status==='CLOSED_SUPERSEDED_UNKNOWN'){
+    if(b.kind==='SORI48_PAIR_NATIVE_METADATA_V1'){
+      need(id==='SORI48-PAIR-METADATA-CORRECTED-20261030'&&typeof inspectNativeMetadata==='function',
+        'NORMAL_NATIVE_METADATA_VALIDATOR');
+      const native=inspectNativeMetadata();
+      need(native?.batchId===id&&native.status===b.status&&native.next===b.next&&
+        native.planHash===b.planHash&&native.replayAllowed===false&&native.originalOutcome==='UNKNOWN'&&
+        native.lateObservationRequired===true&&native.productAccepted===false&&native.capacityReleased===false&&
+        (id===batchId||native.status==='COMPLETED'&&native.next===3&&native.receipts?.length===3),
+        'NORMAL_NATIVE_METADATA_INVALID');
+    }else if(b.status==='CLOSED_SUPERSEDED_UNKNOWN'){
       need(id==='SORI48-PAIR-ADMIT-20261029'&&typeof inspectClosedUnknown==='function',
         'NORMAL_CLOSED_UNKNOWN_VALIDATOR');
       const evidence=inspectClosedUnknown();

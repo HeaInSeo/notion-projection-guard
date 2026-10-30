@@ -155,3 +155,97 @@ for(const change of [
   assert.throws(()=>f.executor().begin({ownerProof:f.proof(),pages:f.pages}));
   assert.equal(fs.readFileSync(f.b.file,'utf8'),before);
 });
+
+function nativeBridgeFixture(t){
+ const f=fixture(t),e=f.executor(),{createBridge}=require('./normal_bridge.cjs');
+ const refs=['3f586e6dd1d181ebb43dd7de62aa2ca4','3f586e6dd1d181cd9f5bdcdab6290de7',
+  '3f586e6dd1d181ddb9f3e7217f64bfcd','3b286e6dd1d1817aa093fca807659f07',
+  '3b286e6dd1d181f2a75cfbd3885071c4','3bf86e6dd1d18110938bc358e17c779e',
+  '3ed86e6dd1d18118b0b8d98bb91892fb','3b286e6dd1d1811d9308d9a2b56c9de4',
+  '40786e6dd1d181ec8addcd1269f9b0bb','3b286e6dd1d18194866dd8d7a28c7ab4'];
+ const central='a'.repeat(32),run='actual-test-run';
+ const bridge=createBridge({broker:f.b,sori48Metadata:e,installation:{root:f.b.root},verifyExtensions(){},
+  probe(){return {canonical:{exclusive:false,manifestHash:'e'.repeat(64)},brokerExecutor:f.b.executor,journalHash:'f'.repeat(64)};}});
+ const init=bridge.handle({action:'normal_sori48_metadata_init',batchId:BATCH,edits:[],referenceIds:refs,
+  centralTaskId:central,runId:run});
+ const witness=()=>{const observedAt=new Date().toISOString();return {observedAt,referenceToken:init.referenceToken,
+  nativeChecks:refs.map(pageId=>({pageId,observedAt,matched:true,revision:'2026-10-30T00:00:00Z'})),
+  central:{id:central,is_enabled:true,run:{id:run,recorded_status:'in_progress'}}};};
+ const owned=operation=>{const stage=bridge.handle({action:'case_stage_input',batchId:BATCH,operation});
+  return bridge.handle({action:'case_consume_live',batchId:BATCH,...stage,liveSource:witness()});};
+ return {f,e,bridge,witness,owned};
+}
+test('supported native bridge drives the real Broker through all three rows',t=>{
+ const {f,e,bridge,witness,owned}=nativeBridgeFixture(t);
+ owned({action:'normal_sori48_metadata_begin',batchId:BATCH,pages:f.pages});
+ for(let i=0;i<3;i++){
+  const d=owned({action:'normal_sori48_metadata_dispatch',batchId:BATCH,pages:f.pages});
+  const live={batchId:BATCH,executor:d.executor,planHash:d.planHash,ticket:d.ticket,dispatchId:d.dispatchId};
+  const c=bridge.handle({action:'case_live_send',batchId:BATCH,
+   operation:{...live,action:'normal_sori48_metadata_confirm',pages:f.pages},liveSource:witness()});
+  assert.equal(c.permit.pageId,ROWS[i][0]);
+  f.apply(d.request);
+  owned({...live,action:'normal_sori48_metadata_ack',provider:{status:'SUCCEEDED',pageId:d.request.page_id}});
+  owned({batchId:BATCH,action:'normal_sori48_metadata_verify',pages:f.pages});
+ }
+ assert.equal(e.status().next,3);assert.equal(e.status().status,'COMPLETED');
+ assert.deepEqual(f.b.state.keepOriginalUnknown,{next:3,receipts:[1,2,3],outcome:'UNKNOWN'});
+});
+test('native RPC does not permit a direct ACK or ordinary mutation',t=>{
+ const {f,bridge,owned}=nativeBridgeFixture(t),before=fs.readFileSync(f.b.file,'utf8');
+ assert.throws(()=>bridge.handle({action:'normal_sori48_metadata_ack',batchId:BATCH}));
+ assert.throws(()=>owned({action:'fence_begin',batchId:BATCH,edits:[]}));
+ assert.equal(fs.readFileSync(f.b.file,'utf8'),before);
+});
+test('native bridge cannot replay an uncertain persisted permit',t=>{
+ const {f,e,bridge,witness,owned}=nativeBridgeFixture(t);
+ owned({action:'normal_sori48_metadata_begin',batchId:BATCH,pages:f.pages});
+ const d=owned({action:'normal_sori48_metadata_dispatch',batchId:BATCH,pages:f.pages});
+ bridge.handle({action:'case_live_send',batchId:BATCH,
+  operation:{...d,action:'normal_sori48_metadata_confirm',pages:f.pages},liveSource:witness()});
+ f.apply(d.request);
+ assert.throws(()=>owned({action:'normal_sori48_metadata_resume',batchId:BATCH,pages:f.pages}),/NO_PERMIT_REQUIRED/);
+ assert.equal(e.status().status,'WRITE_PENDING');assert.equal(e.status().next,0);
+});
+test('body gate rejects a completed label without all durable exact-plan receipts',t=>{
+ const f=fixture(t),{inspectBodyProjection}=require('./sori48_pair_metadata.cjs');
+ assert.equal(inspectBodyProjection(f.b,()=>true),null);
+ f.b.state.batches[BODY_BATCH]={status:'COMPLETED',next:8,receipt:null,edits:[],verifications:[]};
+ assert.throws(()=>inspectBodyProjection(f.b,()=>true),/BODY_RECEIPTS/);
+});
+
+test('native body prerequisite consumes eight real protected-content receipts and rejects tampering',t=>{
+ const f=fixture(t),provider=require('./sori48_pair_provider.cjs'),
+  {inspectBodyProjection}=require('./sori48_pair_metadata.cjs');
+ const prior=require('./SORI48_UNKNOWN_CLOSURE_PROPOSAL.json').observedUnwrittenTargets.targets[0].plannedLiteral;
+ const ids=['3f586e6dd1d181ebb43dd7de62aa2ca4','3f586e6dd1d181cd9f5bdcdab6290de7',
+  '3f586e6dd1d181ddb9f3e7217f64bfcd',...provider.TARGETS];
+ const headings=['## CURRENT · 마지막 중앙 관측 · QSYNC-20261010T145034Z-v6 · W02.A KEEP_GATED ON W01.3',
+  '## CURRENT · 마지막 중앙 관측 · QSYNC-20261010T145034Z-v6 · W02.A REVIEW KEEP_GATED',
+  '## CURRENT CENTRAL OBSERVATION · NPR-20261012 · sori_index',
+  '## CURRENT CENTRAL OBSERVATION · NPR-20261012 · operator_queue',
+  '## CURRENT CENTRAL OBSERVATION · NPR-20261012 · guardrail_queue',
+  '## CURRENT INCIDENT MAINTENANCE · BODY_RANGE_OVERWRITE-20261011T2334Z · RESTORED_VERIFIED / ADOPTION_PENDING',
+  '## CURRENT CENTRAL OBSERVATION · NPR-20261012 · hub','## CURRENT CENTRAL OBSERVATION · NPR-20261012 · dashboard'];
+ const edits=ids.map((pageId,i)=>({pageId,heading:headings[i],oldStr:i<3?prior:'Sori retains its separate gates.',newStr:provider.CORRECTED_TEXT}));
+ const validator=provider.createProvider().validatePlan;assert.equal(validator(edits),true);
+ const changed=clone(edits);changed[0].newStr='unapproved';assert.throws(()=>validator(changed),/EXACT_PLAN/);
+ f.b.policy.productionPages=ids;f.b.policy.headingPrefixes=['## CURRENT'];
+ f.b.policy.centralSections=ids.slice(0,2).map((pageId,i)=>({pageId,heading:headings[i]}));
+ const proof=()=>({...f.proof(),scope:BODY_BATCH});
+ const begin=f.b.handle({action:'fence_begin',batchId:BODY_BATCH,edits,ownerProof:proof()});
+ const live={batchId:BODY_BATCH,executor:begin.executor,planHash:begin.planHash};
+ for(let i=0;i<8;i++){
+  const e=edits[i],raw={structuredContent:{id:e.pageId,page_last_edited_at:'2026-10-30T00:00:00Z',
+   text:'<properties>\n{"title":"preserve"}\n</properties>\n<content>\n'+e.heading+'\n'+e.oldStr+'\n## HISTORY\nprotected\n</content>'}};
+  const call=(action,extra={})=>f.b.handle({...live,action,ownerProof:proof(),...extra});
+  live.ticket=call('fence_prepare',{page:raw}).ticket;call('fence_authorize',{page:raw});
+  live.dispatchId=call('fence_dispatch',{page:raw}).dispatchId;call('fence_confirm_send');
+  raw.structuredContent.text=raw.structuredContent.text.replace(e.oldStr,e.newStr);
+  call('fence_ack',{provider:{status:'SUCCEEDED',pageId:e.pageId}});call('fence_verify',{page:raw});
+ }
+ assert.equal(inspectBodyProjection(f.b,validator).verifiedTargets,8);
+ const file=f.b.snapshot(BODY_BATCH,7)+'.verified.json';
+ const forged=JSON.parse(fs.readFileSync(file,'utf8'));forged.page.body+='changed';fs.writeFileSync(file,JSON.stringify(forged));
+ assert.throws(()=>inspectBodyProjection(f.b,validator));
+});

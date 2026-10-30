@@ -188,7 +188,7 @@ function liveBootstrapFixture(t){
  fs.writeFileSync(path.join(runtime,'case_exception.cjs'),ce,{mode:0o600});
  // Synthetic core isolates bootstrap verification before ordinary operations;
  // production-core begin/send/verify behavior is exercised in the other tests.
- fs.writeFileSync(path.join(runtime,'broker.cjs'),'module.exports={Broker:class{handle(){return {closed:true};}close(){}}};',{mode:0o600});
+ fs.writeFileSync(path.join(runtime,'broker.cjs'),'module.exports={Broker:class{assertLock(){}ownerProof(){}save(){}handle(){return {closed:true};}close(){}}};',{mode:0o600});
  fs.writeFileSync(path.join(runtime,'policy.json'),'{}',{mode:0o600});
  fs.writeFileSync(path.join(root,'journal.json'),'{"preserved":true}',{mode:0o600});
  t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
@@ -211,13 +211,18 @@ test('ordinary RPC awaits an asynchronous bridge result before serialization',t=
 test('ordinary bootstrap separately pins the exact Sori48 phase-provider source set',t=>{
  const f=liveBootstrapFixture(t),phaseNames=['SORI48_UNKNOWN_CLOSURE_PROPOSAL.json',
   'sori48_unknown_state.cjs','sori48_unknown_closure.cjs','sori48_unknown_runtime.cjs','sori48_unknown_evidence.cjs',
-  'sori48_unknown_sources.js','sori48_pair_provider.cjs'];
+  'sori48_unknown_sources.js','sori48_pair_provider.cjs','sori48_pair_metadata.cjs'];
  f.installation.phaseProviders={};
  for(const n of phaseNames){const bytes=fs.readFileSync(path.join(__dirname,n));
   fs.writeFileSync(path.join(f.dir,n),bytes,{mode:0o600});f.installation.phaseProviders[n]=sha(bytes);}
  let r=require('node:child_process').spawnSync('/bin/sh',['-c',factory('normal_live_command.js')(f.installation)],
   {input:'{"action":"close","requestId":"close-phase"}\n',encoding:'utf8',cwd:os.tmpdir()});
  assert.equal(r.status,0,r.stderr);assert.match(r.stdout,/"ready":true/);
+ const nativePath=path.join(f.dir,'sori48_pair_metadata.cjs');
+ fs.appendFileSync(nativePath,'\nchanged');
+ let bad=require('node:child_process').spawnSync('/bin/sh',['-c',factory('normal_live_command.js')(f.installation)],{encoding:'utf8'});
+ assert.notEqual(bad.status,0);assert.equal(bad.stdout.includes('\"ready\":true'),false);
+ fs.writeFileSync(nativePath,fs.readFileSync(path.join(__dirname,'sori48_pair_metadata.cjs')),{mode:0o600});
  const closurePath=path.join(f.dir,'sori48_unknown_closure.cjs');
  fs.writeFileSync(closurePath,'module.exports={};',{mode:0o600});
  f.installation.phaseProviders['sori48_unknown_closure.cjs']=sha(fs.readFileSync(closurePath));

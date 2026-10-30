@@ -123,5 +123,13 @@ function plan(observation){
     applyAuthorized:false,requiresCanonicalClosure:true,metadataReconciliationRequired:true,
     edits,source:assessment,preservation:assessment.preservation};
 }
-function createProvider(){return Object.freeze({assess,plan});}
+function validatePlan(edits){
+  const expected=[...SOURCE_TARGETS.map(([,pageId,heading])=>({pageId,heading,oldStr:PRIOR_ADMISSION,newStr:CORRECTED_TEXT})),
+    ...TARGETS.map((pageId,i)=>({pageId,heading:SHARED_HEADINGS[i],oldStr:'Sori retains its separate gates.',newStr:CORRECTED_TEXT}))];
+  need(Array.isArray(edits)&&edits.length===expected.length&&edits.every((edit,i)=>
+    Object.keys(edit).sort().join(',')==='heading,newStr,oldStr,pageId'&&
+    Object.entries(expected[i]).every(([key,value])=>edit[key]===value)),'EXACT_PLAN');
+  return true;
+}
+function createProvider(){return Object.freeze({assess,plan,validatePlan});}
 module.exports={createProvider,BATCH,HEAD,OLD_HEAD,BASE,TARGETS,OBSERVATION_ID,CORRECTED_TEXT};
