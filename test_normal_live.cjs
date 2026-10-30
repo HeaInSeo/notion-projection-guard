@@ -265,14 +265,18 @@ test('normal followthrough binds scheduler evidence into the closure runner',asy
  const client={sendOnce(){},recoverPreCall(){},async close(){closed++;}};
  const ordinary=factory('normal_followthrough_v2.js')({},{
    createTransport:()=>({}),createClient:()=>client,
-   createLiveRunner:(_,config)=>{seen=config;return {async checkSori48Closure(id){
-     return {id,checked:true};}};},createWitness(){},createLandedProjection(){},createCommand:()=> 'command',
+   createLiveRunner:(_,config)=>{seen=config;return {
+     async checkSori48Closure(id){return {id,checked:true};},
+     async applySori48Closure(id){return {id,applied:true};}};},
+   createWitness(){},createLandedProjection(){},createCommand:()=> 'command',
    centralTaskId:central,runId:run,installation:{},sori48Closure:true,
    batchId:'SORI48-PAIR-ADMIT-20261029',schedulerEvidenceSha256:'d'.repeat(64),
    createSori48SourceCollector:()=>({collect(){}})});
  const references=[A,'b'.repeat(32),router,policyId].map(pageId=>({pageId}));
  const result=await ordinary.checkSori48Closure(references);
- assert.deepEqual(result,{id:'SORI48-PAIR-ADMIT-20261029',checked:true});assert.equal(closed,1);
+ const applied=await ordinary.applySori48Closure(references);
+ assert.deepEqual(result,{id:'SORI48-PAIR-ADMIT-20261029',checked:true});
+ assert.deepEqual(applied,{id:'SORI48-PAIR-ADMIT-20261029',applied:true});assert.equal(closed,2);
  assert.equal(seen.sori48Closure,true);assert.equal(seen.runId,run);
  assert.equal(seen.witnessConfig.schedulerEvidenceSha256,'d'.repeat(64));
  assert.equal(typeof seen.witnessConfig.createSori48SourceCollector,'function');
@@ -295,13 +299,29 @@ test('Sori48 live runner executes one check-only staged operation',async()=>{
    batchId:'SORI48-PAIR-ADMIT-20261029',apply:false}));
  assert.equal(calls[2].liveSource.observed,true);assert.equal(witnessConfig.batchId,'SORI48-PAIR-ADMIT-20261029');
 });
-test('Sori48 closure bridge is check-only and binds scheduled owner proof',t=>{
+test('Sori48 live runner exposes a distinct apply operation',async()=>{
+ const calls=[];let closed=0;
+ const client={broker:async q=>{calls.push(q);
+   if(q.action==='normal_sori48_closure_init')return {referenceToken:'bound-token'};
+   if(q.action==='case_stage_input')return {stageId:'one-stage',inputHash:'bound-hash'};
+   if(q.action==='case_consume_live')return {eligible:true,applied:true};
+   throw Error('unexpected '+q.action);},sendOnce(){},recoverPreCall(){},consumeSourceExpiry(){return false;},
+   async close(){closed++;}};
+ const runner=factory('normal_live_runner.js')({}, {client,centralTaskId:central,runId:run,
+   references:[{pageId:A},{pageId:'b'.repeat(32)},{pageId:router},{pageId:policyId}],nativeExpectations:[],
+   sori48Closure:true,createWitness:()=>async()=>({observed:true})});
+ const result=await runner.applySori48Closure('SORI48-PAIR-ADMIT-20261029');
+ assert.deepEqual(result,{eligible:true,applied:true});assert.equal(closed,1);
+ assert.equal(JSON.stringify(calls[1].operation),JSON.stringify({action:'normal_sori48_unknown_apply',
+   batchId:'SORI48-PAIR-ADMIT-20261029',apply:true}));
+});
+test('Sori48 closure bridge binds scheduled owner proof for check and apply',t=>{
  const root=fs.mkdtempSync(path.join(os.tmpdir(),'normal-sori48-check-')),b=new core.Broker(root,policy);
  t.after(()=>{b.close();fs.rmSync(root,{recursive:true,force:true});});
- let received;const referenceIds=[A,'b'.repeat(32),router,policyId];
+ const received=[];const referenceIds=[A,'b'.repeat(32),router,policyId];
  const bridge=createBridge({broker:b,installation:{root},verifyExtensions(){},
   probe(){return {canonical:{exclusive:false,manifestHash:'e'.repeat(64)},brokerExecutor:b.executor,journalHash:'f'.repeat(64)};},
-  sori48ClosureCheck(input){received=input;return {eligible:true,applied:false};}});
+  sori48ClosureCheck(input){received.push(input);return {eligible:true,applied:input.apply};}});
  const init=bridge.handle({action:'normal_sori48_closure_init',batchId:'SORI48-PAIR-ADMIT-20261029',
   edits:[],centralTaskId:central,runId:run,referenceIds});
  const operation={action:'normal_sori48_unknown_check',batchId:'SORI48-PAIR-ADMIT-20261029',apply:false};
@@ -314,10 +334,14 @@ test('Sori48 closure bridge is check-only and binds scheduled owner proof',t=>{
   ticket:'ticket',dispatchId:'dispatch',classification:'CLEAR_OBSERVATION_ONLY',freshSourcesComplete:true,
   attributableTerminalResult:null,applyAuthorized:false,targets:[],freshSources:{original:{readOk:true}}};
  const result=bridge.handle({action:'case_consume_live',batchId:operation.batchId,...stage,liveSource});
- assert.deepEqual(result,{eligible:true,applied:false});assert.equal(received.apply,false);
- assert.deepEqual(received.freshSources,{original:{readOk:true}});
- assert.deepEqual(received.lateObservation,liveSource.sori48Observation);
- assert.deepEqual(received.owner,{actor:'automation:'+central,runId:run,scheduledProofSha256:'d'.repeat(64)});
+ assert.deepEqual(result,{eligible:true,applied:false});assert.equal(received[0].apply,false);
+ assert.deepEqual(received[0].freshSources,{original:{readOk:true}});
+ assert.deepEqual(received[0].lateObservation,liveSource.sori48Observation);
+ assert.deepEqual(received[0].owner,{actor:'automation:'+central,runId:run,scheduledProofSha256:'d'.repeat(64)});
+ const apply={action:'normal_sori48_unknown_apply',batchId:operation.batchId,apply:true};
+ const applyStage=bridge.handle({action:'case_stage_input',batchId:apply.batchId,operation:apply});
+ const applied=bridge.handle({action:'case_consume_live',batchId:apply.batchId,...applyStage,liveSource});
+ assert.deepEqual(applied,{eligible:true,applied:true});assert.equal(received[1].apply,true);
  assert.equal(fs.existsSync(b.file),false);
 });
 test('Sori48 closure bridge rejects apply and missing scheduled proof before provider call',t=>{
@@ -333,7 +357,7 @@ test('Sori48 closure bridge rejects apply and missing scheduled proof before pro
   operation:{action:'normal_sori48_unknown_check',batchId:'SORI48-PAIR-ADMIT-20261029',apply:true}}));
  assert.throws(()=>bridge.handle({action:'case_stage_input',batchId:'SORI48-PAIR-ADMIT-20261029',
   operation:{action:'normal_sori48_unknown_check',batchId:'SORI48-PAIR-ADMIT-20261029',apply:false,
-    priorExecutorAbsent:true,freshSources:{github:{head:'caller-selected'}}}}),/NORMAL_SORI48_CHECK_SCOPE/);
+    priorExecutorAbsent:true,freshSources:{github:{head:'caller-selected'}}}}),/NORMAL_SORI48_CLOSURE_SCOPE/);
  const operation={action:'normal_sori48_unknown_check',batchId:'SORI48-PAIR-ADMIT-20261029',apply:false};
  const stage=bridge.handle({action:'case_stage_input',batchId:operation.batchId,operation});
  const observedAt=new Date().toISOString(),liveSource={observedAt,referenceToken:init.referenceToken,

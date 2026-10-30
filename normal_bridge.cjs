@@ -33,8 +33,10 @@ function createBridge({broker,probe,installation,reconcileUnpermitted,reconcileP
   }
   function bound(op){
     need(op?.batchId===init.batchId&&!Object.hasOwn(op,'ownerProof'),'NORMAL_OPERATION_SCOPE');
-    if(op.action==='normal_sori48_unknown_check')need(init.closure===true&&op.batchId===init.batchId&&op.apply===false&&
-      Object.keys(op).sort().join(',')==='action,apply,batchId','NORMAL_SORI48_CHECK_SCOPE');
+    if(['normal_sori48_unknown_check','normal_sori48_unknown_apply'].includes(op.action))need(
+      init.closure===true&&op.batchId===init.batchId&&
+      op.apply===(op.action==='normal_sori48_unknown_apply')&&
+      Object.keys(op).sort().join(',')==='action,apply,batchId','NORMAL_SORI48_CLOSURE_SCOPE');
     else if(op.action==='fence_begin')need(JSON.stringify(op.edits)===JSON.stringify(init.edits),'NORMAL_PLAN_CHANGED');
     else if(['normal_reconcile_prepared','normal_reconcile_unprepared','normal_assess_control_permit','normal_user_case_control_continue'].includes(op.action))need(op.planHash===init.planHash&&
       broker.state.batches[init.batchId]?.planHash===init.planHash,'NORMAL_PLAN_CHANGED');
@@ -85,7 +87,8 @@ function createBridge({broker,probe,installation,reconcileUnpermitted,reconcileP
       need(!staged&&input.batchId===init.batchId&&
         ['fence_begin','fence_prepare','fence_authorize','fence_dispatch','normal_reconcile_unpermitted',
           'normal_reconcile_permit_expiry','normal_pre_call_expired','normal_reconcile_prepared','normal_reconcile_unprepared',
-          'normal_assess_control_permit','normal_user_case_control_continue','normal_sori48_unknown_check'].includes(input.operation?.action)&&
+          'normal_assess_control_permit','normal_user_case_control_continue','normal_sori48_unknown_check',
+          'normal_sori48_unknown_apply'].includes(input.operation?.action)&&
         (!['normal_assess_control_permit','normal_user_case_control_continue'].includes(input.operation.action)||!!init.controlInput),
         'NORMAL_STAGE_SCOPE');bound(input.operation);check();
       const operation=copy(input.operation),stageId=crypto.randomUUID(),inputHash=hash(JSON.stringify(operation));
@@ -96,7 +99,7 @@ function createBridge({broker,probe,installation,reconcileUnpermitted,reconcileP
         'NORMAL_STAGE_IDENTITY');
       const op=staged.operation;staged=null;bound(op);
       const ownerProof=freshProof(input.liveSource,{action:input.action,stageId:input.stageId,inputHash:input.inputHash});
-      if(op.action==='normal_sori48_unknown_check'){
+      if(['normal_sori48_unknown_check','normal_sori48_unknown_apply'].includes(op.action)){
         need(init.closure&&typeof sori48ClosureCheck==='function','NORMAL_SORI48_CLOSURE_UNAVAILABLE');
         need(/^[a-f0-9]{64}$/.test(input.liveSource?.central?.schedulerEvidenceSha256??''),
           'NORMAL_SORI48_SCHEDULED_PROOF');
@@ -105,9 +108,10 @@ function createBridge({broker,probe,installation,reconcileUnpermitted,reconcileP
           observation.batchId===init.batchId&&observation.classification==='CLEAR_OBSERVATION_ONLY'&&
           observation.freshSourcesComplete===true&&observation.applyAuthorized===false&&
           observation.attributableTerminalResult===null,'NORMAL_SORI48_SOURCE_OBSERVATION');
-        return sori48ClosureCheck({...op,apply:false,freshSources:copy(observation.freshSources),
-          lateObservation:copy(observation),owner:{actor:ownerProof.ownerId,
-          runId:ownerProof.generation,scheduledProofSha256:input.liveSource.central.schedulerEvidenceSha256}});
+        return sori48ClosureCheck({...op,apply:op.action==='normal_sori48_unknown_apply',
+          freshSources:copy(observation.freshSources),lateObservation:copy(observation),
+          owner:{actor:ownerProof.ownerId,runId:ownerProof.generation,
+          scheduledProofSha256:input.liveSource.central.schedulerEvidenceSha256}});
       }
       if(op.action==='normal_reconcile_unpermitted'){
         need(typeof reconcileUnpermitted==='function','NORMAL_RECOVERY_UNAVAILABLE');

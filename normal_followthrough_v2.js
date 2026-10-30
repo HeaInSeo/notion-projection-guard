@@ -14,7 +14,7 @@
       if(!failure)throw error;failure.closeError={message:error.message,code:error.code??null};
     }
   }
-  return {async checkSori48Closure(references){
+  async function sori48(references,apply){
     references=copy(references);
     need(config.sori48Closure===true&&config.batchId==='SORI48-PAIR-ADMIT-20261029'&&
       /^[a-f0-9]{64}$/.test(config.schedulerEvidenceSha256??'')&&
@@ -26,12 +26,16 @@
       sori48Closure:true,witnessConfig:{sori48Closure:true,
         schedulerEvidenceSha256:config.schedulerEvidenceSha256,
         createSori48SourceCollector:config.createSori48SourceCollector}});
-    need(typeof runner.checkSori48Closure==='function','NORMAL_SORI48_RUNNER_REQUIRED');
+    const method=apply?'applySori48Closure':'checkSori48Closure';
+    need(typeof runner[method]==='function','NORMAL_SORI48_RUNNER_REQUIRED');
     let failure=null;
-    try{return await runner.checkSori48Closure(config.batchId);}
+    try{return await runner[method](config.batchId);}
     catch(error){failure=error;throw error;}
     finally{await close(client,failure);}
-  },async run(bundle,references){
+  }
+  return {async checkSori48Closure(references){return sori48(references,false);},
+  async applySori48Closure(references){return sori48(references,true);},
+  async run(bundle,references){
     bundle=copy(bundle);references=copy(references);
     const ids=[bundle?.binding?.writer?.pageId,bundle?.binding?.reviewer?.pageId];
     need(Array.isArray(references)&&ids.every(id=>typeof id==='string'&&references.some(r=>r.pageId===id)),

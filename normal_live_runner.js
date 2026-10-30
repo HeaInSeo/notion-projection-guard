@@ -70,18 +70,21 @@
       throw Error('NOTION_RESULT_UNKNOWN');
     return {status:'SUCCEEDED',pageId:request.page_id,taskId:task?.task_id??null};
   }
-  return {async checkSori48Closure(batchId){
+  async function closeSori48(batchId,apply){
     let failure=null;
     try{
       await init(batchId,[]);
-      const operation={action:'normal_sori48_unknown_check',batchId,apply:false};
+      const operation={action:apply?'normal_sori48_unknown_apply':'normal_sori48_unknown_check',batchId,apply};
       const stage=await rpc({action:'case_stage_input',batchId,operation});
       return await rpc({action:'case_consume_live',batchId,...stage,liveSource:await freshWitness(batchId)});
     }catch(error){failure=error;throw error;}
     finally{try{await close();}catch(error){
       if(!failure)throw error;failure.closeError={message:error.message,code:error.code??null};
     }}
-  },async run(batchId,edits){
+  }
+  return {async checkSori48Closure(batchId){return closeSori48(batchId,false);},
+  async applySori48Closure(batchId){return closeSori48(batchId,true);},
+  async run(batchId,edits){
     edits=copy(edits);let live=null,failure=null;const receipts=[];
     try{
       const initial=await init(batchId,edits);
