@@ -52,6 +52,8 @@
       const expected=c.nativeExpectations.find(n=>n.pageId===f.pageId);
       const propertiesMatch=c.sori48Metadata===true&&metadataRows.has(f.pageId)?
         stable(protectedMetadata(live.props))===stable(protectedMetadata(f.props)):
+        c.npgSourceReview===true?stable(live.props)===stable(f.props)||
+          stable(live.props)===stable({...f.props,...(expected?.properties??{})}):
         stable(live.props)===stable({...f.props,...(expected?.properties??{})});
       need(propertiesMatch,'NORMAL_LIVE_PROPERTIES_CHANGED');
       return {pageId:f.pageId,observedAt,matched:true,revision:live.revision};

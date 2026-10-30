@@ -33,6 +33,23 @@
     catch(error){failure=error;throw error;}
     finally{await close(client,failure);}
   }
+  async function npgSourceReview(admission,references){
+    admission=copy(admission);references=copy(references);
+    need(admission?.schema==='NPG_SOURCE_REVIEW_ADMISSION_V1'&&
+      admission.batchId==='NPG24-SORI48-SOURCE-REVIEW-ADMISSION'&&admission.applyAuthorized===false&&
+      admission.reviewRow==='40786e6dd1d1818086faf517ccee6238'&&admission.grantsWorkerProof===false&&
+      Array.isArray(references)&&references.length>=4&&references.some(r=>r.pageId===admission.reviewRow),
+      'NORMAL_NPG_SOURCE_REVIEW_PLAN');
+    const transport=config.createTransport(tools),client=createClient(transport);
+    const runner=config.createLiveRunner(transport,{client,createWitness:config.createWitness,
+      centralTaskId:config.centralTaskId,runId:config.runId,references,
+      nativeExpectations:[{pageId:admission.reviewRow,properties:admission.patch}],
+      npgSourceReview:true,admission,witnessConfig:{...config.witnessConfig,npgSourceReview:true}});
+    let failure=null;
+    try{return await runner.runNpgSourceReview(admission.batchId);}
+    catch(error){failure=error;throw error;}
+    finally{await close(client,failure);}
+  }
   async function pairBody(admission,references){
     admission=copy(admission);references=copy(references);
     need(admission?.schema==='SORI48_CORRECTED_HEAD_PAIR_PROJECTION_V1'&&
@@ -94,6 +111,7 @@
   return {async checkSori48Closure(references){return sori48(references,false);},
   async applySori48Closure(references){return sori48(references,true);},
   async runSori48PairBody(admission,references){return pairBody(admission,references);},
+  async runNpgSourceReview(admission,references){return npgSourceReview(admission,references);},
   async runSori48PairReconciliation(admission,references){
     const body=await pairBody(admission,references),native=await pairMetadata(admission,references);
     return {status:'PAIR_RECONCILED',body,native};

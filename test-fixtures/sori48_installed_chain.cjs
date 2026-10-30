@@ -42,7 +42,7 @@ const headings=['## CURRENT · 마지막 중앙 관측 · QSYNC-20261010T145034Z
   'sori48_unknown_closure.cjs':fs.readFileSync(path.join(repo,'sori48_unknown_closure.cjs'),'utf8')
    .replace(realClosure.APPROVAL_SHA256,approvalHash).replace(realClosure.CORRECTED_HEAD,'c'.repeat(40))}; const phaseNames=['SORI48_UNKNOWN_CLOSURE_PROPOSAL.json','sori48_unknown_state.cjs','sori48_unknown_closure.cjs',
   'sori48_unknown_runtime.cjs','sori48_unknown_evidence.cjs','sori48_unknown_sources.js',
-  'sori48_pair_provider.cjs','sori48_pair_metadata.cjs'];
+  'sori48_pair_provider.cjs','sori48_pair_metadata.cjs','npg_source_review_provider.cjs'];
  for(const n of phaseNames){if(!Object.hasOwn(phase,n))phase[n]=fs.readFileSync(path.join(repo,n));
   fs.writeFileSync(path.join(dir,n),phase[n],{mode:0o600});}
  const closure=require(path.join(dir,'sori48_unknown_closure.cjs'));

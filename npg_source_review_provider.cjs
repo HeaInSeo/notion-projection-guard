@@ -61,13 +61,24 @@ function patch(a,at){return {'작업 상태':'실행재개','다음 담당자':'
     '; source owner RELEASED and exact-head CI green. This is REQUESTED only, not worker proof or PASS.',
   '저장소 식별자':REPO+' PR24 '+a.head,
   'date:큐 정리 시각:start':at,'date:큐 정리 시각:is_datetime':1};}
-function createProvider(){return Object.freeze({assess,plan(input){const a=assess(input),at=input.observedAt;
+function validatePlan(p){
+  need(p?.schema==='NPG_SOURCE_REVIEW_ADMISSION_V1'&&p.batchId===BATCH&&p.repository===REPO&&p.pr===PR&&
+    /^[a-f0-9]{40}$/.test(p.head??'')&&/^[a-f0-9]{40}$/.test(p.base??'')&&p.reviewRow===REVIEW_ROW&&
+    p.applyAuthorized===false&&p.grantsWorkerProof===false&&p.grantsReviewVerdict===false&&
+    p.grantsMerge===false&&p.grantsInstallation===false&&p.priorHistory?.eventId===PRIOR_EVENT&&
+    p.priorHistory.version===22&&p.priorHistory.preserved===true,'PLAN');
+  const at=p.patch?.['date:큐 정리 시각:start'],expected=patch(p,at);
+  need(Number.isFinite(Date.parse(at))&&stable(p.patch)===stable(expected)&&stable(p.request)===stable({
+    page_id:REVIEW_ROW,command:'update_properties',allow_async:false,properties:expected}),'EXACT_PLAN');
+  return true;
+}
+function createProvider(){return Object.freeze({assess,validatePlan,plan(input){const a=assess(input),at=input.observedAt;
   need(Number.isFinite(Date.parse(at))&&Date.parse(at)<=Date.now(),'TIME');
-  return {...a,batchId:BATCH,patch:patch(a,at),request:{page_id:REVIEW_ROW,command:'update_properties',
-    allow_async:false,properties:patch(a,at)}};}});}
+  const p={...a,batchId:BATCH,patch:patch(a,at),request:{page_id:REVIEW_ROW,command:'update_properties',
+    allow_async:false,properties:patch(a,at)}};validatePlan(p);return p;}});}
 function createExecutor({broker,providerPlan}){
   need(broker&&typeof broker.assertLock==='function'&&typeof broker.ownerProof==='function'&&
-    typeof broker.save==='function'&&providerPlan?.batchId===BATCH,'TRUSTED_RUNTIME');
+    typeof broker.save==='function'&&validatePlan(providerPlan),'TRUSTED_RUNTIME');
   const request=copy(providerPlan.request),planHash=sha(request);
   function guard(proof){broker.assertLock();need(stable(JSON.parse(fs.readFileSync(broker.file,'utf8')))===
     stable(broker.state),'MEMORY_DISK');need(proof?.scope===BATCH,'OWNER_SCOPE');broker.ownerProof(proof);}
@@ -102,4 +113,4 @@ function createExecutor({broker,providerPlan}){
   status(){broker.assertLock();const r=record();return {batchId:BATCH,status:r.status,planHash,
     receipt:copy(r.receipt),requestedOnly:true,workerProofChanged:false,priorHistoryPreserved:true};}});
 }
-module.exports={createProvider,createExecutor,BATCH,REVIEW_ROW,REPO,PR,PRIOR_EVENT,PRIOR_TASK};
+module.exports={createProvider,createExecutor,validatePlan,BATCH,REVIEW_ROW,REPO,PR,PRIOR_EVENT,PRIOR_TASK};

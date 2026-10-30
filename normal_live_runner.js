@@ -23,17 +23,20 @@
   async function init(batchId,edits){
     if(initialized)throw Error('NORMAL_RUNNER_SINGLE_USE');initialized=true;
     const control=config.controlAdmissionId!==undefined,closure=config.sori48Closure===true,
-      sori48Pair=config.sori48Pair===true,sori48Metadata=config.sori48Metadata===true;
+      sori48Pair=config.sori48Pair===true,sori48Metadata=config.sori48Metadata===true,
+      npgSourceReview=config.npgSourceReview===true;
     const r=await rpc({action:control?'normal_control_init':closure?'normal_sori48_closure_init':
-      sori48Pair?'normal_sori48_pair_init':sori48Metadata?'normal_sori48_metadata_init':'normal_init',
+      sori48Pair?'normal_sori48_pair_init':sori48Metadata?'normal_sori48_metadata_init':
+      npgSourceReview?'normal_npg_source_review_init':'normal_init',
       batchId,edits,centralTaskId:config.centralTaskId,runId:config.runId,
       referenceIds:config.references.map(r=>r.pageId),
-      ...(control?{controlAdmissionId:config.controlAdmissionId}:closure||sori48Metadata?{}:
+      ...(npgSourceReview?{admission:config.admission}:{}),
+      ...(control?{controlAdmissionId:config.controlAdmissionId}:closure||sori48Metadata||npgSourceReview?{}:
         {repository:config.binding.repository,pr:config.binding.source.pr})});
     witness=config.createWitness(tools,{...config.witnessConfig,batchId,centralTaskId:config.centralTaskId,
       runId:config.runId,referenceToken:r.referenceToken,references:config.references,
       edits:sori48Metadata?(config.bodyEdits??[]):edits,
-      sori48Metadata,nativeExpectations:config.nativeExpectations});return r;
+      sori48Metadata,npgSourceReview,nativeExpectations:config.nativeExpectations});return r;
   }
   async function owned(operation){
     for(let attempt=0;;attempt++){
@@ -52,6 +55,11 @@
   async function confirm(live){
     for(let attempt=0;;attempt++)try{return await rpc({action:'case_live_send',batchId:live.batchId,
       operation:{...live,action:'fence_confirm_send'},liveSource:await freshWitness(live.batchId)});}
+    catch(error){if(attempt>=2||!consumeSourceExpiry(error))throw error;}
+  }
+  async function confirmSourceReview(live,row){
+    for(let attempt=0;;attempt++)try{return await rpc({action:'case_live_send',batchId:live.batchId,
+      operation:{...live,action:'normal_npg_source_review_confirm',row},liveSource:await freshWitness(live.batchId)});}
     catch(error){if(attempt>=2||!consumeSourceExpiry(error))throw error;}
   }
   async function confirmMetadata(live,pages){
@@ -92,6 +100,23 @@
     finally{try{await close();}catch(error){
       if(!failure)throw error;failure.closeError={message:error.message,code:error.code??null};
     }}
+  }
+  async function reconcileNpgSourceReview(batchId){
+    let failure=null;const rowId='40786e6dd1d1818086faf517ccee6238',row=()=>read(rowId);
+    try{
+      await init(batchId,[]);
+      let status=await owned({action:'normal_npg_source_review_begin',batchId,row:await row()});
+      if(status.status==='COMPLETED')return status;
+      if(status.status!=='READY')throw Error('NORMAL_NPG_SOURCE_REVIEW_UNRESOLVED: '+status.status);
+      const dispatch=await owned({action:'normal_npg_source_review_dispatch',batchId,row:await row()});
+      const live={batchId,executor:dispatch.executor,planHash:dispatch.planHash,
+        ticket:dispatch.ticket,dispatchId:dispatch.dispatchId};
+      const confirmed=await confirmSourceReview(live,await row());
+      const provider=await send(dispatch.request,confirmed.permit,live);
+      await owned({...live,action:'normal_npg_source_review_ack',provider});
+      return await owned({...live,action:'normal_npg_source_review_verify',row:await row()});
+    }catch(error){failure=error;throw error;}
+    finally{try{await close();}catch(error){if(!failure)throw error;failure.closeError={message:error.message,code:error.code??null};}}
   }
   async function reconcileSori48Metadata(batchId){
     let failure=null;

@@ -38,6 +38,11 @@ function broker(){
 }
 const proof=()=>({scope:BATCH,ownerId:'automation:central',generation:'run',observedAt:new Date().toISOString(),
   validUntil:new Date(Date.now()+30000).toISOString()});
+test('executor refuses a caller-mutated worker field before canonical mutation',()=>{
+  const plan=createProvider().plan(observation()),b=broker();plan.patch['이벤트 ID']='fake';
+  plan.request.properties=plan.patch;assert.throws(()=>createExecutor({broker:b,providerPlan:plan}),/EXACT_PLAN/);
+  assert.equal(fs.existsSync(b.file),true);assert.equal(b.state.active,null);
+});
 test('executor requires durable ACK and exact protected readback before completion',()=>{
   const plan=createProvider().plan(observation()),b=broker(),x=createExecutor({broker:b,providerPlan:plan});
   assert.equal(x.begin({ownerProof:proof(),row:observation().reviewRow}).status,'READY');
