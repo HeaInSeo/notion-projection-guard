@@ -281,6 +281,47 @@ test('normal followthrough binds scheduler evidence into the closure runner',asy
  assert.equal(seen.witnessConfig.schedulerEvidenceSha256,'d'.repeat(64));
  assert.equal(typeof seen.witnessConfig.createSori48SourceCollector,'function');
 });
+test('normal followthrough opens a separate exact eight-target Sori48 pair body transaction',async()=>{
+ const ids=Array.from({length:8},(_,i)=>(i+1).toString(16).padStart(32,'0'));
+ const edits=ids.map((pageId,i)=>({pageId,heading:'## H'+i,oldStr:'old'+i,newStr:'new'+i}));
+ const plan={schema:'SORI48_CORRECTED_HEAD_PAIR_PROJECTION_V1',
+  observationId:'SORI48-PAIR-ADMIT-CORRECTED-20261030',applyAuthorized:false,
+  requiresCanonicalClosure:true,metadataReconciliationRequired:true,edits};
+ let seen,closed=0,transports=0;
+ const client={sendOnce(){},recoverPreCall(){},async close(){closed++;}};
+ const ordinary=factory('normal_followthrough_v2.js')({},{
+  createTransport:()=>{transports++;return {};},createClient:()=>client,
+  createLiveRunner:(_,config)=>{seen=config;return {async run(id,actual){
+   assert.equal(id,plan.observationId);assert.equal(JSON.stringify(actual),JSON.stringify(edits));
+   return {status:'COMPLETED',receipts:edits.map(e=>({pageId:e.pageId}))};}};},
+  createWitness(){},createLandedProjection(){},createCommand:()=> 'command',
+  centralTaskId:central,runId:run,installation:{}
+ });
+ const references=ids.map(pageId=>({pageId,page:{complete:true}}));
+ const result=await ordinary.runSori48PairBody(plan,references);
+ assert.equal(result.status,'BODY_COMPLETE');assert.equal(result.bodyTargets,8);
+ assert.equal(transports,1);assert.equal(closed,1);
+ assert.equal(JSON.stringify(seen.binding),JSON.stringify({repository:'sori',source:{pr:48}}));
+ assert.equal(JSON.stringify(seen.nativeExpectations),'[]');assert.equal(seen.sori48Closure,undefined);
+ await assert.rejects(()=>ordinary.runSori48PairBody(plan,references.slice(1)),/NORMAL_SORI48_PAIR_REFERENCES/);
+ assert.equal(transports,1);
+});
+test('normal followthrough refuses caller-authorized or incomplete Sori48 pair body plans',async()=>{
+ const ids=Array.from({length:8},(_,i)=>(i+1).toString(16).padStart(32,'0'));
+ const base={schema:'SORI48_CORRECTED_HEAD_PAIR_PROJECTION_V1',observationId:'PAIR',
+  applyAuthorized:false,requiresCanonicalClosure:true,metadataReconciliationRequired:true,
+  edits:ids.map((pageId,i)=>({pageId,heading:'H',oldStr:'o'+i,newStr:'n'+i}))};
+ let starts=0;
+ const ordinary=factory('normal_followthrough_v2.js')({},{
+  createTransport:()=>{starts++;return {};},createClient:()=>({sendOnce(){},recoverPreCall(){},close(){}}),
+  createLiveRunner(){},createWitness(){},createLandedProjection(){},createCommand:()=> 'command',
+  centralTaskId:central,runId:run,installation:{}
+ });
+ const refs=ids.map(pageId=>({pageId}));
+ await assert.rejects(()=>ordinary.runSori48PairBody({...base,applyAuthorized:true},refs),/NORMAL_SORI48_PAIR_PLAN/);
+ await assert.rejects(()=>ordinary.runSori48PairBody({...base,edits:base.edits.slice(1)},refs),/NORMAL_SORI48_PAIR_PLAN/);
+ assert.equal(starts,0);
+});
 test('Sori48 live runner executes one check-only staged operation',async()=>{
  const calls=[];let closed=0,witnessConfig;
  const client={broker:async q=>{calls.push(q);
