@@ -18,6 +18,9 @@ function fixture(){
       {'이벤트 ID':event_id,'체크포인트 버전':version,'세션 ID':event.session_id,'작업 ID':event.task_id,'저장소 식별자':frozenHead}));
   }
   for(const t of proposal.observedUnwrittenTargets.targets)pages.set(t.pageId,page(t.pageId,t.heading+'\n\n'+t.oldLiteral+'\n\n## HISTORY\npreserve'));
+  const prior=proposal.observedUnwrittenTargets.targets[0].plannedLiteral;
+  pages.set('3f586e6dd1d181ddb9f3e7217f64bfcd',page('3f586e6dd1d181ddb9f3e7217f64bfcd',
+    '## CURRENT CENTRAL OBSERVATION · NPR-20261012 · sori_index\n\n'+prior+'\n\n## HISTORY\npreserve'));
   const githubPR={number:48,state:'open',merged:false,head_sha:head,base_sha:base};
   const checks={total_count:1,check_runs:[{head_sha:head,status:'completed',conclusion:'success'}]};
   const tools={mcp__codex_apps__notion_fetch:async({id})=>{calls.push(id);if(!pages.has(id))throw Error('missing');return pages.get(id);},
@@ -26,10 +29,11 @@ function fixture(){
   const factory=vm.runInNewContext(source),collector=factory(tools);
   return {pages,calls,tools,collector,githubPR,checks,page,specs};
 }
-test('collector reads exact4-source/5-target scope and grants no apply or no-send claim',async()=>{
+test('collector reads exact5-source/5-target scope and grants no apply or no-send claim',async()=>{
   const f=fixture(),r=await f.collector.collect();assert.equal(r.classification,'CLEAR_OBSERVATION_ONLY');
   assert.equal(r.targets.length,5);assert.equal(r.freshSources.original.event.version,93);
-  assert.equal(f.calls.length,8);assert.equal(new Set(f.calls).size,8);
+  assert.equal(r.freshSources.index.readOk,true);
+  assert.equal(f.calls.length,9);assert.equal(new Set(f.calls).size,9);
   assert.equal(r.applyAuthorized,false);assert.equal(r.originalOutcome,'UNKNOWN');
   assert.equal(r.attributableTerminalResult,null);
 });

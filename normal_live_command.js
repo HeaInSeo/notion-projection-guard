@@ -70,7 +70,7 @@
         root:c.root,runtime:c.runtime,caseModuleHash:c.caseModuleHash});
       const approvalPath=path.join(c.root,'manual-audits','sori48-closure-20261029','USER_APPROVAL.json');
       sori48ClosureCheck=async input=>{
-        const pairAdmission=pairProvider.assess(input.lateObservation);
+        const pairAdmission=pairProvider.plan(input.lateObservation);
         const result=await provider({...input,...(runtime.inspectCommitted()?{}:collectRetention()),
           approvalBytes:trusted(approvalPath).toString('utf8'),
           beforeBytes:trusted(path.join(c.root,'journal.json')).toString('utf8')});
