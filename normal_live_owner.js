@@ -25,14 +25,16 @@
   const metadataKeys=new Set(['작업 상태','다음 담당자','큐 구획','차단 대상','재개 지시','큐 정리 근거',
     'date:큐 정리 시각:start','date:큐 정리 시각:is_datetime']);
   const protectedMetadata=p=>Object.fromEntries(Object.entries(p).filter(([k])=>!metadataKeys.has(k)));
+  const sourceBound=c.sori48Closure===true||c.sori48Pair===true||c.sori48Metadata===true;
   need(/^[a-f0-9]{32}$/.test(c.centralTaskId??'')&&typeof c.runId==='string'&&
     typeof c.referenceToken==='string'&&Array.isArray(refs)&&refs.length>=4&&
     new Set(refs.map(r=>r.pageId)).size===refs.length&&
     (c.sori48Metadata!==true||[...metadataRows].every(id=>refs.some(r=>r.pageId===id)))&&
-    (c.sori48Closure!==true||(typeof createSori48SourceCollector==='function'&&
-      /^[a-f0-9]{64}$/.test(c.schedulerEvidenceSha256??''))),'NORMAL_LIVE_CONFIG');
+    (!sourceBound||typeof createSori48SourceCollector==='function')&&
+    (c.sori48Closure!==true||/^[a-f0-9]{64}$/.test(c.schedulerEvidenceSha256??'')),
+    'NORMAL_LIVE_CONFIG');
   const frozen=refs.map(r=>({pageId:r.pageId,...page(r.page,r.pageId)}));
-  const sori48Collector=c.sori48Closure===true?createSori48SourceCollector(tools):null;
+  const sori48Collector=sourceBound?createSori48SourceCollector(tools):null;
   if(sori48Collector)need(typeof sori48Collector.collect==='function','NORMAL_SORI48_SOURCE_COLLECTOR');
   return async function witness({batchId}){
     need(batchId===c.batchId,'NORMAL_LIVE_SCOPE');
@@ -58,7 +60,8 @@
     need(task?.is_enabled===true&&run?.id===c.runId&&run.recorded_status==='in_progress','NORMAL_LIVE_CENTRAL_OWNER');
     const sori48Observation=sori48Collector?await sori48Collector.collect():null;
     if(sori48Observation)need(sori48Observation.schema==='SORI48_FRESH_SOURCE_OBSERVATION_V1'&&
-      sori48Observation.batchId===batchId&&sori48Observation.classification==='CLEAR_OBSERVATION_ONLY'&&
+      sori48Observation.batchId===(c.sori48SourceBatchId??batchId)&&
+      sori48Observation.classification==='CLEAR_OBSERVATION_ONLY'&&
       sori48Observation.freshSourcesComplete===true&&sori48Observation.applyAuthorized===false&&
       sori48Observation.attributableTerminalResult===null,'NORMAL_SORI48_SOURCE_OBSERVATION');
     need(Date.now()-Date.parse(observedAt)<30000,'NORMAL_LIVE_EXPIRED');

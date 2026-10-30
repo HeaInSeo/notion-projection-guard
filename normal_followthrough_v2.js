@@ -47,10 +47,14 @@
       new Set(references.map(r=>r.pageId)).size===requiredReferences.length&&
       requiredReferences.every(id=>references.some(r=>r.pageId===id)),
       'NORMAL_SORI48_PAIR_REFERENCES');
+    need(typeof config.createSori48SourceCollector==='function','NORMAL_SORI48_SOURCE_COLLECTOR');
     const transport=config.createTransport(tools),client=createClient(transport);
     const runner=config.createLiveRunner(transport,{client,createWitness:config.createWitness,
       centralTaskId:config.centralTaskId,runId:config.runId,references,nativeExpectations:[],
-      sori48Pair:true,binding:{repository:'sori',source:{pr:48}},witnessConfig:config.witnessConfig});
+      sori48Pair:true,binding:{repository:'sori',source:{pr:48}},
+      witnessConfig:{...config.witnessConfig,sori48Pair:true,
+        sori48SourceBatchId:'SORI48-PAIR-ADMIT-20261029',
+        createSori48SourceCollector:config.createSori48SourceCollector}});
     let failure=null;
     try{
       const result=await runner.run(admission.observationId,admission.edits);
@@ -62,6 +66,7 @@
   }
   async function pairMetadata(admission,references){
     references=copy(references);
+    need(typeof config.createSori48SourceCollector==='function','NORMAL_SORI48_SOURCE_COLLECTOR');
     const required=['3f586e6dd1d181ebb43dd7de62aa2ca4','3f586e6dd1d181cd9f5bdcdab6290de7',
       '3f586e6dd1d181ddb9f3e7217f64bfcd','3b286e6dd1d1817aa093fca807659f07',
       '3b286e6dd1d181f2a75cfbd3885071c4','3bf86e6dd1d18110938bc358e17c779e',
@@ -74,7 +79,9 @@
     const runner=config.createLiveRunner(transport,{client,createWitness:config.createWitness,
       centralTaskId:config.centralTaskId,runId:config.runId,references,nativeExpectations:[],
       sori48Metadata:true,bodyEdits:admission.edits,
-      witnessConfig:{...config.witnessConfig,sori48Metadata:true}});
+      witnessConfig:{...config.witnessConfig,sori48Metadata:true,
+        sori48SourceBatchId:'SORI48-PAIR-ADMIT-20261029',
+        createSori48SourceCollector:config.createSori48SourceCollector}});
     let failure=null;
     try{
       const result=await runner.runSori48Metadata('SORI48-PAIR-METADATA-CORRECTED-20261030');

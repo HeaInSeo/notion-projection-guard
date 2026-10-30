@@ -313,7 +313,10 @@ for(const loseNativeResult of [false,true])test('real body to native pipeline '+
  };
  const entry=factory('normal_followthrough_v2.js')(tools,{createTransport:()=>tools,createClient,
   createLiveRunner:factory('normal_live_runner.js'),createWitness:factory('normal_live_owner.js'),
-  createLandedProjection(){},createCommand:()=> 'isolated test command',centralTaskId:central,runId:run,installation:{}});
+  createLandedProjection(){},createCommand:()=> 'isolated test command',centralTaskId:central,runId:run,installation:{},
+  createSori48SourceCollector:()=>({collect:async()=>({schema:'SORI48_FRESH_SOURCE_OBSERVATION_V1',
+   batchId:'SORI48-PAIR-ADMIT-20261029',classification:'CLEAR_OBSERVATION_ONLY',
+   freshSourcesComplete:true,applyAuthorized:false,attributableTerminalResult:null})})});
  const admission={schema:'SORI48_CORRECTED_HEAD_PAIR_PROJECTION_V1',observationId:BODY_BATCH,applyAuthorized:false,
   requiresCanonicalClosure:true,metadataReconciliationRequired:true,edits};
  if(loseNativeResult){

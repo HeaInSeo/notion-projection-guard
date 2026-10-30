@@ -11,6 +11,10 @@ const pairBodyIds=['3f586e6dd1d181ebb43dd7de62aa2ca4','3f586e6dd1d181cd9f5bdcdab
  '3b286e6dd1d1811d9308d9a2b56c9de4'];
 const pairChild='40786e6dd1d181ec8addcd1269f9b0bb';
 const batchId='NODEKIT149-LANDED-20261028',central='1'.repeat(32),run='test-actual-run';
+const clearSori48Observation=()=>({schema:'SORI48_FRESH_SOURCE_OBSERVATION_V1',
+ batchId:'SORI48-PAIR-ADMIT-20261029',classification:'CLEAR_OBSERVATION_ONLY',
+ freshSourcesComplete:true,applyAuthorized:false,attributableTerminalResult:null,
+ freshSources:{original:{readOk:true}},targets:[]});
 const edit={pageId:A,heading:'## CURRENT CENTRAL OBSERVATION · test',oldStr:'state=BEFORE',newStr:'state=AFTER'};
 const policy={productionEnabled:true,productionPages:[A],canaryPages:[],headingPrefixes:['## CURRENT CENTRAL OBSERVATION']};
 const page=(value='BEFORE',revision='2026-10-28T00:00:00Z')=>({structuredContent:{id:A,page_last_edited_at:revision,
@@ -270,6 +274,22 @@ test('Sori48 live witness binds one captured fresh collector result',async()=>{
  assert.equal(collections,1);assert.equal(JSON.stringify(result.sori48Observation),JSON.stringify(observation));
  assert.equal(result.central.schedulerEvidenceSha256,'d'.repeat(64));
 });
+test('Sori48 pair witness refreshes corrected-head sources for every operation',async()=>{
+ const ids=[...pairBodyIds,pairChild,policyId],pageFor=id=>({structuredContent:{id,
+  page_last_edited_at:'2026-10-30T00:00:00Z',text:'<properties>\n{"title":"source"}\n</properties>\n<content>\nsource\n</content>'}});
+ const references=ids.map(pageId=>({pageId,page:pageFor(pageId)}));let collections=0;
+ const tools={mcp__codex_apps__notion_fetch:async({id})=>pageFor(id),
+  mcp__codex_apps__automations_peek:async()=>({structuredContent:{automations:[{id:central,is_enabled:true,
+   run_details:{last_run:{id:run,recorded_status:'in_progress'}}}]}})};
+ const witness=factory('normal_live_owner.js')(tools,{centralTaskId:central,runId:run,referenceToken:'token',
+  batchId:'SORI48-PAIR-ADMIT-CORRECTED-20261030',references,edits:[],nativeExpectations:[],
+  sori48Pair:true,sori48SourceBatchId:'SORI48-PAIR-ADMIT-20261029',
+  createSori48SourceCollector:()=>({async collect(){const value=clearSori48Observation();collections++;
+   if(collections===2)value.classification='DRIFT';return value;}})});
+ await witness({batchId:'SORI48-PAIR-ADMIT-CORRECTED-20261030'});
+ await assert.rejects(()=>witness({batchId:'SORI48-PAIR-ADMIT-CORRECTED-20261030'}),/NORMAL_SORI48_SOURCE_OBSERVATION/);
+ assert.equal(collections,2);
+});
 test('Sori48 metadata witness permits only central metadata changes',async()=>{
  const ids=[...pairBodyIds,pairChild,policyId],metadataRows=new Set([pairBodyIds[0],pairChild,pairBodyIds[1]]);
  const make=(id,props={title:'source','작업 상태':'실행재개'})=>({structuredContent:{id,
@@ -282,7 +302,8 @@ test('Sori48 metadata witness permits only central metadata changes',async()=>{
    run_details:{last_run:{id:run,recorded_status:'in_progress'}}}]}})};
  const witness=factory('normal_live_owner.js')(tools,{centralTaskId:central,runId:run,referenceToken:'token',
   batchId:'SORI48-PAIR-METADATA-CORRECTED-20261030',references:ids.map(pageId=>({pageId,page:frozen[pageId]})),
-  edits:[],nativeExpectations:[],sori48Metadata:true});
+  edits:[],nativeExpectations:[],sori48Metadata:true,sori48SourceBatchId:'SORI48-PAIR-ADMIT-20261029',
+  createSori48SourceCollector:()=>({collect:async()=>clearSori48Observation()})});
  const result=await witness({batchId:'SORI48-PAIR-METADATA-CORRECTED-20261030'});
  assert.equal(result.nativeChecks.length,10);assert.equal(metadataRows.has(pairBodyIds[0]),true);
  live[pairBodyIds[0]]=make(pairBodyIds[0],{title:'changed-own','작업 상태':'검증대기'});
@@ -324,7 +345,8 @@ test('normal followthrough opens a separate exact eight-target Sori48 pair body 
    assert.equal(id,plan.observationId);assert.equal(JSON.stringify(actual),JSON.stringify(edits));
    return {status:'COMPLETED',receipts:edits.map(e=>({pageId:e.pageId}))};}};},
   createWitness(){},createLandedProjection(){},createCommand:()=> 'command',
-  centralTaskId:central,runId:run,installation:{}
+  centralTaskId:central,runId:run,installation:{},
+  createSori48SourceCollector:()=>({collect:async()=>clearSori48Observation()})
  });
  const references=[...ids,pairChild,policyId].map(pageId=>({pageId,page:{complete:true}}));
  const result=await ordinary.runSori48PairBody(plan,references);
@@ -348,7 +370,7 @@ test('normal followthrough completes body before the exact native metadata trans
    {async runSori48Metadata(id){order.push('native');assert.equal(id,'SORI48-PAIR-METADATA-CORRECTED-20261030');
     return {status:'COMPLETED',next:3,receipts:[{},{},{}]};}},
   createWitness(){},createLandedProjection(){},createCommand:()=> 'command',
-  centralTaskId:central,runId:run,installation:{},witnessConfig:{proof:'frozen'}
+  centralTaskId:central,runId:run,installation:{},createSori48SourceCollector:()=>({collect:async()=>clearSori48Observation()}),witnessConfig:{proof:'frozen'}
  });
  const references=[...pairBodyIds,pairChild,policyId].map(pageId=>({pageId,page:{complete:true}}));
  const result=await ordinary.runSori48PairReconciliation(plan,references);
