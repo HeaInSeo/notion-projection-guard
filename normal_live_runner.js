@@ -31,7 +31,8 @@
       ...(control?{controlAdmissionId:config.controlAdmissionId}:closure||sori48Metadata?{}:
         {repository:config.binding.repository,pr:config.binding.source.pr})});
     witness=config.createWitness(tools,{...config.witnessConfig,batchId,centralTaskId:config.centralTaskId,
-      runId:config.runId,referenceToken:r.referenceToken,references:config.references,edits,
+      runId:config.runId,referenceToken:r.referenceToken,references:config.references,
+      edits:sori48Metadata?(config.bodyEdits??[]):edits,
       sori48Metadata,nativeExpectations:config.nativeExpectations});return r;
   }
   async function owned(operation){

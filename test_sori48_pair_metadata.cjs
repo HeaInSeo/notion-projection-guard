@@ -249,3 +249,83 @@ test('native body prerequisite consumes eight real protected-content receipts an
  const forged=JSON.parse(fs.readFileSync(file,'utf8'));forged.page.body+='changed';fs.writeFileSync(file,JSON.stringify(forged));
  assert.throws(()=>inspectBodyProjection(f.b,validator));
 });
+
+const chainBodyIds=["3f586e6dd1d181ebb43dd7de62aa2ca4","3f586e6dd1d181cd9f5bdcdab6290de7","3f586e6dd1d181ddb9f3e7217f64bfcd",...require("./sori48_pair_provider.cjs").TARGETS];
+function exactChainEdits(){
+ const provider=require('./sori48_pair_provider.cjs');
+ const prior=require('./SORI48_UNKNOWN_CLOSURE_PROPOSAL.json').observedUnwrittenTargets.targets[0].plannedLiteral;
+ const headings=['## CURRENT · 마지막 중앙 관측 · QSYNC-20261010T145034Z-v6 · W02.A KEEP_GATED ON W01.3',
+  '## CURRENT · 마지막 중앙 관측 · QSYNC-20261010T145034Z-v6 · W02.A REVIEW KEEP_GATED',
+  '## CURRENT CENTRAL OBSERVATION · NPR-20261012 · sori_index',
+  '## CURRENT CENTRAL OBSERVATION · NPR-20261012 · operator_queue',
+  '## CURRENT CENTRAL OBSERVATION · NPR-20261012 · guardrail_queue',
+  '## CURRENT INCIDENT MAINTENANCE · BODY_RANGE_OVERWRITE-20261011T2334Z · RESTORED_VERIFIED / ADOPTION_PENDING',
+  '## CURRENT CENTRAL OBSERVATION · NPR-20261012 · hub','## CURRENT CENTRAL OBSERVATION · NPR-20261012 · dashboard'];
+ return chainBodyIds.map((pageId,i)=>({pageId,heading:headings[i],oldStr:i<3?prior:'Sori retains its separate gates.',newStr:provider.CORRECTED_TEXT}));
+}
+for(const loseNativeResult of [false,true])test('real body to native pipeline '+(loseNativeResult?'retains an uncertain native send without replay':'uses projected preimages and preserves own proof'),async t=>{
+ const f=fixture(t),edits=exactChainEdits(),{createBridge}=require('./normal_bridge.cjs'),
+  native=require('./sori48_pair_metadata.cjs'),provider=require('./sori48_pair_provider.cjs').createProvider();
+ const factory=name=>vm.runInNewContext(fs.readFileSync(path.join(__dirname,name),'utf8'),{setTimeout});
+ const pages=Object.fromEntries(f.pages.map(p=>[p.structuredContent.id,clone(p)]));
+ for(const edit of edits){
+  if(!pages[edit.pageId])pages[edit.pageId]={structuredContent:{id:edit.pageId,page_last_edited_at:'2026-10-30T00:00:00Z',
+   text:'<properties>\n{"title":"preserve"}\n</properties>\n<content>\n## SOURCE\npreserve\n</content>'}};
+  const p=pages[edit.pageId].structuredContent;p.text=p.text.replace('\n</content>','\n'+edit.heading+'\n'+edit.oldStr+'\n## AFTER\nprotected\n</content>');
+ }
+ const wip='3b286e6dd1d18194866dd8d7a28c7ab4';pages[wip]={structuredContent:{id:wip,page_last_edited_at:'2026-10-30T00:00:00Z',
+  text:'<properties>\n{"title":"policy"}\n</properties>\n<content>\npolicy\n</content>'}};
+ const refs=[...chainBodyIds,ROWS[1][0],wip].map(pageId=>({pageId,page:clone(pages[pageId])}));
+ f.b.policy.productionPages=[...chainBodyIds,ROWS[1][0]];
+ f.b.policy.headingPrefixes=['## CURRENT CENTRAL OBSERVATION','## CURRENT INCIDENT MAINTENANCE'];
+ f.b.policy.centralSections=edits.slice(0,2).map(e=>({pageId:e.pageId,heading:e.heading}));
+ const central='a'.repeat(32),run='actual-test-run',writes=[];
+ const tools={mcp__codex_apps__notion_fetch:async({id})=>clone(pages[id]),
+  mcp__codex_apps__automations_peek:async()=>({structuredContent:{automations:[{id:central,is_enabled:true,
+   run_details:{last_run:{id:run,recorded_status:'in_progress'}}}]}}),
+  mcp__codex_apps__notion_notion_update_page:async request=>{
+   writes.push(clone(request));const p=pages[request.page_id].structuredContent;
+   if(request.command==='update_content')for(const u of request.content_updates)
+    p.text=p.text.replace(u.old_str,()=>u.new_str);
+   else p.text=p.text.replace(/<properties>\n([\s\S]*?)\n<\/properties>/,(_,raw)=>
+    '<properties>\n'+JSON.stringify({...JSON.parse(raw),...request.properties})+'\n</properties>');
+   if(loseNativeResult&&request.command==='update_properties')throw Error('LOST_NATIVE_REPLY');
+   return {structuredContent:{page_id:request.page_id}};
+  }};
+ let clients=0;
+ const createClient=()=>{
+  if(clients++)f.restart();const b=f.b;
+  const executor=native.createExecutor({broker:b,inspectClosedUnknown:()=>({valid:true,
+   batchId:'SORI48-PAIR-ADMIT-20261029',status:'CLOSED_SUPERSEDED_UNKNOWN',originalOutcome:'UNKNOWN',
+   lateObservationRequired:true,cleanTermination:false,capacityReleased:false,productAccepted:false}),
+   inspectBodyProjection:()=>native.inspectBodyProjection(b,provider.validatePlan)});
+  const bridge=createBridge({broker:b,sori48Metadata:executor,validateSori48PairPlan:provider.validatePlan,
+   installation:{root:b.root},verifyExtensions(){},probe(){return {canonical:{exclusive:false,manifestHash:'e'.repeat(64)},
+    brokerExecutor:b.executor,journalHash:'f'.repeat(64)};}});
+  const text=s=>({content:[{type:'text',text:s}]});
+  return factory('normal_rpc_client.js')({
+   mcp__codex_apps__dev_server___additional_mcp__dev_server_additional_mcp_start_process:async()=>text('Process started with PID 12345\nNPG/2 {"ready":true}'),
+   mcp__codex_apps__dev_server___additional_mcp__dev_server_additional_mcp_interact_with_process:async({input})=>{
+    const q=JSON.parse(input);try{return text('NPG/2 '+JSON.stringify({requestId:q.requestId,ok:true,result:await bridge.handle(q)}));}
+    catch(e){return text('NPG/2 '+JSON.stringify({requestId:q.requestId,ok:false,error:e.message,code:e.code??'ERROR'}));}
+   },mcp__codex_apps__dev_server___additional_mcp__dev_server_additional_mcp_read_process_output:async()=>{throw Error('unexpected transport read');}
+  },{command:'isolated real chain test'});
+ };
+ const entry=factory('normal_followthrough_v2.js')(tools,{createTransport:()=>tools,createClient,
+  createLiveRunner:factory('normal_live_runner.js'),createWitness:factory('normal_live_owner.js'),
+  createLandedProjection(){},createCommand:()=> 'isolated test command',centralTaskId:central,runId:run,installation:{}});
+ const admission={schema:'SORI48_CORRECTED_HEAD_PAIR_PROJECTION_V1',observationId:BODY_BATCH,applyAuthorized:false,
+  requiresCanonicalClosure:true,metadataReconciliationRequired:true,edits};
+ if(loseNativeResult){
+  await assert.rejects(()=>entry.runSori48PairReconciliation(admission,refs),/LOST_NATIVE_REPLY/);
+  assert.equal(f.b.state.batches[BATCH].status,'WRITE_PENDING');assert.equal(f.b.state.batches[BATCH].next,0);
+  await assert.rejects(()=>entry.runSori48PairReconciliation(admission,refs),/WRITE_PENDING_UNKNOWN/);
+  assert.equal(writes.length,9);
+ }else{
+  const result=await entry.runSori48PairReconciliation(admission,refs);
+  assert.equal(result.status,'PAIR_RECONCILED');assert.equal(result.native.receipt.next,3);
+  assert.equal(writes.filter(r=>r.command==='update_content').length,8);
+  assert.equal(writes.filter(r=>r.command==='update_properties').length,3);
+ }
+ assert.deepEqual(f.b.state.keepOriginalUnknown,{next:3,receipts:[1,2,3],outcome:'UNKNOWN'});
+});

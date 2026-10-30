@@ -522,3 +522,66 @@ test('Sori48 closure bridge rejects apply and missing scheduled proof before pro
  assert.throws(()=>bridge.handle({action:'case_consume_live',batchId:operation.batchId,...stage,liveSource}),
   /NORMAL_SORI48_SCHEDULED_PROOF/);assert.equal(calls,0);assert.equal(fs.existsSync(b.file),false);
 });
+
+function exactPairBodyEdits(){
+ const provider=require('./sori48_pair_provider.cjs');
+ const prior=require('./SORI48_UNKNOWN_CLOSURE_PROPOSAL.json').observedUnwrittenTargets.targets[0].plannedLiteral;
+ const headings=['## CURRENT · 마지막 중앙 관측 · QSYNC-20261010T145034Z-v6 · W02.A KEEP_GATED ON W01.3',
+  '## CURRENT · 마지막 중앙 관측 · QSYNC-20261010T145034Z-v6 · W02.A REVIEW KEEP_GATED',
+  '## CURRENT CENTRAL OBSERVATION · NPR-20261012 · sori_index',
+  '## CURRENT CENTRAL OBSERVATION · NPR-20261012 · operator_queue',
+  '## CURRENT CENTRAL OBSERVATION · NPR-20261012 · guardrail_queue',
+  '## CURRENT INCIDENT MAINTENANCE · BODY_RANGE_OVERWRITE-20261011T2334Z · RESTORED_VERIFIED / ADOPTION_PENDING',
+  '## CURRENT CENTRAL OBSERVATION · NPR-20261012 · hub','## CURRENT CENTRAL OBSERVATION · NPR-20261012 · dashboard'];
+ return pairBodyIds.map((pageId,i)=>({pageId,heading:headings[i],oldStr:i<3?prior:'Sori retains its separate gates.',newStr:provider.CORRECTED_TEXT}));
+}
+for(const [name,change] of [
+ ['heading',e=>e[0].heading='## CURRENT CENTRAL OBSERVATION · unrelated'],
+ ['old literal',e=>e[0].oldStr='unrelated old text'],
+ ['new literal',e=>e[0].newStr='unapproved replacement'],
+ ['extra key',e=>e[0].unreviewed=true],
+ ['later target literal',e=>e[7].newStr='unapproved shared text'],
+ ['order',e=>[e[0],e[1]]=[e[1],e[0]]]
+])test('pair RPC refuses changed '+name+' before canonical mutation',t=>{
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'sori48-exact-plan-')),b=new core.Broker(root,policy);
+ t.after(()=>{b.close();fs.rmSync(root,{recursive:true,force:true});});
+ const bridge=createBridge({broker:b,installation:{root},verifyExtensions(){},
+  validateSori48PairPlan:require('./sori48_pair_provider.cjs').createProvider().validatePlan,
+  probe(){return {canonical:{exclusive:false,manifestHash:'e'.repeat(64)},brokerExecutor:b.executor,journalHash:'f'.repeat(64)};}});
+ const edits=exactPairBodyEdits();change(edits);
+ assert.throws(()=>bridge.handle({action:'normal_sori48_pair_init',batchId:'SORI48-PAIR-ADMIT-CORRECTED-20261030',
+  edits,centralTaskId:central,runId:run,referenceIds:[...pairBodyIds,pairChild,policyId],repository:'sori',pr:48}));
+ assert.equal(fs.existsSync(b.file),false);
+});
+test('pair RPC cannot initialize without the pinned exact provider validator',t=>{
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'sori48-missing-plan-provider-')),b=new core.Broker(root,policy);
+ t.after(()=>{b.close();fs.rmSync(root,{recursive:true,force:true});});
+ const bridge=createBridge({broker:b,installation:{root},verifyExtensions(){},probe(){throw Error('must not probe');}});
+ assert.throws(()=>bridge.handle({action:'normal_sori48_pair_init',batchId:'SORI48-PAIR-ADMIT-CORRECTED-20261030',
+  edits:exactPairBodyEdits(),centralTaskId:central,runId:run,referenceIds:[...pairBodyIds,pairChild,policyId],repository:'sori',pr:48}),
+  /NORMAL_SORI48_PAIR_(?:PROVIDER_UNAVAILABLE|SCOPE)/);
+ assert.equal(fs.existsSync(b.file),false);
+});
+
+test('installed command binds the exact pair validator before any canonical mutation',t=>{
+ const f=liveBootstrapFixture(t),before=fs.readFileSync(path.join(f.root,'journal.json'),'utf8');
+ const phaseNames=['SORI48_UNKNOWN_CLOSURE_PROPOSAL.json','sori48_unknown_state.cjs','sori48_unknown_closure.cjs',
+  'sori48_unknown_runtime.cjs','sori48_unknown_evidence.cjs','sori48_unknown_sources.js','sori48_pair_provider.cjs','sori48_pair_metadata.cjs'];
+ f.installation.phaseProviders={};for(const name of phaseNames){const bytes=fs.readFileSync(path.join(__dirname,name));
+  fs.writeFileSync(path.join(f.dir,name),bytes,{mode:0o600});f.installation.phaseProviders[name]=sha(bytes);}
+ // A synthetic lock/core/probe isolates bootstrap routing; exact plan validation
+ // still runs the actual pinned pair provider, bridge and generated command.
+ fs.writeFileSync(path.join(f.runtime,'broker.cjs'),
+  'module.exports={Broker:class{constructor(){this.executor="bootstrap-executor";this.state={batches:{}};}assertLock(){}ownerProof(){}save(){throw Error("unexpected canonical write");}handle(){return {closed:true};}close(){}}};',{mode:0o600});
+ const probe='module.exports={probe:()=>({canonical:{exclusive:false,manifestHash:"'+'e'.repeat(64)+'"},brokerExecutor:"bootstrap-executor",journalHash:"'+'f'.repeat(64)+'"})};';
+ fs.writeFileSync(path.join(f.dir,'normal_projection_probe.cjs'),probe,{mode:0o600});f.installation.files['normal_projection_probe.cjs']=sha(probe);
+ const input={action:'normal_sori48_pair_init',batchId:'SORI48-PAIR-ADMIT-CORRECTED-20261030',edits:exactPairBodyEdits(),
+  centralTaskId:central,runId:run,referenceIds:[...pairBodyIds,pairChild,policyId],repository:'sori',pr:48};
+ const invalid=JSON.parse(JSON.stringify(input));invalid.edits[7].newStr='unapproved';
+ const commands=[{...invalid,requestId:'bad-plan'},{...input,requestId:'exact-plan'},{action:'close',requestId:'end'}];
+ const r=require('node:child_process').spawnSync('/bin/sh',['-c',factory('normal_live_command.js')(f.installation)],
+  {input:commands.map(q=>JSON.stringify(q)).join('\n')+'\n',encoding:'utf8',cwd:os.tmpdir()});
+ assert.equal(r.status,0,r.stderr);assert.match(r.stdout,/"requestId":"bad-plan","ok":false/);
+ assert.match(r.stdout,/SORI48_PAIR_PROVIDER_EXACT_PLAN/);assert.match(r.stdout,/"requestId":"exact-plan","ok":true/);
+ assert.equal(fs.readFileSync(path.join(f.root,'journal.json'),'utf8'),before);
+});

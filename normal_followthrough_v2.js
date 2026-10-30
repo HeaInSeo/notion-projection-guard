@@ -60,7 +60,7 @@
     }catch(error){failure=error;throw error;}
     finally{await close(client,failure);}
   }
-  async function pairMetadata(references){
+  async function pairMetadata(admission,references){
     references=copy(references);
     const required=['3f586e6dd1d181ebb43dd7de62aa2ca4','3f586e6dd1d181cd9f5bdcdab6290de7',
       '3f586e6dd1d181ddb9f3e7217f64bfcd','3b286e6dd1d1817aa093fca807659f07',
@@ -73,7 +73,8 @@
     const transport=config.createTransport(tools),client=createClient(transport);
     const runner=config.createLiveRunner(transport,{client,createWitness:config.createWitness,
       centralTaskId:config.centralTaskId,runId:config.runId,references,nativeExpectations:[],
-      sori48Metadata:true,witnessConfig:{...config.witnessConfig,sori48Metadata:true}});
+      sori48Metadata:true,bodyEdits:admission.edits,
+      witnessConfig:{...config.witnessConfig,sori48Metadata:true}});
     let failure=null;
     try{
       const result=await runner.runSori48Metadata('SORI48-PAIR-METADATA-CORRECTED-20261030');
@@ -87,7 +88,7 @@
   async applySori48Closure(references){return sori48(references,true);},
   async runSori48PairBody(admission,references){return pairBody(admission,references);},
   async runSori48PairReconciliation(admission,references){
-    const body=await pairBody(admission,references),native=await pairMetadata(references);
+    const body=await pairBody(admission,references),native=await pairMetadata(admission,references);
     return {status:'PAIR_RECONCILED',body,native};
   },
   async run(bundle,references){

@@ -45,7 +45,8 @@
     const checks=frozen.map((f,i)=>{
       const live=page(jobs[i].value,f.pageId),edit=c.edits.find(e=>e.pageId===f.pageId);
       const changed=edit?f.body.replace(edit.oldStr,()=>edit.newStr):f.body;
-      need(live.body===f.body||live.body===changed,'NORMAL_LIVE_BODY_CHANGED');
+      need(c.sori48Metadata===true?live.body===changed:live.body===f.body||live.body===changed,
+        'NORMAL_LIVE_BODY_CHANGED');
       const expected=c.nativeExpectations.find(n=>n.pageId===f.pageId);
       const propertiesMatch=c.sori48Metadata===true&&metadataRows.has(f.pageId)?
         stable(protectedMetadata(live.props))===stable(protectedMetadata(f.props)):
