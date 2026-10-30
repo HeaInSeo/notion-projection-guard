@@ -149,6 +149,7 @@
   }
   return {async checkSori48Closure(batchId){return closeSori48(batchId,false);},
   async applySori48Closure(batchId){return closeSori48(batchId,true);},
+  async runNpgSourceReview(batchId){return reconcileNpgSourceReview(batchId);},
   async runSori48Metadata(batchId){return reconcileSori48Metadata(batchId);},
   async run(batchId,edits){
     edits=copy(edits);let live=null,failure=null;const receipts=[];

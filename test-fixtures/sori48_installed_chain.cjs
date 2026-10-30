@@ -12,6 +12,7 @@ const BODY_IDS=['3f586e6dd1d181ebb43dd7de62aa2ca4','3f586e6dd1d181cd9f5bdcdab629
  '3ed86e6dd1d18118b0b8d98bb91892fb','3b286e6dd1d1811d9308d9a2b56c9de4'];
 const CHILD='40786e6dd1d181ec8addcd1269f9b0bb',WIP='3b286e6dd1d18194866dd8d7a28c7ab4';
 const ROWS=require('../sori48_pair_metadata.cjs').ROWS;
+const SOURCE_REVIEW=require('../npg_source_review_provider.cjs'),REVIEW_ROW=SOURCE_REVIEW.REVIEW_ROW;
 const headings=['## CURRENT · 마지막 중앙 관측 · QSYNC-20261010T145034Z-v6 · W02.A KEEP_GATED ON W01.3',
  '## CURRENT · 마지막 중앙 관측 · QSYNC-20261010T145034Z-v6 · W02.A REVIEW KEEP_GATED',
  '## CURRENT CENTRAL OBSERVATION · NPR-20261012 · sori_index',
@@ -83,7 +84,7 @@ const headings=['## CURRENT · 마지막 중앙 관측 · QSYNC-20261010T145034Z
   corrected=require('../sori48_pair_provider.cjs').CORRECTED_TEXT;
  const edits=BODY_IDS.map((pageId,i)=>({pageId,heading:headings[i],oldStr:i<3?prior:'Sori retains its separate gates.',
   newStr:corrected}));
- const policy={productionEnabled:true,productionPages:[...new Set([...BODY_IDS,...ROWS.map(r=>r[0])])],
+ const policy={productionEnabled:true,productionPages:[...new Set([...BODY_IDS,...ROWS.map(r=>r[0]),REVIEW_ROW])],
   canaryPages:[],headingPrefixes:['## CURRENT CENTRAL OBSERVATION','## CURRENT INCIDENT MAINTENANCE'],
   centralSections:edits.slice(0,2).map(e=>({pageId:e.pageId,heading:e.heading}))};
  fs.writeFileSync(path.join(runtime,'policy.json'),JSON.stringify(policy),{mode:0o600});
@@ -102,6 +103,15 @@ const headings=['## CURRENT · 마지막 중앙 관측 · QSYNC-20261010T145034Z
    '\n'+edit.heading+'\n'+edit.oldStr+'\n## AFTER\nprotected\n</content>');}
  pages[WIP]={structuredContent:{id:WIP,page_last_edited_at:'2026-10-30T00:00:00Z',
   text:'<properties>\n{"title":"policy"}\n</properties>\n<content>\npolicy\n</content>'}};
+ const reviewEvent={event_id:SOURCE_REVIEW.PRIOR_EVENT,task_id:SOURCE_REVIEW.PRIOR_TASK,
+  phase:'PR23-r3-D1-delta-review',role:'guardrail',session_id:'old-review',version:22,kind:'RELEASE',
+  event_at_utc:'2026-10-29T11:13:45Z',repo_pr:'HeaInSeo/notion-projection-guard#23',
+  head_or_digest:'441624c4',lease_state:'RELEASED'};
+ const reviewProps={'이벤트 ID':reviewEvent.event_id,'체크포인트 버전':22,'작업 ID':reviewEvent.task_id,
+  '작업 상태':'종료','다음 담당자':'없음','큐 구획':'완료 이력','세션 ID':'old-review','Authority Gate':'READY'};
+ pages[REVIEW_ROW]={structuredContent:{id:REVIEW_ROW,page_last_edited_at:'2026-10-30T00:00:00Z',
+  text:'<properties>\n'+JSON.stringify(reviewProps)+'\n</properties>\n<content>\n## GUARDRAIL QUEUE EVENT (current)\nQUEUE_EVENT_V1 '+
+   JSON.stringify(reviewEvent)+'\n\n## HISTORY\npreserved\n</content>'}};
  const children=new Map(),starts=[],waitLine=(record,predicate)=>new Promise((resolve,reject)=>{
   const found=record.lines.find(predicate);if(found)return resolve(found);
   const timer=setTimeout(()=>reject(Error('installed command timeout: '+record.stderr)),5000);
@@ -141,8 +151,19 @@ const headings=['## CURRENT · 마지막 중앙 관측 · QSYNC-20261010T145034Z
    batchId:'SORI48-PAIR-ADMIT-20261029',classification:'CLEAR_OBSERVATION_ONLY',freshSourcesComplete:true,
    applyAuthorized:false,attributableTerminalResult:null})})});
  const refs=[...BODY_IDS,CHILD,WIP].map(pageId=>({pageId,page:clone(pages[pageId])}));
+ const sourceObservation={schema:'NPG_SOURCE_REVIEW_OBSERVATION_V1',
+  repository:'HeaInSeo/notion-projection-guard',pr:24,head,base:'c'.repeat(40),
+  observedAt:new Date().toISOString(),applyAuthorized:false,sourceOwnerState:'RELEASED',
+  canonical:{active:null,journalSha256:'0699a8ae84284cf96632fa47cd4fa4f10d51f32c5136b9229a2ae22bbf729c4f'},
+  reviewRow:clone(pages[REVIEW_ROW]),
+  github:{structuredContent:{number:24,state:'open',merged:false,head_sha:head,base_sha:'c'.repeat(40)}},
+  checks:{structuredContent:{total_count:4,check_runs:[1,2,3,4].map(id=>
+   ({id,head_sha:head,status:'completed',conclusion:'success'}))}}};
+ const sourceReviewAdmission=SOURCE_REVIEW.createProvider().plan(sourceObservation);
+ const sourceReviewRefs=[REVIEW_ROW,WIP,BODY_IDS[5],BODY_IDS[4]].map(pageId=>
+  ({pageId,page:clone(pages[pageId])}));
  const admission={schema:'SORI48_CORRECTED_HEAD_PAIR_PROJECTION_V1',observationId:BODY_BATCH,
   applyAuthorized:false,requiresCanonicalClosure:true,metadataReconciliationRequired:true,edits};
- return {entry,admission,refs,root,starts,get writes(){return writes;}};
+ return {entry,admission,refs,sourceReviewAdmission,sourceReviewRefs,root,starts,get writes(){return writes;}};
 }
 module.exports={createFixture,BATCH};

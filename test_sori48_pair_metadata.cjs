@@ -356,3 +356,25 @@ for(const lose of [false,true])test('generated installed command restarts across
  const state=JSON.parse(fs.readFileSync(path.join(f.root,'journal.json')));
  assert.deepEqual(state.keepOriginalUnknown,{next:3,receipts:[1,2,3],outcome:'UNKNOWN'});
 });
+
+for(const lose of [false,true])test('generated installed command '+(lose?
+ 'preserves an uncertain source-review result without replay':'completes the exact source-review admission'),async t=>{
+ const helper=require('./test-fixtures/sori48_installed_chain.cjs');
+ const source=require('./npg_source_review_provider.cjs'),f=await helper.createFixture(t,lose);
+ if(lose){
+  await assert.rejects(()=>f.entry.runNpgSourceReview(f.sourceReviewAdmission,f.sourceReviewRefs),
+   /LOST_INSTALLED_NATIVE_REPLY/);
+  let state=JSON.parse(fs.readFileSync(path.join(f.root,'journal.json')));
+  assert.equal(state.batches[source.BATCH].status,'WRITE_PENDING');
+  await assert.rejects(()=>f.entry.runNpgSourceReview(f.sourceReviewAdmission,f.sourceReviewRefs),
+   /NORMAL_NPG_SOURCE_REVIEW_UNRESOLVED: WRITE_PENDING/);
+  assert.equal(f.writes,1);
+ }else{
+  const result=await f.entry.runNpgSourceReview(f.sourceReviewAdmission,f.sourceReviewRefs);
+  assert.equal(result.status,'COMPLETED');assert.equal(result.requestedOnly,true);
+  assert.equal(result.workerProofChanged,false);assert.equal(f.writes,1);
+ }
+ assert.ok(new Set(f.starts).size>=1);
+ const state=JSON.parse(fs.readFileSync(path.join(f.root,'journal.json')));
+ assert.deepEqual(state.keepOriginalUnknown,{next:3,receipts:[1,2,3],outcome:'UNKNOWN'});
+});
