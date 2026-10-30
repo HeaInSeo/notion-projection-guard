@@ -49,7 +49,9 @@
       if(n.endsWith('.json'))return phaseCache[n]=JSON.parse(data[n]);
       const m={exports:{}},localRequire=id=>id.startsWith('./')?loadPhase(path.basename(id)):require(id);
       new Function('require','module','exports','__dirname',data[n])(localRequire,m,m.exports,c.extensionDirectory);return phaseCache[n]=m.exports;};
-    const probe=load('normal_projection_probe.cjs').probe;
+    const baseProbe=load('normal_projection_probe.cjs').probe;
+    let closureRuntime;
+    const probe=args=>baseProbe({...args,inspectClosedUnknown:()=>closureRuntime?.inspectCommitted()});
     const reconcile=load('reconcile_unpermitted_dispatch.cjs').createReconciler({...core,runtime:c.runtime});
     const unsent=load('normal_unsent.cjs'),restoreUnsent=unsent.createUnsent(core),resumePrepared=unsent.createPreparedResumer(core),
       resumeUnprepared=unsent.createUnpreparedResumer(core);
@@ -60,12 +62,13 @@
     const continueApprovedControl=control.createUserCase({...core,runtime:c.runtime});
     let sori48ClosureCheck;
     if(c.phaseProviders){
-      const runtime=loadPhase('sori48_unknown_runtime.cjs').createRuntime({root:c.root});
+      const runtime=loadPhase('sori48_unknown_runtime.cjs').createRuntime({root:c.root,getBroker:()=>b});
+      closureRuntime=runtime;
       const provider=loadPhase('sori48_unknown_closure.cjs').createProvider(runtime);
       const collectRetention=loadPhase('sori48_unknown_evidence.cjs').createCollector({
         root:c.root,runtime:c.runtime,caseModuleHash:c.caseModuleHash});
       const approvalPath=path.join(c.root,'manual-audits','sori48-closure-20261029','USER_APPROVAL.json');
-      sori48ClosureCheck=input=>provider({...input,...collectRetention(),
+      sori48ClosureCheck=input=>provider({...input,...(runtime.inspectCommitted()?{}:collectRetention()),
         approvalBytes:trusted(approvalPath).toString('utf8'),
         beforeBytes:trusted(path.join(c.root,'journal.json')).toString('utf8')});
     }

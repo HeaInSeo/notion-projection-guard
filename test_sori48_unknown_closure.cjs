@@ -18,13 +18,14 @@ function fixture(){
   let stateSource=fs.readFileSync(path.join(__dirname,'sori48_unknown_state.cjs'),'utf8');
   stateSource=stateSource.replace(realState.PROPOSAL_SHA256,proposalHash);
   const sm={exports:{}},stateRequire=id=>id==='node:fs'?{readFileSync:()=>proposalBytes}:nativeRequire(id);
-  vm.runInNewContext(stateSource,{require:stateRequire,module:sm,__dirname});
   const approval={schema:'SORI48_EXACT_CLOSURE_USER_DECISION_V1',status:'APPROVED',
     proposalSha256:proposalHash,batchId:proposal.batchId,journalSha256:proposal.journalSha256,
     preservesOriginalUncertainty:true,acceptsLateOriginalPayloadApplicationRisk:true,
     normalSourceGatesRequired:true,noSendReplayAckOrWorkerProofRewrite:true,
     otherCasesAuthorized:false,applied:false};
   const approvalBytes=JSON.stringify(approval),approvalHash=sha(approvalBytes);
+  stateSource=stateSource.replace(realState.APPROVAL_SHA256,approvalHash);
+  vm.runInNewContext(stateSource,{require:stateRequire,module:sm,__dirname});
   let closureSource=fs.readFileSync(path.join(__dirname,'sori48_unknown_closure.cjs'),'utf8');
   closureSource=closureSource.replace(realClosure.APPROVAL_SHA256,approvalHash)
     .replace(realClosure.CORRECTED_HEAD,'c'.repeat(40));
@@ -48,7 +49,7 @@ function fixture(){
       attributableTerminalResult:null,freshSourcesComplete:true,
       targets:proposal.observedUnwrittenTargets.targets.map(t=>({pageId:t.pageId,readOk:true,
         oldLiteralCount:1,plannedLiteralCount:0}))}};
-  return {closure:cm.exports,proposal,input};
+  return {closure:cm.exports,state:sm.exports,proposal,input};
 }
 function deps(proposal){
   const calls={audit:0,write:0};
@@ -97,4 +98,56 @@ test('a durable audit hash for different contents refuses canonical mutation',as
 test('readback mismatch fails closed after one attempted atomic write',async()=>{
   const f=fixture(),d=deps(f.proposal);d.atomicWrite=async()=>'{"bad":true}';f.input.apply=true;
   await assert.rejects(()=>f.closure.createProvider(d)(f.input),/ATOMIC_READBACK/);
+});
+function durableFixture(t){
+  const f=fixture(),os=require('node:os'),root=fs.mkdtempSync(path.join(os.tmpdir(),'sori48-commit-'));
+  fs.chmodSync(root,0o700);fs.mkdirSync(path.join(root,'manual-audits'),{mode:0o700});
+  t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  const file=path.join(root,'journal.json'),executor='actual-test-executor';
+  fs.writeFileSync(file,f.input.beforeBytes,{mode:0o600});
+  fs.writeFileSync(path.join(root,'broker.lock'),JSON.stringify({pid:process.pid,executor}),{mode:0o600});
+  const nativeRequire=createRequire(__filename),m={exports:{}};
+  const req=id=>id==='./sori48_unknown_state.cjs'?f.state:nativeRequire(id);
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname,'sori48_unknown_runtime.cjs'),'utf8'),
+    {require:req,module:m,process,Buffer});
+  let broker;
+  const restart=()=>{
+    broker={root,file,executor,state:JSON.parse(fs.readFileSync(file,'utf8')),assertLock(){
+      const lock=JSON.parse(fs.readFileSync(path.join(root,'broker.lock'),'utf8'));
+      assert.equal(lock.pid,process.pid);assert.equal(lock.executor,executor);
+    }};
+    return m.exports.createRuntime({root,getBroker:()=>broker});
+  };
+  return {...f,root,file,restart};
+}
+test('a fresh process recognizes an audited commit without a second write or capacity claim',async t=>{
+  const f=durableFixture(t);f.input.apply=true;const first=await f.closure.createProvider(f.restart())(f.input);
+  const bytes=fs.readFileSync(f.file,'utf8');assert.equal(first.applied,true);
+  f.input.owner.runId='next-genuine-test-run';const again=await f.closure.createProvider(f.restart())(f.input);
+  assert.equal(again.alreadyApplied,true);assert.equal(again.applied,false);assert.equal(again.capacityReleased,false);
+  assert.equal(again.originalOutcome,'UNKNOWN');assert.equal(again.lateObservationRequired,true);
+  assert.equal(fs.readFileSync(f.file,'utf8'),bytes);
+});
+test('lost response after rename is reconciled from full audit and never replayed',async t=>{
+  const f=durableFixture(t);f.input.apply=true;const rename=fs.renameSync;let writes=0;
+  fs.renameSync=(from,to)=>{const out=rename(from,to);if(to===f.file){writes++;throw Error('synthetic reply lost after rename');}return out;};
+  try{await assert.rejects(()=>f.closure.createProvider(f.restart())(f.input),/reply lost/);}
+  finally{fs.renameSync=rename;}
+  const before=fs.readFileSync(f.file,'utf8'),result=await f.closure.createProvider(f.restart())(f.input);
+  assert.equal(result.alreadyApplied,true);assert.equal(writes,1);assert.equal(fs.readFileSync(f.file,'utf8'),before);
+});
+test('failure before rename preserves canonical bytes and reuses the durable audit on restart',async t=>{
+  const f=durableFixture(t);f.input.apply=true;const rename=fs.renameSync;
+  fs.renameSync=(from,to)=>{if(to===f.file)throw Error('synthetic pre-rename failure');return rename(from,to);};
+  try{await assert.rejects(()=>f.closure.createProvider(f.restart())(f.input),/pre-rename failure/);}
+  finally{fs.renameSync=rename;}
+  assert.equal(fs.readFileSync(f.file,'utf8'),f.input.beforeBytes);
+  const dir=path.join(f.root,'manual-audits/sori48-closure-20261029'),files=fs.readdirSync(dir);
+  assert.equal((await f.closure.createProvider(f.restart())(f.input)).applied,true);
+  assert.deepEqual(fs.readdirSync(dir),files);
+});
+test('changed closed-case receipt or audit cannot be accepted by a status consumer',async t=>{
+  const f=durableFixture(t);f.input.apply=true;await f.closure.createProvider(f.restart())(f.input);
+  const saved=JSON.parse(fs.readFileSync(f.file,'utf8'));saved.batches[f.proposal.batchId].receipt.ticket='changed';
+  fs.writeFileSync(f.file,JSON.stringify(saved));assert.throws(()=>f.restart().inspectCommitted());
 });

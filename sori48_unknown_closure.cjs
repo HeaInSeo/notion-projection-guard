@@ -65,6 +65,13 @@ function createProvider(deps){
     typeof deps.atomicWrite==='function','DEPENDENCIES');
   return async function close(input){
     return deps.withLock(async()=>{
+      if(typeof deps.inspectCommitted==='function'){
+        need(input?.owner?.actor===OWNER&&typeof input.owner.runId==='string'&&input.owner.runId&&
+          /^[a-f0-9]{64}$/.test(input.owner.scheduledProofSha256??''),'OWNER');
+        approval(input.approvalBytes);
+        const committed=deps.inspectCommitted();
+        if(committed)return {eligible:false,applied:false,alreadyApplied:true,...committed};
+      }
       const checked=preflight(input);
       if(input.apply!==true)return {eligible:true,applied:false,status:state.STATUS,
         originalOutcome:'UNKNOWN',lateObservationRequired:true};

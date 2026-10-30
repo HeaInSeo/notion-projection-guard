@@ -5,6 +5,7 @@ const crypto=require('node:crypto');
 const proposalBytes=require('node:fs').readFileSync(require('node:path').join(__dirname,'SORI48_UNKNOWN_CLOSURE_PROPOSAL.json'),'utf8');
 const sha=x=>crypto.createHash('sha256').update(x).digest('hex');
 const PROPOSAL_SHA256='80db66552466f19b9d5e98f92bad3accd51c7f860b66856d0b393745d8a0d5e6';
+const APPROVAL_SHA256='e49c5672be2872c8c13a36ed9e762668b3cf4353b20b914714620c79e0732a0f';
 if(sha(proposalBytes)!==PROPOSAL_SHA256)throw Error('SORI48_PROPOSAL_PIN');
 const spec=JSON.parse(proposalBytes),STATUS='CLOSED_SUPERSEDED_UNKNOWN';
 const need=(ok,why)=>{if(!ok)throw Error('SORI48_'+why);};
@@ -45,6 +46,25 @@ function classify(status){
     cleanTermination:false,productAccepted:false,capacityReleased:false,
     replayAllowed:false,ackAllowed:false};
 }
+function inspectPersisted(current,auditBytes){
+  const audit=JSON.parse(auditBytes),batch=current.batches?.[spec.batchId],d=batch?.supersededUnknownDisposition;
+  need(batch?.status===STATUS&&current.active!==spec.batchId&&
+    audit.schema==='SORI48_SUPERSEDED_UNKNOWN_PRIVATE_AUDIT_V1'&&audit.batchId===spec.batchId&&
+    audit.proposalSha256===PROPOSAL_SHA256&&sha(auditBytes)===d?.privateAuditSha256&&
+    audit.approvalSha256===APPROVAL_SHA256&&audit.approvalSha256===d.approvalSha256&&
+    sha(audit.approvalBytes??'')===d.approvalSha256,
+    'PERSISTED_AUDIT');
+  const approval=JSON.parse(audit.approvalBytes),input=JSON.parse(audit.inputBytes);
+  need(approval.schema==='SORI48_EXACT_CLOSURE_USER_DECISION_V1'&&approval.status==='APPROVED'&&
+    approval.batchId===spec.batchId&&approval.proposalSha256===PROPOSAL_SHA256&&
+    input.beforeBytes===audit.journalBeforeBytes&&input.approvalBytes===audit.approvalBytes&&
+    same(input.owner,audit.owner),'PERSISTED_INPUT');
+  const transition=JSON.parse(audit.journalBeforeBytes);
+  transition.active=null;transition.batches[spec.batchId]=batch;
+  inspectTransition(audit.journalBeforeBytes,JSON.stringify(transition));
+  return {valid:true,batchId:spec.batchId,...classify(STATUS),privateAuditSha256:sha(auditBytes),
+    originalOutcome:'UNKNOWN',applyAuthorized:false};
+}
 function inspectLateObservation(input){
   need(input?.batchId===spec.batchId&&input.ticket===spec.ticket&&
     input.dispatchId===spec.dispatchId,'LATE_SCOPE');
@@ -63,7 +83,7 @@ function inspectLateObservation(input){
     if(observed.readOk!==true){unknown=true;continue;}
     need(Number.isSafeInteger(observed.oldLiteralCount)&&Number.isSafeInteger(observed.plannedLiteralCount)&&
       observed.oldLiteralCount>=0&&observed.plannedLiteralCount>=0,'LATE_COUNTS');
-    if(observed.plannedLiteralCount>0)drift=true;
+    if(observed.plannedLiteralCount>0||observed.staleCurrentAdmissionCandidate===true)drift=true;
   }
   if(input.freshSourcesComplete!==true)unknown=true;
   if(drift)return {classification:'DRIFT',stopAffectedActions:true,
@@ -73,4 +93,4 @@ function inspectLateObservation(input){
   return {classification:'CLEAR_OBSERVATION_ONLY',stopAffectedActions:false,
     lateObservationRequired:true,originalOutcome:'UNKNOWN'};
 }
-module.exports={inspectTransition,classify,inspectLateObservation,STATUS,PROPOSAL_SHA256};
+module.exports={inspectTransition,inspectPersisted,classify,inspectLateObservation,STATUS,PROPOSAL_SHA256,APPROVAL_SHA256};
