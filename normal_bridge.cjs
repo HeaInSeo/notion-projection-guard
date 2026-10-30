@@ -5,6 +5,13 @@ const fs=require('node:fs'),crypto=require('node:crypto');
 const hash=x=>crypto.createHash('sha256').update(x).digest('hex');
 const copy=x=>JSON.parse(JSON.stringify(x));
 const need=(v,c)=>{if(!v)throw Error(c);};
+const SORI48_PAIR_BODY_BATCH='SORI48-PAIR-ADMIT-CORRECTED-20261030';
+const SORI48_PAIR_BODY_IDS=['3f586e6dd1d181ebb43dd7de62aa2ca4','3f586e6dd1d181cd9f5bdcdab6290de7',
+  '3f586e6dd1d181ddb9f3e7217f64bfcd','3b286e6dd1d1817aa093fca807659f07',
+  '3b286e6dd1d181f2a75cfbd3885071c4','3bf86e6dd1d18110938bc358e17c779e',
+  '3ed86e6dd1d18118b0b8d98bb91892fb','3b286e6dd1d1811d9308d9a2b56c9de4'];
+const SORI48_PAIR_REFERENCE_IDS=[...SORI48_PAIR_BODY_IDS,'40786e6dd1d181ec8addcd1269f9b0bb',
+  '3b286e6dd1d18194866dd8d7a28c7ab4'];
 function createBridge({broker,probe,installation,reconcileUnpermitted,reconcilePermitExpiry,restoreUnsent,resumePrepared,resumeUnprepared,verifyExtensions,validateControlInit,assessControlPermit,continueApprovedControl,sori48ClosureCheck}){
   let init=null,staged=null,closed=false,noCall=null;
   const check=()=>{
@@ -55,7 +62,7 @@ function createBridge({broker,probe,installation,reconcileUnpermitted,reconcileP
   return {handle(input){
     need(!closed,'NORMAL_BRIDGE_CLOSED');
     if(input.action==='close'){closed=true;staged=null;return broker.handle({action:'close'});}
-    if(input.action==='normal_init'||input.action==='normal_control_init'||input.action==='normal_sori48_closure_init'){
+    if(['normal_init','normal_control_init','normal_sori48_closure_init','normal_sori48_pair_init'].includes(input.action)){
       need(!init&&!staged&&/^[a-f0-9]{32}$/.test(input.centralTaskId??'')&&typeof input.runId==='string'&&
         /^[A-Za-z0-9-]{1,100}$/.test(input.batchId??'')&&Array.isArray(input.edits)&&
         (input.action==='normal_sori48_closure_init'?input.edits.length===0:input.edits.length>0)&&
@@ -64,8 +71,16 @@ function createBridge({broker,probe,installation,reconcileUnpermitted,reconcileP
         input.referenceIds.every(id=>/^[a-f0-9]{32}$/.test(id))&&
         input.referenceIds.includes('3bf86e6dd1d18110938bc358e17c779e')&&
         input.referenceIds.includes('3b286e6dd1d18194866dd8d7a28c7ab4'),'NORMAL_INIT');
-      const control=input.action==='normal_control_init',closure=input.action==='normal_sori48_closure_init';
-      if(closure){
+      const control=input.action==='normal_control_init',closure=input.action==='normal_sori48_closure_init',
+        sori48Pair=input.action==='normal_sori48_pair_init';
+      if(sori48Pair){
+        need(input.batchId===SORI48_PAIR_BODY_BATCH&&input.repository==='sori'&&input.pr===48&&
+          input.edits.length===SORI48_PAIR_BODY_IDS.length&&
+          JSON.stringify(input.edits.map(e=>e.pageId))===JSON.stringify(SORI48_PAIR_BODY_IDS)&&
+          input.referenceIds.length===SORI48_PAIR_REFERENCE_IDS.length&&
+          SORI48_PAIR_REFERENCE_IDS.every(id=>input.referenceIds.includes(id)),
+          'NORMAL_SORI48_PAIR_SCOPE');
+      }else if(closure){
         need(input.batchId==='SORI48-PAIR-ADMIT-20261029'&&typeof sori48ClosureCheck==='function',
           'NORMAL_SORI48_CLOSURE_UNAVAILABLE');
       }else if(control){
@@ -77,7 +92,8 @@ function createBridge({broker,probe,installation,reconcileUnpermitted,reconcileP
         'NORMAL_ADOPTED_SCOPE');
       init={batchId:input.batchId,centralTaskId:input.centralTaskId,runId:input.runId,
         referenceIds:copy(input.referenceIds),edits:copy(input.edits),planHash:hash(JSON.stringify(input.edits)),
-        referenceToken:crypto.randomUUID(),...(control?{controlInput:copy(input)}:{}),...(closure?{closure:true}:{})};
+        referenceToken:crypto.randomUUID(),...(control?{controlInput:copy(input)}:{}),
+        ...(closure?{closure:true}:{}),...(sori48Pair?{sori48Pair:true}:{})};
       try{check();return {referenceToken:init.referenceToken,planHash:init.planHash,executor:broker.executor,
         continuation:broker.state.batches[init.batchId]?.dispatch?.phase??null};}
       catch(e){init=null;throw e;}

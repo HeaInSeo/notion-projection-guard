@@ -40,14 +40,17 @@
       admission.metadataReconciliationRequired===true&&Array.isArray(admission.edits)&&
       admission.edits.length===8&&new Set(admission.edits.map(e=>e.pageId)).size===8,
       'NORMAL_SORI48_PAIR_PLAN');
-    const ids=admission.edits.map(e=>e.pageId);
-    need(Array.isArray(references)&&references.length===8&&
-      new Set(references.map(r=>r.pageId)).size===8&&ids.every(id=>references.some(r=>r.pageId===id)),
+    const ids=admission.edits.map(e=>e.pageId),requiredReferences=[...ids,
+      '40786e6dd1d181ec8addcd1269f9b0bb','3b286e6dd1d18194866dd8d7a28c7ab4'];
+    need(admission.observationId==='SORI48-PAIR-ADMIT-CORRECTED-20261030'&&
+      Array.isArray(references)&&references.length===requiredReferences.length&&
+      new Set(references.map(r=>r.pageId)).size===requiredReferences.length&&
+      requiredReferences.every(id=>references.some(r=>r.pageId===id)),
       'NORMAL_SORI48_PAIR_REFERENCES');
     const transport=config.createTransport(tools),client=createClient(transport);
     const runner=config.createLiveRunner(transport,{client,createWitness:config.createWitness,
       centralTaskId:config.centralTaskId,runId:config.runId,references,nativeExpectations:[],
-      binding:{repository:'sori',source:{pr:48}},witnessConfig:config.witnessConfig});
+      sori48Pair:true,binding:{repository:'sori',source:{pr:48}},witnessConfig:config.witnessConfig});
     let failure=null;
     try{
       const result=await runner.run(admission.observationId,admission.edits);

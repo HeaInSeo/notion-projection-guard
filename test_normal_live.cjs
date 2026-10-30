@@ -5,6 +5,11 @@ const core=require('./broker.cjs'),{createBridge}=require('./normal_bridge.cjs')
 const sha=x=>crypto.createHash('sha256').update(x).digest('hex');
 const factory=(n,sandbox={})=>vm.runInNewContext(fs.readFileSync(path.join(__dirname,n),'utf8'),sandbox);
 const A='a'.repeat(32),router='3bf86e6dd1d18110938bc358e17c779e',policyId='3b286e6dd1d18194866dd8d7a28c7ab4';
+const pairBodyIds=['3f586e6dd1d181ebb43dd7de62aa2ca4','3f586e6dd1d181cd9f5bdcdab6290de7',
+ '3f586e6dd1d181ddb9f3e7217f64bfcd','3b286e6dd1d1817aa093fca807659f07',
+ '3b286e6dd1d181f2a75cfbd3885071c4',router,'3ed86e6dd1d18118b0b8d98bb91892fb',
+ '3b286e6dd1d1811d9308d9a2b56c9de4'];
+const pairChild='40786e6dd1d181ec8addcd1269f9b0bb';
 const batchId='NODEKIT149-LANDED-20261028',central='1'.repeat(32),run='test-actual-run';
 const edit={pageId:A,heading:'## CURRENT CENTRAL OBSERVATION · test',oldStr:'state=BEFORE',newStr:'state=AFTER'};
 const policy={productionEnabled:true,productionPages:[A],canaryPages:[],headingPrefixes:['## CURRENT CENTRAL OBSERVATION']};
@@ -282,7 +287,7 @@ test('normal followthrough binds scheduler evidence into the closure runner',asy
  assert.equal(typeof seen.witnessConfig.createSori48SourceCollector,'function');
 });
 test('normal followthrough opens a separate exact eight-target Sori48 pair body transaction',async()=>{
- const ids=Array.from({length:8},(_,i)=>(i+1).toString(16).padStart(32,'0'));
+ const ids=pairBodyIds;
  const edits=ids.map((pageId,i)=>({pageId,heading:'## H'+i,oldStr:'old'+i,newStr:'new'+i}));
  const plan={schema:'SORI48_CORRECTED_HEAD_PAIR_PROJECTION_V1',
   observationId:'SORI48-PAIR-ADMIT-CORRECTED-20261030',applyAuthorized:false,
@@ -297,12 +302,13 @@ test('normal followthrough opens a separate exact eight-target Sori48 pair body 
   createWitness(){},createLandedProjection(){},createCommand:()=> 'command',
   centralTaskId:central,runId:run,installation:{}
  });
- const references=ids.map(pageId=>({pageId,page:{complete:true}}));
+ const references=[...ids,pairChild,policyId].map(pageId=>({pageId,page:{complete:true}}));
  const result=await ordinary.runSori48PairBody(plan,references);
  assert.equal(result.status,'BODY_COMPLETE');assert.equal(result.bodyTargets,8);
  assert.equal(transports,1);assert.equal(closed,1);
  assert.equal(JSON.stringify(seen.binding),JSON.stringify({repository:'sori',source:{pr:48}}));
  assert.equal(JSON.stringify(seen.nativeExpectations),'[]');assert.equal(seen.sori48Closure,undefined);
+ assert.equal(seen.sori48Pair,true);
  await assert.rejects(()=>ordinary.runSori48PairBody(plan,references.slice(1)),/NORMAL_SORI48_PAIR_REFERENCES/);
  assert.equal(transports,1);
 });
@@ -321,6 +327,34 @@ test('normal followthrough refuses caller-authorized or incomplete Sori48 pair b
  await assert.rejects(()=>ordinary.runSori48PairBody({...base,applyAuthorized:true},refs),/NORMAL_SORI48_PAIR_PLAN/);
  await assert.rejects(()=>ordinary.runSori48PairBody({...base,edits:base.edits.slice(1)},refs),/NORMAL_SORI48_PAIR_PLAN/);
  assert.equal(starts,0);
+});
+test('Sori48 pair live runner selects the exact pair initializer',async()=>{
+ const calls=[];let closed=0;
+ const client={broker:async q=>{calls.push(q);
+   if(q.action==='normal_sori48_pair_init')return {referenceToken:'bound-token'};
+   if(q.action==='validate_batch')return {status:'COMPLETED',next:8};
+   throw Error('unexpected '+q.action);},sendOnce(){},recoverPreCall(){},consumeSourceExpiry(){return false;},
+   async close(){closed++;}};
+ const references=[...pairBodyIds,pairChild,policyId].map(pageId=>({pageId}));
+ const edits=pairBodyIds.map((pageId,i)=>({pageId,heading:'H'+i,oldStr:'o'+i,newStr:'n'+i}));
+ const runner=factory('normal_live_runner.js')({}, {client,centralTaskId:central,runId:run,references,
+   nativeExpectations:[],sori48Pair:true,binding:{repository:'sori',source:{pr:48}},
+   createWitness:()=>async()=>({observed:true})});
+ const result=await runner.run('SORI48-PAIR-ADMIT-CORRECTED-20261030',edits);
+ assert.equal(result.alreadyConsumed,true);assert.equal(closed,1);
+ assert.equal(calls[0].action,'normal_sori48_pair_init');assert.deepEqual(calls[0].referenceIds,references.map(r=>r.pageId));
+});
+test('Sori48 pair bridge requires the exact body order plus child and WIP references',t=>{
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'normal-sori48-pair-')),b=new core.Broker(root,policy);
+ t.after(()=>{b.close();fs.rmSync(root,{recursive:true,force:true});});
+ const bridge=createBridge({broker:b,installation:{root},verifyExtensions(){},
+  probe(){return {canonical:{exclusive:false,manifestHash:'e'.repeat(64)},brokerExecutor:b.executor,journalHash:'f'.repeat(64)};}});
+ const edits=pairBodyIds.map((pageId,i)=>({pageId,heading:'H'+i,oldStr:'o'+i,newStr:'n'+i}));
+ const input={action:'normal_sori48_pair_init',batchId:'SORI48-PAIR-ADMIT-CORRECTED-20261030',
+  edits,centralTaskId:central,runId:run,referenceIds:[...pairBodyIds,pairChild,policyId],repository:'sori',pr:48};
+ assert.throws(()=>bridge.handle({...input,referenceIds:input.referenceIds.slice(0,-1)}),/NORMAL_INIT/);
+ const initialized=bridge.handle(input);assert.equal(initialized.executor,b.executor);assert.match(initialized.referenceToken,/./);
+ assert.equal(fs.existsSync(b.file),false);
 });
 test('Sori48 live runner executes one check-only staged operation',async()=>{
  const calls=[];let closed=0,witnessConfig;

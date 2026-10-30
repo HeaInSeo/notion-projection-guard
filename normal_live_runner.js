@@ -20,8 +20,10 @@
   let witness,initialized=false;
   async function init(batchId,edits){
     if(initialized)throw Error('NORMAL_RUNNER_SINGLE_USE');initialized=true;
-    const control=config.controlAdmissionId!==undefined,closure=config.sori48Closure===true;
-    const r=await rpc({action:control?'normal_control_init':closure?'normal_sori48_closure_init':'normal_init',
+    const control=config.controlAdmissionId!==undefined,closure=config.sori48Closure===true,
+      sori48Pair=config.sori48Pair===true;
+    const r=await rpc({action:control?'normal_control_init':closure?'normal_sori48_closure_init':
+      sori48Pair?'normal_sori48_pair_init':'normal_init',
       batchId,edits,centralTaskId:config.centralTaskId,runId:config.runId,
       referenceIds:config.references.map(r=>r.pageId),
       ...(control?{controlAdmissionId:config.controlAdmissionId}:closure?{}:
