@@ -270,6 +270,25 @@ test('Sori48 live witness binds one captured fresh collector result',async()=>{
  assert.equal(collections,1);assert.equal(JSON.stringify(result.sori48Observation),JSON.stringify(observation));
  assert.equal(result.central.schedulerEvidenceSha256,'d'.repeat(64));
 });
+test('Sori48 metadata witness permits only central metadata changes',async()=>{
+ const ids=[...pairBodyIds,pairChild,policyId],metadataRows=new Set([pairBodyIds[0],pairChild,pairBodyIds[1]]);
+ const make=(id,props={title:'source','작업 상태':'실행재개'})=>({structuredContent:{id,
+  page_last_edited_at:'2026-10-30T00:00:00Z',text:'<properties>\n'+JSON.stringify(props)+
+   '\n</properties>\n<content>\nsource\n</content>'}});
+ const frozen=Object.fromEntries(ids.map(id=>[id,make(id)])),live=Object.fromEntries(ids.map(id=>[id,make(id)]));
+ live[pairBodyIds[0]]=make(pairBodyIds[0],{title:'source','작업 상태':'검증대기'});
+ const tools={mcp__codex_apps__notion_fetch:async({id})=>live[id],
+  mcp__codex_apps__automations_peek:async()=>({structuredContent:{automations:[{id:central,is_enabled:true,
+   run_details:{last_run:{id:run,recorded_status:'in_progress'}}}]}})};
+ const witness=factory('normal_live_owner.js')(tools,{centralTaskId:central,runId:run,referenceToken:'token',
+  batchId:'SORI48-PAIR-METADATA-CORRECTED-20261030',references:ids.map(pageId=>({pageId,page:frozen[pageId]})),
+  edits:[],nativeExpectations:[],sori48Metadata:true});
+ const result=await witness({batchId:'SORI48-PAIR-METADATA-CORRECTED-20261030'});
+ assert.equal(result.nativeChecks.length,10);assert.equal(metadataRows.has(pairBodyIds[0]),true);
+ live[pairBodyIds[0]]=make(pairBodyIds[0],{title:'changed-own','작업 상태':'검증대기'});
+ await assert.rejects(()=>witness({batchId:'SORI48-PAIR-METADATA-CORRECTED-20261030'}),
+  /NORMAL_LIVE_PROPERTIES_CHANGED/);
+});
 test('normal followthrough binds scheduler evidence into the closure runner',async()=>{
  let seen,closed=0;
  const client={sendOnce(){},recoverPreCall(){},async close(){closed++;}};
@@ -317,6 +336,26 @@ test('normal followthrough opens a separate exact eight-target Sori48 pair body 
  await assert.rejects(()=>ordinary.runSori48PairBody(plan,references.slice(1)),/NORMAL_SORI48_PAIR_REFERENCES/);
  assert.equal(transports,1);
 });
+test('normal followthrough completes body before the exact native metadata transaction',async()=>{
+ const edits=pairBodyIds.map((pageId,i)=>({pageId,heading:'## H'+i,oldStr:'old'+i,newStr:'new'+i}));
+ const plan={schema:'SORI48_CORRECTED_HEAD_PAIR_PROJECTION_V1',
+  observationId:'SORI48-PAIR-ADMIT-CORRECTED-20261030',applyAuthorized:false,
+  requiresCanonicalClosure:true,metadataReconciliationRequired:true,edits};
+ const order=[];let transports=0,closed=0;
+ const ordinary=factory('normal_followthrough_v2.js')({}, {
+  createTransport:()=>({id:++transports}),createClient:()=>({sendOnce(){},recoverPreCall(){},async close(){closed++;}}),
+  createLiveRunner:(_,config)=>config.sori48Pair?{async run(){order.push('body');return {status:'COMPLETED',receipts:[]};}}:
+   {async runSori48Metadata(id){order.push('native');assert.equal(id,'SORI48-PAIR-METADATA-CORRECTED-20261030');
+    return {status:'COMPLETED',next:3,receipts:[{},{},{}]};}},
+  createWitness(){},createLandedProjection(){},createCommand:()=> 'command',
+  centralTaskId:central,runId:run,installation:{},witnessConfig:{proof:'frozen'}
+ });
+ const references=[...pairBodyIds,pairChild,policyId].map(pageId=>({pageId,page:{complete:true}}));
+ const result=await ordinary.runSori48PairReconciliation(plan,references);
+ assert.equal(result.status,'PAIR_RECONCILED');assert.equal(result.body.status,'BODY_COMPLETE');
+ assert.equal(result.native.status,'NATIVE_COMPLETE');assert.deepEqual(order,['body','native']);
+ assert.equal(transports,2);assert.equal(closed,2);
+});
 test('normal followthrough refuses caller-authorized or incomplete Sori48 pair body plans',async()=>{
  const ids=Array.from({length:8},(_,i)=>(i+1).toString(16).padStart(32,'0'));
  const base={schema:'SORI48_CORRECTED_HEAD_PAIR_PROJECTION_V1',observationId:'PAIR',
@@ -352,14 +391,48 @@ test('Sori48 pair live runner selects the exact pair initializer',async()=>{
 test('Sori48 pair bridge requires the exact body order plus child and WIP references',t=>{
  const root=fs.mkdtempSync(path.join(os.tmpdir(),'normal-sori48-pair-')),b=new core.Broker(root,policy);
  t.after(()=>{b.close();fs.rmSync(root,{recursive:true,force:true});});
- const bridge=createBridge({broker:b,installation:{root},verifyExtensions(){},
-  probe(){return {canonical:{exclusive:false,manifestHash:'e'.repeat(64)},brokerExecutor:b.executor,journalHash:'f'.repeat(64)};}});
  const edits=pairBodyIds.map((pageId,i)=>({pageId,heading:'H'+i,oldStr:'o'+i,newStr:'n'+i}));
+ const bridge=createBridge({broker:b,installation:{root},verifyExtensions(){},
+  validateSori48PairPlan:actual=>JSON.stringify(actual)===JSON.stringify(edits),
+  probe(){return {canonical:{exclusive:false,manifestHash:'e'.repeat(64)},brokerExecutor:b.executor,journalHash:'f'.repeat(64)};}});
  const input={action:'normal_sori48_pair_init',batchId:'SORI48-PAIR-ADMIT-CORRECTED-20261030',
   edits,centralTaskId:central,runId:run,referenceIds:[...pairBodyIds,pairChild,policyId],repository:'sori',pr:48};
  assert.throws(()=>bridge.handle({...input,referenceIds:input.referenceIds.slice(0,-1)}),/NORMAL_INIT/);
+ assert.throws(()=>bridge.handle({...input,edits:edits.map((e,i)=>i?e:{...e,newStr:'mutated'})}),
+  /NORMAL_SORI48_PAIR_SCOPE/);
  const initialized=bridge.handle(input);assert.equal(initialized.executor,b.executor);assert.match(initialized.referenceToken,/./);
  assert.equal(fs.existsSync(b.file),false);
+});
+test('Sori48 metadata live runner drives three rows once through the reviewed client',async()=>{
+ const rowIds=[pairBodyIds[0],pairChild,pairBodyIds[1]],calls=[];let staged,status={status:'READY',next:0,receipts:[]},closed=0,sends=0;
+ const client={broker:async q=>{calls.push(q);
+   if(q.action==='normal_sori48_metadata_init')return {referenceToken:'metadata-token'};
+   if(q.action==='case_stage_input'){staged=q.operation;return {stageId:'stage-'+calls.length,inputHash:'hash-'+calls.length};}
+   if(q.action==='case_consume_live'){
+     if(staged.action==='normal_sori48_metadata_begin')return status;
+     if(staged.action==='normal_sori48_metadata_dispatch')return {batchId:q.batchId,planHash:'p'.repeat(64),
+       executor:'executor',ticket:'ticket-'+status.next,dispatchId:'dispatch-'+status.next,
+       request:{page_id:rowIds[status.next],command:'update_properties',allow_async:false,properties:{'작업 상태':'검증대기'}}};
+     if(staged.action==='normal_sori48_metadata_ack'){status={...status,status:'ACKED'};return status;}
+     if(staged.action==='normal_sori48_metadata_verify'){
+       const pageId=rowIds[status.next];status={status:status.next===2?'COMPLETED':'READY',next:status.next+1,
+         receipts:[...status.receipts,{pageId}]};return status;}
+     throw Error('unexpected staged '+staged.action);
+   }
+   if(q.action==='case_live_send')return {status:'WRITE_PENDING',permit:{dispatchId:q.operation.dispatchId}};
+   throw Error('unexpected '+q.action);},
+   async sendOnce(request,permit,live,invoke){sends++;return invoke();},recoverPreCall(){},consumeSourceExpiry(){return false;},
+   async close(){closed++;}};
+ const tools={mcp__codex_apps__notion_fetch:async({id})=>({structuredContent:{id}}),
+  mcp__codex_apps__notion_notion_update_page:async q=>({structuredContent:{page_id:q.page_id}})};
+ const references=[...pairBodyIds,pairChild,policyId].map(pageId=>({pageId}));
+ const runner=factory('normal_live_runner.js')(tools,{client,centralTaskId:central,runId:run,references,
+   nativeExpectations:[],sori48Metadata:true,createWitness:()=>async()=>({observed:true})});
+ const result=await runner.runSori48Metadata('SORI48-PAIR-METADATA-CORRECTED-20261030');
+ assert.equal(result.status,'COMPLETED');assert.equal(result.next,3);assert.equal(result.receipts.length,3);
+ assert.equal(sends,3);assert.equal(closed,1);assert.equal(calls[0].action,'normal_sori48_metadata_init');
+ assert.deepEqual(calls.filter(q=>q.action==='case_live_send').map(q=>q.operation.action),
+  Array(3).fill('normal_sori48_metadata_confirm'));
 });
 test('Sori48 live runner executes one check-only staged operation',async()=>{
  const calls=[];let closed=0,witnessConfig;

@@ -50,7 +50,7 @@
       const m={exports:{}},localRequire=id=>id.startsWith('./')?loadPhase(path.basename(id)):require(id);
       new Function('require','module','exports','__dirname',data[n])(localRequire,m,m.exports,c.extensionDirectory);return phaseCache[n]=m.exports;};
     const baseProbe=load('normal_projection_probe.cjs').probe;
-    let closureRuntime,sori48Metadata;
+    let closureRuntime,sori48Metadata,validateSori48PairPlan;
     const probe=args=>baseProbe({...args,inspectClosedUnknown:()=>closureRuntime?.inspectCommitted(),
       inspectNativeMetadata:()=>sori48Metadata?.status()});
     const reconcile=load('reconcile_unpermitted_dispatch.cjs').createReconciler({...core,runtime:c.runtime});
@@ -67,6 +67,7 @@
       closureRuntime=runtime;
       const provider=loadPhase('sori48_unknown_closure.cjs').createProvider(runtime);
       const pairProvider=loadPhase('sori48_pair_provider.cjs').createProvider();
+      validateSori48PairPlan=pairProvider.validatePlan;
       const nativeModule=loadPhase('sori48_pair_metadata.cjs');
       createSori48Metadata=broker=>nativeModule.createExecutor({broker,
         inspectClosedUnknown:()=>runtime.inspectCommitted(),
@@ -86,7 +87,8 @@
     if(createSori48Metadata)sori48Metadata=createSori48Metadata(b);
     const bridge=load('normal_bridge.cjs').createBridge({broker:b,probe,installation:c,
       reconcileUnpermitted:reconcile,reconcilePermitExpiry,restoreUnsent,resumePrepared,resumeUnprepared,verifyExtensions,
-      validateControlInit,assessControlPermit,continueApprovedControl,sori48ClosureCheck,sori48Metadata});
+      validateControlInit,assessControlPermit,continueApprovedControl,sori48ClosureCheck,sori48Metadata,
+      validateSori48PairPlan});
     process.stdout.write('NPG/2 {"ready":true}\n');
     const rl=readline.createInterface({input:process.stdin,crlfDelay:Infinity});
     rl.on('line',async line=>{let q;try{q=JSON.parse(line);const result=await bridge.handle(q);

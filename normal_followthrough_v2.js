@@ -60,9 +60,36 @@
     }catch(error){failure=error;throw error;}
     finally{await close(client,failure);}
   }
+  async function pairMetadata(references){
+    references=copy(references);
+    const required=['3f586e6dd1d181ebb43dd7de62aa2ca4','3f586e6dd1d181cd9f5bdcdab6290de7',
+      '3f586e6dd1d181ddb9f3e7217f64bfcd','3b286e6dd1d1817aa093fca807659f07',
+      '3b286e6dd1d181f2a75cfbd3885071c4','3bf86e6dd1d18110938bc358e17c779e',
+      '3ed86e6dd1d18118b0b8d98bb91892fb','3b286e6dd1d1811d9308d9a2b56c9de4',
+      '40786e6dd1d181ec8addcd1269f9b0bb','3b286e6dd1d18194866dd8d7a28c7ab4'];
+    need(Array.isArray(references)&&references.length===required.length&&
+      new Set(references.map(r=>r.pageId)).size===required.length&&
+      required.every(id=>references.some(r=>r.pageId===id)),'NORMAL_SORI48_PAIR_REFERENCES');
+    const transport=config.createTransport(tools),client=createClient(transport);
+    const runner=config.createLiveRunner(transport,{client,createWitness:config.createWitness,
+      centralTaskId:config.centralTaskId,runId:config.runId,references,nativeExpectations:[],
+      sori48Metadata:true,witnessConfig:{...config.witnessConfig,sori48Metadata:true}});
+    let failure=null;
+    try{
+      const result=await runner.runSori48Metadata('SORI48-PAIR-METADATA-CORRECTED-20261030');
+      need(result?.status==='COMPLETED'&&result.next===3&&result.receipts?.length===3,
+        'NORMAL_SORI48_PAIR_METADATA_INCOMPLETE');
+      return {status:'NATIVE_COMPLETE',nativeTargets:3,receipt:result};
+    }catch(error){failure=error;throw error;}
+    finally{await close(client,failure);}
+  }
   return {async checkSori48Closure(references){return sori48(references,false);},
   async applySori48Closure(references){return sori48(references,true);},
   async runSori48PairBody(admission,references){return pairBody(admission,references);},
+  async runSori48PairReconciliation(admission,references){
+    const body=await pairBody(admission,references),native=await pairMetadata(references);
+    return {status:'PAIR_RECONCILED',body,native};
+  },
   async run(bundle,references){
     bundle=copy(bundle);references=copy(references);
     const ids=[bundle?.binding?.writer?.pageId,bundle?.binding?.reviewer?.pageId];

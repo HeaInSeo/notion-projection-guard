@@ -8,6 +8,8 @@
   const rpc=client.broker.bind(client),sendOnce=client.sendOnce.bind(client),
     recoverPreCall=client.recoverPreCall.bind(client),consumeSourceExpiry=client.consumeSourceExpiry.bind(client),
     close=client.close.bind(client),copy=x=>JSON.parse(JSON.stringify(x));
+  const metadataPageIds=['3f586e6dd1d181ebb43dd7de62aa2ca4','40786e6dd1d181ec8addcd1269f9b0bb',
+    '3f586e6dd1d181cd9f5bdcdab6290de7'];
   const text=r=>(r?.content??[]).filter(v=>v.type==='text').map(v=>v.text).join('\n');
   function unwrap(r){for(let i=0;i<10;i++){
     if(r?.isError||r?.error)throw Error('NORMAL_NATIVE_ERROR');
@@ -21,16 +23,16 @@
   async function init(batchId,edits){
     if(initialized)throw Error('NORMAL_RUNNER_SINGLE_USE');initialized=true;
     const control=config.controlAdmissionId!==undefined,closure=config.sori48Closure===true,
-      sori48Pair=config.sori48Pair===true;
+      sori48Pair=config.sori48Pair===true,sori48Metadata=config.sori48Metadata===true;
     const r=await rpc({action:control?'normal_control_init':closure?'normal_sori48_closure_init':
-      sori48Pair?'normal_sori48_pair_init':'normal_init',
+      sori48Pair?'normal_sori48_pair_init':sori48Metadata?'normal_sori48_metadata_init':'normal_init',
       batchId,edits,centralTaskId:config.centralTaskId,runId:config.runId,
       referenceIds:config.references.map(r=>r.pageId),
-      ...(control?{controlAdmissionId:config.controlAdmissionId}:closure?{}:
+      ...(control?{controlAdmissionId:config.controlAdmissionId}:closure||sori48Metadata?{}:
         {repository:config.binding.repository,pr:config.binding.source.pr})});
     witness=config.createWitness(tools,{...config.witnessConfig,batchId,centralTaskId:config.centralTaskId,
       runId:config.runId,referenceToken:r.referenceToken,references:config.references,edits,
-      nativeExpectations:config.nativeExpectations});return r;
+      sori48Metadata,nativeExpectations:config.nativeExpectations});return r;
   }
   async function owned(operation){
     for(let attempt=0;;attempt++){
@@ -49,6 +51,12 @@
   async function confirm(live){
     for(let attempt=0;;attempt++)try{return await rpc({action:'case_live_send',batchId:live.batchId,
       operation:{...live,action:'fence_confirm_send'},liveSource:await freshWitness(live.batchId)});}
+    catch(error){if(attempt>=2||!consumeSourceExpiry(error))throw error;}
+  }
+  async function confirmMetadata(live,pages){
+    for(let attempt=0;;attempt++)try{return await rpc({action:'case_live_send',batchId:live.batchId,
+      operation:{...live,action:'normal_sori48_metadata_confirm',pages},
+      liveSource:await freshWitness(live.batchId)});}
     catch(error){if(attempt>=2||!consumeSourceExpiry(error))throw error;}
   }
   async function send(request,permit,live){
@@ -84,8 +92,38 @@
       if(!failure)throw error;failure.closeError={message:error.message,code:error.code??null};
     }}
   }
+  async function reconcileSori48Metadata(batchId){
+    let failure=null;
+    const pages=()=>Promise.all(metadataPageIds.map(read));
+    try{
+      await init(batchId,[]);
+      let status=await owned({action:'normal_sori48_metadata_begin',batchId,pages:await pages()});
+      for(let step=0;step<12;step++){
+        if(status.status==='COMPLETED')return status;
+        if(status.status==='WRITE_PENDING')throw Error('NORMAL_METADATA_WRITE_PENDING_UNKNOWN');
+        if(status.status==='SEND_INTENT'){
+          status=await owned({action:'normal_sori48_metadata_resume',batchId,pages:await pages()});continue;
+        }
+        if(status.status==='ACKED'){
+          status=await owned({action:'normal_sori48_metadata_verify',batchId,pages:await pages()});continue;
+        }
+        if(status.status!=='READY')throw Error('NORMAL_METADATA_UNRESOLVED: '+status.status);
+        const dispatch=await owned({action:'normal_sori48_metadata_dispatch',batchId,pages:await pages()});
+        const live={batchId,executor:dispatch.executor,planHash:dispatch.planHash,
+          ticket:dispatch.ticket,dispatchId:dispatch.dispatchId};
+        const confirmed=await confirmMetadata(live,await pages());
+        const provider=await send(dispatch.request,confirmed.permit,live);
+        status=await owned({...live,action:'normal_sori48_metadata_ack',provider});
+      }
+      throw Error('NORMAL_METADATA_STEP_LIMIT');
+    }catch(error){failure=error;throw error;}
+    finally{try{await close();}catch(error){
+      if(!failure)throw error;failure.closeError={message:error.message,code:error.code??null};
+    }}
+  }
   return {async checkSori48Closure(batchId){return closeSori48(batchId,false);},
   async applySori48Closure(batchId){return closeSori48(batchId,true);},
+  async runSori48Metadata(batchId){return reconcileSori48Metadata(batchId);},
   async run(batchId,edits){
     edits=copy(edits);let live=null,failure=null;const receipts=[];
     try{

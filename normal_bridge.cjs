@@ -12,7 +12,7 @@ const SORI48_PAIR_BODY_IDS=['3f586e6dd1d181ebb43dd7de62aa2ca4','3f586e6dd1d181cd
   '3ed86e6dd1d18118b0b8d98bb91892fb','3b286e6dd1d1811d9308d9a2b56c9de4'];
 const SORI48_PAIR_REFERENCE_IDS=[...SORI48_PAIR_BODY_IDS,'40786e6dd1d181ec8addcd1269f9b0bb',
   '3b286e6dd1d18194866dd8d7a28c7ab4'];
-function createBridge({broker,probe,installation,reconcileUnpermitted,reconcilePermitExpiry,restoreUnsent,resumePrepared,resumeUnprepared,verifyExtensions,validateControlInit,assessControlPermit,continueApprovedControl,sori48ClosureCheck,sori48Metadata}){
+function createBridge({broker,probe,installation,reconcileUnpermitted,reconcilePermitExpiry,restoreUnsent,resumePrepared,resumeUnprepared,verifyExtensions,validateControlInit,assessControlPermit,continueApprovedControl,sori48ClosureCheck,sori48Metadata,validateSori48PairPlan}){
   let init=null,staged=null,closed=false,noCall=null;
   const check=()=>{
     need(!closed,'NORMAL_BRIDGE_CLOSED');broker.assertLock();verifyExtensions();
@@ -88,7 +88,8 @@ function createBridge({broker,probe,installation,reconcileUnpermitted,reconcileP
           SORI48_PAIR_REFERENCE_IDS.every(id=>input.referenceIds.includes(id)),'NORMAL_METADATA_SCOPE');
       }else if(sori48Pair){
         need(input.batchId===SORI48_PAIR_BODY_BATCH&&input.repository==='sori'&&input.pr===48&&
-          input.edits.length===SORI48_PAIR_BODY_IDS.length&&
+          input.edits.length===SORI48_PAIR_BODY_IDS.length&&typeof validateSori48PairPlan==='function'&&
+          validateSori48PairPlan(input.edits)===true&&
           JSON.stringify(input.edits.map(e=>e.pageId))===JSON.stringify(SORI48_PAIR_BODY_IDS)&&
           input.referenceIds.length===SORI48_PAIR_REFERENCE_IDS.length&&
           SORI48_PAIR_REFERENCE_IDS.every(id=>input.referenceIds.includes(id)),
