@@ -215,7 +215,7 @@ test('ordinary RPC awaits an asynchronous bridge result before serialization',t=
 test('ordinary bootstrap separately pins the exact Sori48 phase-provider source set',t=>{
  const f=liveBootstrapFixture(t),phaseNames=['SORI48_UNKNOWN_CLOSURE_PROPOSAL.json',
   'sori48_unknown_state.cjs','sori48_unknown_closure.cjs','sori48_unknown_runtime.cjs','sori48_unknown_evidence.cjs',
-  'sori48_unknown_sources.js','sori48_pair_provider.cjs','sori48_pair_metadata.cjs','npg_source_review_provider.cjs'];
+  'sori48_unknown_sources.js','sori48_pair_provider.cjs','sori48_pair_metadata.cjs'];
  f.installation.phaseProviders={};
  for(const n of phaseNames){const bytes=fs.readFileSync(path.join(__dirname,n));
   fs.writeFileSync(path.join(f.dir,n),bytes,{mode:0o600});f.installation.phaseProviders[n]=sha(bytes);}
@@ -588,7 +588,7 @@ test('pair RPC cannot initialize without the pinned exact provider validator',t=
 test('installed command binds the exact pair validator before any canonical mutation',t=>{
  const f=liveBootstrapFixture(t),before=fs.readFileSync(path.join(f.root,'journal.json'),'utf8');
  const phaseNames=['SORI48_UNKNOWN_CLOSURE_PROPOSAL.json','sori48_unknown_state.cjs','sori48_unknown_closure.cjs',
-  'sori48_unknown_runtime.cjs','sori48_unknown_evidence.cjs','sori48_unknown_sources.js','sori48_pair_provider.cjs','sori48_pair_metadata.cjs','npg_source_review_provider.cjs'];
+  'sori48_unknown_runtime.cjs','sori48_unknown_evidence.cjs','sori48_unknown_sources.js','sori48_pair_provider.cjs','sori48_pair_metadata.cjs'];
  f.installation.phaseProviders={};for(const name of phaseNames){const bytes=fs.readFileSync(path.join(__dirname,name));
   fs.writeFileSync(path.join(f.dir,name),bytes,{mode:0o600});f.installation.phaseProviders[name]=sha(bytes);}
  // A synthetic lock/core/probe isolates bootstrap routing; exact plan validation
