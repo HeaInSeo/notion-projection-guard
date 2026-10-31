@@ -365,7 +365,7 @@ test('normal followthrough completes body before the exact native metadata trans
   requiresCanonicalClosure:true,metadataReconciliationRequired:true,edits};
  const order=[];let transports=0,closed=0;
  const ordinary=factory('normal_followthrough_v2.js')({}, {
-  createTransport:()=>({id:++transports}),createClient:()=>({sendOnce(){},recoverPreCall(){},async close(){closed++;}}),
+  createTransport:()=>({id:++transports}),createClient:()=>({async broker(){return {phase:'BODY'};},sendOnce(){},recoverPreCall(){},async close(){closed++;}}),
   createLiveRunner:(_,config)=>config.sori48Pair?{async run(){order.push('body');return {status:'COMPLETED',receipts:[]};}}:
    {async runSori48Metadata(id){order.push('native');assert.equal(id,'SORI48-PAIR-METADATA-CORRECTED-20261030');
     return {status:'COMPLETED',next:3,receipts:[{},{},{}]};}},
@@ -376,7 +376,7 @@ test('normal followthrough completes body before the exact native metadata trans
  const result=await ordinary.runSori48PairReconciliation(plan,references);
  assert.equal(result.status,'PAIR_RECONCILED');assert.equal(result.body.status,'BODY_COMPLETE');
  assert.equal(result.native.status,'NATIVE_COMPLETE');assert.deepEqual(order,['body','native']);
- assert.equal(transports,2);assert.equal(closed,2);
+ assert.equal(transports,3);assert.equal(closed,3);
 });
 test('normal followthrough refuses caller-authorized or incomplete Sori48 pair body plans',async()=>{
  const ids=Array.from({length:8},(_,i)=>(i+1).toString(16).padStart(32,'0'));

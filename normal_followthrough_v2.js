@@ -64,7 +64,7 @@
     }catch(error){failure=error;throw error;}
     finally{await close(client,failure);}
   }
-  async function pairMetadata(admission,references){
+  async function pairMetadata(admission,references,continuationPlanHash){
     references=copy(references);
     need(typeof config.createSori48SourceCollector==='function','NORMAL_SORI48_SOURCE_COLLECTOR');
     const required=['3f586e6dd1d181ebb43dd7de62aa2ca4','3f586e6dd1d181cd9f5bdcdab6290de7',
@@ -78,7 +78,7 @@
     const transport=config.createTransport(tools),client=createClient(transport);
     const runner=config.createLiveRunner(transport,{client,createWitness:config.createWitness,
       centralTaskId:config.centralTaskId,runId:config.runId,references,nativeExpectations:[],
-      sori48Metadata:true,bodyEdits:admission.edits,
+      sori48Metadata:true,bodyEdits:admission.edits,continuationPlanHash,
       witnessConfig:{...config.witnessConfig,sori48Metadata:true,
         sori48SourceBatchId:'SORI48-PAIR-ADMIT-20261029',
         createSori48SourceCollector:config.createSori48SourceCollector}});
@@ -95,7 +95,25 @@
   async applySori48Closure(references){return sori48(references,true);},
   async runSori48PairBody(admission,references){return pairBody(admission,references);},
   async runSori48PairReconciliation(admission,references){
-    const body=await pairBody(admission,references),native=await pairMetadata(admission,references);
+    admission=copy(admission);references=copy(references);
+    need(admission?.schema==='SORI48_CORRECTED_HEAD_PAIR_PROJECTION_V1'&&
+      admission.observationId==='SORI48-PAIR-ADMIT-CORRECTED-20261030'&&
+      admission.applyAuthorized===false&&admission.requiresCanonicalClosure===true&&
+      admission.metadataReconciliationRequired===true,'NORMAL_SORI48_PAIR_PLAN');
+    const transport=config.createTransport(tools),client=createClient(transport);
+    let route,failure=null;
+    try{route=await client.broker({action:'normal_sori48_pair_route',
+      batchId:admission.observationId,edits:admission.edits});}
+    catch(error){failure=error;throw error;}
+    finally{await close(client,failure);}
+    need(route?.phase==='BODY'||route?.phase==='NATIVE'&&
+      route.batchId==='SORI48-PAIR-METADATA-CORRECTED-20261030'&&
+      /^[a-f0-9]{64}$/.test(route.planHash??''),'NORMAL_SORI48_PAIR_ROUTE');
+    // Native begin revalidates the completed body's full saved receipts under
+    // fresh ownership before retiring an unsent intent or verifying a real ACK.
+    const body=route.phase==='BODY'?await pairBody(admission,references):
+      {status:'PREVIOUS_BODY_VERIFIED_BY_NATIVE_GUARD',observationId:admission.observationId};
+    const native=await pairMetadata(admission,references,route.phase==='NATIVE'?route.planHash:undefined);
     return {status:'PAIR_RECONCILED',body,native};
   },
   async run(bundle,references){

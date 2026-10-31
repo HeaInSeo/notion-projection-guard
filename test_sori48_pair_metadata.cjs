@@ -342,7 +342,7 @@ for(const lose of [false,true])test('generated installed command restarts across
   let state=JSON.parse(fs.readFileSync(path.join(f.root,'journal.json')));
   assert.equal(state.batches[helper.BATCH].status,'WRITE_PENDING');
   assert.equal(state.batches[helper.BATCH].next,0);
-  await assert.rejects(()=>f.entry.runSori48PairReconciliation(f.admission,f.refs),/NORMAL_CANONICAL_BARRIER/);
+  await assert.rejects(()=>f.entry.runSori48PairReconciliation(f.admission,f.refs),/WRITE_PENDING_UNKNOWN/);
   assert.equal(f.writes,9);
   state=JSON.parse(fs.readFileSync(path.join(f.root,'journal.json')));
   assert.equal(state.batches[helper.BATCH].status,'WRITE_PENDING');
@@ -355,4 +355,44 @@ for(const lose of [false,true])test('generated installed command restarts across
  assert.ok(new Set(f.starts).size>=2);
  const state=JSON.parse(fs.readFileSync(path.join(f.root,'journal.json')));
  assert.deepEqual(state.keepOriginalUnknown,{next:3,receipts:[1,2,3],outcome:'UNKNOWN'});
+});
+
+for(const phase of ['SEND_INTENT','ACKED'])test('installed native '+phase+' resumes in a new process without body reapplication',async t=>{
+ const helper=require('./test-fixtures/sori48_installed_chain.cjs'),f=await helper.createFixture(t,false,phase);
+ await assert.rejects(()=>f.entry.runSori48PairReconciliation(f.admission,f.refs),/NORMAL_RPC_RESPONSE_UNKNOWN/);
+ const read=()=>JSON.parse(fs.readFileSync(path.join(f.root,'journal.json')));
+ const before=read(),r=before.batches[helper.BATCH];assert.equal(r.status,phase);
+ assert.equal(r.next,0);assert.equal(f.writes,phase==='ACKED'?9:8);
+ await assert.rejects(()=>f.entry.runSori48PairBody(f.admission,f.refs),/NORMAL_CANONICAL_BARRIER/);
+ assert.equal(f.writes,phase==='ACKED'?9:8);
+ const count=f.operations.length,processes=f.starts.length;
+ const result=await f.entry.runSori48PairReconciliation(f.admission,f.refs);
+ assert.equal(result.status,'PAIR_RECONCILED');assert.equal(result.native.receipt.next,3);
+ assert.equal(f.writes,11);assert.ok(f.starts.length>processes);
+ assert.equal(f.operations.slice(count).filter(q=>q.action==='normal_sori48_pair_init').length,0);
+ const after=read();assert.deepEqual(after.keepOriginalUnknown,before.keepOriginalUnknown);
+ assert.equal(after.batches[helper.BATCH].receipts.length,3);
+ if(phase==='SEND_INTENT'){
+  assert.equal(after.batches[helper.BATCH].attempts[0].phase,'RETIRED_WITHOUT_PERMIT');
+  assert.equal(after.batches[helper.BATCH].attempts[0].provider,undefined);
+ }else assert.equal(after.batches[helper.BATCH].receipts[0].dispatchId,r.attempt.dispatchId);
+});
+
+for(const kind of ['other active batch','body plan','native plan','current owner','wrong run','completed run'])
+test('installed continuation rejects '+kind+' without writes or body initialization',async t=>{
+ const helper=require('./test-fixtures/sori48_installed_chain.cjs'),f=await helper.createFixture(t,false,'SEND_INTENT');
+ await assert.rejects(()=>f.entry.runSori48PairReconciliation(f.admission,f.refs),/NORMAL_RPC_RESPONSE_UNKNOWN/);
+ const file=path.join(f.root,'journal.json'),state=JSON.parse(fs.readFileSync(file));
+ if(kind==='other active batch')state.active='OTHER-BATCH';
+ if(kind==='body plan')state.batches['SORI48-PAIR-ADMIT-CORRECTED-20261030'].planHash='0'.repeat(64);
+ if(kind==='native plan')state.batches[helper.BATCH].planHash='0'.repeat(64);
+ if(kind==='wrong run'||kind==='completed run')f.transport.mcp__codex_apps__automations_peek=async()=>
+  ({structuredContent:{automations:[{id:'a'.repeat(32),is_enabled:true,run_details:{last_run:{
+    id:kind==='wrong run'?'other-run':'installed-run',recorded_status:kind==='completed run'?'completed':'in_progress'}}}]}});
+ if(kind==='current owner')f.transport.mcp__codex_apps__automations_peek=async()=>({structuredContent:{automations:[]}});
+ fs.writeFileSync(file,JSON.stringify(state));const before=fs.readFileSync(file,'utf8'),n=f.operations.length;
+ await assert.rejects(()=>f.entry.runSori48PairReconciliation(f.admission,f.refs),
+  /NORMAL_CANONICAL_BARRIER|NORMAL_PLAN_CHANGED|SORI48_METADATA_RECORD|NORMAL_LIVE_CENTRAL_OWNER/);
+ assert.equal(f.writes,8);assert.equal(fs.readFileSync(file,'utf8'),before);
+ assert.equal(f.operations.slice(n).filter(q=>q.action==='normal_sori48_pair_init').length,0);
 });

@@ -28,6 +28,8 @@
       sori48Pair?'normal_sori48_pair_init':sori48Metadata?'normal_sori48_metadata_init':'normal_init',
       batchId,edits,centralTaskId:config.centralTaskId,runId:config.runId,
       referenceIds:config.references.map(r=>r.pageId),
+      ...(sori48Metadata&&config.continuationPlanHash!==undefined?
+        {continuationPlanHash:config.continuationPlanHash,bodyEdits:config.bodyEdits}:{}),
       ...(control?{controlAdmissionId:config.controlAdmissionId}:closure||sori48Metadata?{}:
         {repository:config.binding.repository,pr:config.binding.source.pr})});
     witness=config.createWitness(tools,{...config.witnessConfig,batchId,centralTaskId:config.centralTaskId,

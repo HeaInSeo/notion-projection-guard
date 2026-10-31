@@ -61,7 +61,7 @@ const headings=['## CURRENT · 마지막 중앙 관측 · QSYNC-20261010T145034Z
   audit=value;return {sha256:sha(JSON.stringify(value))};},atomicWrite:async(expected,value)=>{
   assert.equal(expected,proposal.journalSha256);afterBytes=value;return value;}})(input);
  return {phase,phaseNames,approvalBytes,audit,afterBytes};
-}async function createFixture(t,loseNativeResult){
+}async function createFixture(t,loseNativeResult,interruptAt){
  const repo=path.resolve(__dirname,'..'),root=fs.mkdtempSync(path.join(os.tmpdir(),'sori48-installed-chain-')),
   runtime=path.join(root,'runtime'),head='b'.repeat(40),dir=path.join(runtime,'extensions',head),
   auditDir=path.join(root,'manual-audits','sori48-closure-20261029');
@@ -102,6 +102,7 @@ const headings=['## CURRENT · 마지막 중앙 관측 · QSYNC-20261010T145034Z
    '\n'+edit.heading+'\n'+edit.oldStr+'\n## AFTER\nprotected\n</content>');}
  pages[WIP]={structuredContent:{id:WIP,page_last_edited_at:'2026-10-30T00:00:00Z',
   text:'<properties>\n{"title":"policy"}\n</properties>\n<content>\npolicy\n</content>'}};
+ let interrupted=false;const operations=[];
  const children=new Map(),starts=[],waitLine=(record,predicate)=>new Promise((resolve,reject)=>{
   const found=record.lines.find(predicate);if(found)return resolve(found);
   const timer=setTimeout(()=>reject(Error('installed command timeout: '+record.stderr)),5000);
@@ -116,7 +117,13 @@ const headings=['## CURRENT · 마지막 중앙 관측 · QSYNC-20261010T145034Z
    record.waiters=record.waiters.filter(fn=>!fn(line));}});
   return text('Process started with PID '+child.pid+'\n'+await waitLine(record,line=>line.includes('"ready":true')));
  }}; transport.mcp__codex_apps__dev_server___additional_mcp__dev_server_additional_mcp_interact_with_process=
-  async({pid,input})=>{const record=children.get(pid),requestId=JSON.parse(input).requestId;
+  async({pid,input})=>{const record=children.get(pid),q=JSON.parse(input),requestId=q.requestId;
+   operations.push(clone(q));
+   if(!interrupted&&((interruptAt==='SEND_INTENT'&&q.action==='case_live_send'&&
+     q.operation?.action==='normal_sori48_metadata_confirm')||(interruptAt==='ACKED'&&
+     q.action==='case_stage_input'&&q.operation?.action==='normal_sori48_metadata_verify'))){
+     interrupted=true;throw Error('ISOLATED_INTERRUPT_'+interruptAt);}
+
    record.child.stdin.write(input);return text(await waitLine(record,line=>line.includes('"requestId":"'+requestId+'"')));};
  transport.mcp__codex_apps__dev_server___additional_mcp__dev_server_additional_mcp_read_process_output=
   async({pid})=>text(children.get(pid).lines.slice(-2).join('\n'));
@@ -143,6 +150,6 @@ const headings=['## CURRENT · 마지막 중앙 관측 · QSYNC-20261010T145034Z
  const refs=[...BODY_IDS,CHILD,WIP].map(pageId=>({pageId,page:clone(pages[pageId])}));
  const admission={schema:'SORI48_CORRECTED_HEAD_PAIR_PROJECTION_V1',observationId:BODY_BATCH,
   applyAuthorized:false,requiresCanonicalClosure:true,metadataReconciliationRequired:true,edits};
- return {entry,admission,refs,root,starts,get writes(){return writes;}};
+ return {entry,admission,refs,root,starts,operations,transport,get writes(){return writes;}};
 }
 module.exports={createFixture,BATCH};

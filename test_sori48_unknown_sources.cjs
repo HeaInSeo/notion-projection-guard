@@ -26,7 +26,10 @@ function fixture(){
   pages.set('3f586e6dd1d181ddb9f3e7217f64bfcd',page('3f586e6dd1d181ddb9f3e7217f64bfcd',
     '## CURRENT CENTRAL OBSERVATION · NPR-20261012 · sori_index\n\n'+prior+'\n\n## HISTORY\npreserve'));
   const githubPR={number:48,state:'open',merged:false,head_sha:head,base_sha:base};
-  const checks={total_count:1,check_runs:[{head_sha:head,status:'completed',conclusion:'success'}]};
+  const required=['CodeQL','Registry Push/Pull Smoke','Run on Ubuntu','Analyze actions',
+    'Analyze go','Proto regenerate-diff','Lint (Run on Ubuntu)','Actionlint'];
+  const checks={total_count:required.length,check_runs:required.map((name,i)=>({id:i+1,name,head_sha:head,
+    status:'completed',conclusion:'success',app:{slug:name==='CodeQL'?'github-advanced-security':'github-actions'}}))};
   const tools={mcp__codex_apps__notion_fetch:async({id})=>{calls.push(id);if(!pages.has(id))throw Error('missing');return pages.get(id);},
     mcp__codex_apps__github_get_pr_info:async()=>({structuredContent:githubPR}),
     mcp__codex_apps__github_fetch:async()=>({structuredContent:{content:JSON.stringify(checks)}})};
@@ -50,7 +53,13 @@ for(const [name,change] of [
   ['changed head',f=>f.githubPR.head_sha='f'.repeat(40)],
   ['changed base',f=>f.githubPR.base_sha='f'.repeat(40)],
   ['merged PR',f=>f.githubPR.merged=true],
-  ['partial CI',f=>f.checks.total_count=2],
+  ['partial CI',f=>f.checks.total_count++],
+  ['failed CI rerun',f=>f.checks.check_runs[0].conclusion='failure'],
+  ['pending CI rerun',f=>{f.checks.check_runs[0].status='in_progress';f.checks.check_runs[0].conclusion=null;}],
+  ['missing required job',f=>{f.checks.check_runs.pop();f.checks.total_count--;}],
+  ['wrong required app',f=>f.checks.check_runs[0].app.slug='github-actions'],
+  ['duplicate check identity',f=>f.checks.check_runs[1].id=f.checks.check_runs[0].id],
+  ['invalid check identity',f=>f.checks.check_runs[0].id=0],
   ['wrong CI head',f=>f.checks.check_runs[0].head_sha='f'.repeat(40)]
 ])test(name+' remains UNKNOWN and stops affected actions',async()=>{
   const f=fixture();change(f);const r=await f.collector.collect();assert.equal(r.classification,'UNKNOWN');
@@ -118,4 +127,28 @@ test('exact corrected standalone paragraph remains clear',async()=>{
   const f=fixture(),t=proposal.observedUnwrittenTargets.targets[0];
   f.pages.set(t.pageId,f.page(t.pageId,t.heading+'\n\n'+CORRECTED_TEXT+'\n\n## HISTORY\npreserve'));
   assert.equal((await f.collector.collect()).classification,'CLEAR_OBSERVATION_ONLY');
+});
+
+test('each live observation rejects a failed or pending CI rerun after an initial clear observation',async()=>{
+  const f=fixture();assert.equal((await f.collector.collect()).classification,'CLEAR_OBSERVATION_ONLY');
+  f.checks.check_runs[0].conclusion='failure';
+  assert.equal((await f.collector.collect()).stopAffectedActions,true);
+  f.checks.check_runs[0].status='in_progress';f.checks.check_runs[0].conclusion=null;
+  assert.equal((await f.collector.collect()).classification,'UNKNOWN');
+});
+
+test('live witness refuses failed and pending CI before any write can be admitted',async()=>{
+  const f=fixture(),task='a'.repeat(32),run='synthetic-run';
+  f.tools.mcp__codex_apps__automations_peek=async()=>({structuredContent:{automations:[{id:task,
+    is_enabled:true,run_details:{last_run:{id:run,recorded_status:'in_progress'}}}]}});
+  const owner=vm.runInNewContext(fs.readFileSync(path.join(__dirname,'normal_live_owner.js'),'utf8'));
+  const refs=[...f.pages].slice(0,4).map(([pageId,page])=>({pageId,page}));
+  const witness=owner(f.tools,{centralTaskId:task,runId:run,referenceToken:'test-reference',
+    batchId:proposal.batchId,references:refs,edits:[],nativeExpectations:[],sori48Closure:true,
+    schedulerEvidenceSha256:'b'.repeat(64),createSori48SourceCollector:vm.runInNewContext(source)});
+  await witness({batchId:proposal.batchId});
+  for(const status of ['completed','in_progress']){
+    f.checks.check_runs[0].status=status;f.checks.check_runs[0].conclusion=status==='completed'?'failure':null;
+    await assert.rejects(()=>witness({batchId:proposal.batchId}),/NORMAL_SORI48_SOURCE_OBSERVATION/);
+  }
 });

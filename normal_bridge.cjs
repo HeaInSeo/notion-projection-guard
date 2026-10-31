@@ -71,6 +71,28 @@ function createBridge({broker,probe,installation,reconcileUnpermitted,reconcileP
   return {handle(input){
     need(!closed,'NORMAL_BRIDGE_CLOSED');
     if(input.action==='close'){closed=true;staged=null;return broker.handle({action:'close'});}
+    // Read-only routing never relaxes either batch's canonical barrier. The
+    // chosen transaction still initializes and consumes fresh owned witnesses.
+    if(input.action==='normal_sori48_pair_route'){
+      need(!init&&!staged&&input.batchId===SORI48_PAIR_BODY_BATCH&&
+        typeof validateSori48PairPlan==='function'&&validateSori48PairPlan(input.edits)===true,
+        'NORMAL_SORI48_PAIR_SCOPE');
+      broker.assertLock();verifyExtensions();
+      const nativeId='SORI48-PAIR-METADATA-CORRECTED-20261030';
+      const native=broker.state.batches[nativeId];
+      const batchId=native?nativeId:SORI48_PAIR_BODY_BATCH;
+      const p=probe({root:installation.root,runtime:installation.runtime,
+        caseModuleHash:installation.caseModuleHash,brokerPid:process.pid,batchId});
+      need(p.canonical.exclusive===false&&p.brokerExecutor===broker.executor,'NORMAL_BRIDGE_OWNER');
+      if(!native)return {phase:'BODY'};
+      const body=broker.state.batches[SORI48_PAIR_BODY_BATCH];
+      need(body?.status==='COMPLETED'&&body.next===8&&body.receipt===null&&
+        JSON.stringify(body.edits)===JSON.stringify(input.edits)&&
+        body.planHash===hash(JSON.stringify(input.edits)),'NORMAL_PLAN_CHANGED');
+      need(sori48Metadata&&native.kind==='SORI48_PAIR_NATIVE_METADATA_V1','NORMAL_METADATA_SCOPE');
+      const status=sori48Metadata.status();
+      return {phase:'NATIVE',batchId:nativeId,planHash:status.planHash};
+    }
     if(['normal_init','normal_control_init','normal_sori48_closure_init','normal_sori48_pair_init','normal_sori48_metadata_init'].includes(input.action)){
       need(!init&&!staged&&/^[a-f0-9]{32}$/.test(input.centralTaskId??'')&&typeof input.runId==='string'&&
         /^[A-Za-z0-9-]{1,100}$/.test(input.batchId??'')&&Array.isArray(input.edits)&&
@@ -104,6 +126,16 @@ function createBridge({broker,probe,installation,reconcileUnpermitted,reconcileP
         Number.isSafeInteger(input.pr)&&input.pr>0&&
         new RegExp('^'+input.repository.toUpperCase()+input.pr+'-LANDED-[0-9]{8}$').test(input.batchId),
         'NORMAL_ADOPTED_SCOPE');
+      if(Object.hasOwn(input,'continuationPlanHash')){
+        need(metadata&&/^[a-f0-9]{64}$/.test(input.continuationPlanHash??'')&&
+          typeof validateSori48PairPlan==='function'&&validateSori48PairPlan(input.bodyEdits)===true,
+          'NORMAL_METADATA_CONTINUATION');
+        const body=broker.state.batches[SORI48_PAIR_BODY_BATCH];
+        need(body?.status==='COMPLETED'&&body.next===8&&
+          JSON.stringify(body.edits)===JSON.stringify(input.bodyEdits)&&
+          body.planHash===hash(JSON.stringify(input.bodyEdits))&&
+          sori48Metadata.status().planHash===input.continuationPlanHash,'NORMAL_PLAN_CHANGED');
+      }
       init={batchId:input.batchId,centralTaskId:input.centralTaskId,runId:input.runId,
         referenceIds:copy(input.referenceIds),edits:copy(input.edits),planHash:hash(JSON.stringify(input.edits)),
         referenceToken:crypto.randomUUID(),...(control?{controlInput:copy(input)}:{}),

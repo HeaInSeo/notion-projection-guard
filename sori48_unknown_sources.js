@@ -92,8 +92,17 @@
       return {readOk:true,head:p.head_sha,base:p.base_sha,raw};
     });
     const ci=take(10,raw=>{const c=unwrap(raw),d=JSON.parse(c.content);
-      need(Array.isArray(d.check_runs)&&d.check_runs.length>0&&d.total_count===d.check_runs.length&&
-        d.check_runs.every(r=>r.head_sha===facts.head),'CI_INCOMPLETE');return {readOk:true,raw};});
+      // Keep live witnesses aligned with the frozen pair provider's CI gate.
+      // A later pending/failed rerun revokes a previously clear observation.
+      const requiredChecks=['CodeQL','Registry Push/Pull Smoke','Run on Ubuntu','Analyze actions',
+        'Analyze go','Proto regenerate-diff','Lint (Run on Ubuntu)','Actionlint'];
+      const runs=Array.isArray(d.check_runs)?d.check_runs:[];
+      need(d.total_count===runs.length&&runs.length>=requiredChecks.length&&
+        new Set(runs.map(r=>r.id)).size===runs.length&&runs.every(r=>Number.isSafeInteger(r.id)&&r.id>0&&
+          r.head_sha===facts.head&&r.status==='completed'&&r.conclusion==='success')&&
+        requiredChecks.every(name=>runs.some(r=>r.name===name&&
+          r.app?.slug===(name==='CodeQL'?'github-advanced-security':'github-actions'))),'CI_INCOMPLETE');
+      return {readOk:true,raw};});
     if(freshSources.github.readOk)freshSources.github.checks=ci;
     const elapsed=Date.now()-started;if(elapsed<0||elapsed>=30000)errors.push({error:'SORI48_SOURCES_STALE'});
     const drift=targets.some(t=>t.plannedLiteralCount>0||t.staleCurrentAdmissionCandidate===true);
