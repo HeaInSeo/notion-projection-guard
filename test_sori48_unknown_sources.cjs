@@ -18,7 +18,10 @@ function fixture(){
     pages.set(id,page(id,'## OWN QUEUE EVENT (current)\n```json\nQUEUE_EVENT_V1 '+JSON.stringify(event)+'\n```',
       {'이벤트 ID':event_id,'체크포인트 버전':version,'세션 ID':event.session_id,'작업 ID':event.task_id,'저장소 식별자':frozenHead}));
   }
-  for(const t of proposal.observedUnwrittenTargets.targets)pages.set(t.pageId,page(t.pageId,t.heading+'\n\n'+t.oldLiteral+'\n\n## HISTORY\npreserve'));
+  // Both live guardrail_queue and dashboard serialize this replacement inline.
+  const before='PR149 provider terminations remain UNKNOWN, budgets stay consumed and no third PR149 request is allowed. ';
+  const after=' NodeKit CLI COMPLETE 27/156 main d63869c6, deduped; BORI user managed.';
+  for(const t of proposal.observedUnwrittenTargets.targets)pages.set(t.pageId,page(t.pageId,t.heading+'\n\n'+before+t.oldLiteral+after+'\n\n## HISTORY\npreserve'));
   const prior=proposal.observedUnwrittenTargets.targets[0].plannedLiteral;
   pages.set('3f586e6dd1d181ddb9f3e7217f64bfcd',page('3f586e6dd1d181ddb9f3e7217f64bfcd',
     '## CURRENT CENTRAL OBSERVATION · NPR-20261012 · sori_index\n\n'+prior+'\n\n## HISTORY\npreserve'));
@@ -83,5 +86,36 @@ test('attributed newer projection text is not drift merely because the text chan
 test('callers cannot supply raw evidence and captured reader cannot be replaced',async()=>{
   const f=fixture();await assert.rejects(()=>f.collector.collect({fake:true}),/NO_CALLER_EVIDENCE/);
   f.tools.mcp__codex_apps__notion_fetch=()=>{throw Error('replacement');};
+  assert.equal((await f.collector.collect()).classification,'CLEAR_OBSERVATION_ONLY');
+});
+
+test('all five in-place corrected writes remain clear with the real inline surroundings',async()=>{
+  const f=fixture();
+  for(const [i,t] of proposal.observedUnwrittenTargets.targets.entries()){
+    const x=f.pages.get(t.pageId).structuredContent;
+    assert.equal(x.text.split(t.oldLiteral).length-1,1);
+    x.text=x.text.replace(t.oldLiteral,CORRECTED_TEXT);
+    const r=await f.collector.collect();
+    assert.equal(r.classification,'CLEAR_OBSERVATION_ONLY','shared write '+(i+1));
+    assert.equal(r.stopAffectedActions,false);
+    assert.equal(r.targets.filter(y=>y.oldLiteralCount===0).length,i+1);
+    assert.equal(r.originalOutcome,'UNKNOWN');assert.equal(r.applyAuthorized,false);
+  }
+});
+for(const [name,projection] of [
+  ['altered corrected text',CORRECTED_TEXT.replace('receipt3','receipt4')],
+  ['duplicate corrected text',CORRECTED_TEXT+' '+CORRECTED_TEXT],
+  ['corrected text plus same-paragraph late old admission',CORRECTED_TEXT+' Sori '+p.oldHead+' is admitted to review.'],
+  ['corrected text plus separate-paragraph late old admission',CORRECTED_TEXT+'\n\nSori '+p.oldHead+' is admitted to review.'],
+  ['corrected text plus original planned admission',CORRECTED_TEXT+' '+proposal.observedUnwrittenTargets.targets[0].plannedLiteral]
+])test(name+' still stops affected actions',async()=>{
+  const f=fixture(),t=proposal.observedUnwrittenTargets.targets[0],x=f.pages.get(t.pageId).structuredContent;
+  x.text=x.text.replace(t.oldLiteral,projection);const r=await f.collector.collect();
+  assert.equal(r.classification,'DRIFT');assert.equal(r.stopAffectedActions,true);
+  assert.equal(r.originalOutcome,'UNKNOWN');assert.equal(r.applyAuthorized,false);
+});
+test('exact corrected standalone paragraph remains clear',async()=>{
+  const f=fixture(),t=proposal.observedUnwrittenTargets.targets[0];
+  f.pages.set(t.pageId,f.page(t.pageId,t.heading+'\n\n'+CORRECTED_TEXT+'\n\n## HISTORY\npreserve'));
   assert.equal((await f.collector.collect()).classification,'CLEAR_OBSERVATION_ONLY');
 });

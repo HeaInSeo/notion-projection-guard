@@ -54,9 +54,13 @@
     need(headings.length===1,'TARGET_HEADING');
     let section=p.body.slice(p.body.indexOf(headings[0])+headings[0].length);
     const next=section.search(/\n## /);if(next>=0)section=section.slice(0,next);
-    const staleAdmission=section.split(/\n\s*\n/).some(paragraph=>
-      paragraph.trim()!==correctedText&&paragraph.includes(facts.oldHead)&&
-        /\badmitted\b|\badmission\b/i.test(paragraph));
+    // Approved in-place replacements can sit inside an existing paragraph.
+    // Exclude only one exact approved occurrence; classify every remaining
+    // character so altered text and late original admissions still stop writes.
+    const correctedCount=count(section,correctedText);
+    const remaining=correctedCount===1?section.replace(correctedText,''):section;
+    const staleAdmission=correctedCount>1||remaining.split(/\n\s*\n/).some(paragraph=>
+      paragraph.includes(facts.oldHead)&&/\badmitted\b|\badmission\b/i.test(paragraph));
     return {pageId:spec.pageId,readOk:true,revision:p.revision,
       oldLiteralCount:count(p.body,spec.oldLiteral),plannedLiteralCount:count(p.body,spec.plannedLiteral),
       staleCurrentAdmissionCandidate:staleAdmission,raw};
