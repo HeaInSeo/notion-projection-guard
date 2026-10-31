@@ -6,6 +6,23 @@ The native rows are the existing **parent, child and pair**. The Sori index is a
 
 The trusted bootstrap must bind `inspectClosedUnknown` to the authenticated exact closure audit and `inspectBodyProjection` to the completed, verified eight-target canonical body transaction. Fresh same-run ownership and all three complete source pages are required. Callers cannot supply arbitrary metadata changes.
 
+The current pair input is CORRECTION57 (kind CHECKPOINT), with native/body parity.
+The collector, pair provider and native engine share one validator exported by
+the collector for both Code Mode and CommonJS. It checks the complete current
+correction and its preserved history: RELEASE54 is the prior-head NOT ACCEPTED;
+CLAIM55/RELEASE56 are explicitly UNADMITTED evidence. They are never current
+acceptance or authority. The original exact closure proposal still pins the
+historical54 predecessor; its bytes, target scope and uncertainty are unchanged.
+
+The prospective central body/native projection names the existing Guardrail
+task, role and corrected head and requests a fresh admitted F1 delta review.
+It does not consume v56 retroactively. Only after the approved guarded body and
+native transaction have completed and been read back can the existing Guardrail
+take its own new CLAIM, refresh its authority and review. The protected original's
+operator case admission grants no Guardrail role; the generic installed hook
+continues to protect that original while unrelated approved pair work follows its
+own current role authority. No central caller writes worker OWN/Authority proof.
+
 The transaction occupies canonical `active` through READY, SEND_INTENT, WRITE_PENDING and ACKED. The installed private RPC client's one-use dispatch/confirmation/send boundary must carry its native request. A durable actual ACK plus complete protected-content readback advances a row. After all three readbacks, the native transaction is COMPLETED and releases its own canonical transaction; the original UNKNOWN, late-observation duty and no-product/no-capacity semantics remain.
 
 A restart may retire an intent only when the durable record contains no permit or provider result and the canonical lock and unchanged sources are verified. A persisted permit, including an expired one, blocks replay. Matching page content cannot replace a missing ACK. A saved actual ACK can finish readback under a new valid owner without another native call. Save failures reload actual disk state, including a rename that committed before its response was lost.

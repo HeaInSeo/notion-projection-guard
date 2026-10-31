@@ -20,6 +20,7 @@ function fixture(t){
       ' QUEUE EVENT (current)\n\n```json\nQUEUE_EVENT_V1 '+JSON.stringify(event)+'\n```\n\n## HISTORY\nuntouched\n</content>';
     return {structuredContent:{id:spec[0],page_last_edited_at:'2026-10-30T00:00:00Z',text}};
   });
+  pages[2]=require('./test-fixtures/sori48_pair_correction.cjs').pairPage();
   function executor(){return createExecutor({broker:b,inspectClosedUnknown:()=>({valid:closed,
     batchId:'SORI48-PAIR-ADMIT-20261029',status:'CLOSED_SUPERSEDED_UNKNOWN',originalOutcome:'UNKNOWN',
     lateObservationRequired:true,cleanTermination:false,capacityReleased:false,productAccepted:false}),

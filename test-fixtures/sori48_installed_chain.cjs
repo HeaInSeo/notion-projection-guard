@@ -96,7 +96,8 @@ const headings=['## CURRENT · 마지막 중앙 관측 · QSYNC-20261010T145034Z
    '작업 ID':event.task_id,'저장소 식별자':s[4],'큐 구획':'현재','작업 상태':'검증대기','Title':'preserve'};
   pages[s[0]]={structuredContent:{id:s[0],page_last_edited_at:'2026-10-30T00:00:00Z',
    text:'<properties>\n'+JSON.stringify(props)+'\n</properties>\n<content>\n## '+s[3]+
-   ' QUEUE EVENT (current)\n\n```json\nQUEUE_EVENT_V1 '+JSON.stringify(event)+'\n```\n\n## HISTORY\nuntouched\n</content>'}};} for(const edit of edits){if(!pages[edit.pageId])pages[edit.pageId]={structuredContent:{id:edit.pageId,
+   ' QUEUE EVENT (current)\n\n```json\nQUEUE_EVENT_V1 '+JSON.stringify(event)+'\n```\n\n## HISTORY\nuntouched\n</content>'}};} pages[ROWS[2][0]]=require('./sori48_pair_correction.cjs').pairPage();
+ for(const edit of edits){if(!pages[edit.pageId])pages[edit.pageId]={structuredContent:{id:edit.pageId,
   page_last_edited_at:'2026-10-30T00:00:00Z',text:'<properties>\n{"title":"preserve"}\n</properties>\n<content>\n## SOURCE\npreserve\n</content>'}};
   pages[edit.pageId].structuredContent.text=pages[edit.pageId].structuredContent.text.replace('\n</content>',
    '\n'+edit.heading+'\n'+edit.oldStr+'\n## AFTER\nprotected\n</content>');}

@@ -1,6 +1,7 @@
 'use strict';
 // Exact-case native transaction. The existing Broker owns its lock, journal
 // and atomic save. This module has no Notion, process-start or replay capability.
+const {inspectPair}=require('./sori48_unknown_sources.js');
 const crypto=require('node:crypto'),fs=require('node:fs');
 const BATCH='SORI48-PAIR-METADATA-CORRECTED-20261030';
 const BODY_BATCH='SORI48-PAIR-ADMIT-CORRECTED-20261030';
@@ -9,13 +10,15 @@ const OLD_HEAD='cf4485d9f7823775760a03813d92ab205126f6c6';
 const ROWS=[
   ['3f586e6dd1d181ebb43dd7de62aa2ca4','EVT-SORI-W02-1B-I-PR48-F1-RELEASE-20261029T031819Z',93,'operator',HEAD],
   ['40786e6dd1d181ec8addcd1269f9b0bb','EVT-SORI-W02-1B-I-PR48-F1-CHILD-RELEASE-20261029T031657Z',4,'operator-child',HEAD],
-  ['3f586e6dd1d181cd9f5bdcdab6290de7','EVT-GR-SORI-W02-1B-PR48-STARTUP-REVIEW-RELEASE-20261029T024438Z',54,'guardrail',OLD_HEAD]];
+  ['3f586e6dd1d181cd9f5bdcdab6290de7','EVT-GR-SORI-W02-1B-PR48-F1-ADMISSION-GAP-CORRECTION-20261031T194313Z',57,'guardrail',HEAD]];
 const copy=x=>JSON.parse(JSON.stringify(x));
 const stable=x=>JSON.stringify(x,(_,v)=>v&&typeof v==='object'&&!Array.isArray(v)?
   Object.fromEntries(Object.entries(v).sort(([a],[b])=>a.localeCompare(b))):v);
 const sha=x=>crypto.createHash('sha256').update(typeof x==='string'?x:stable(x)).digest('hex');
 const need=(v,k)=>{if(!v)throw Error('SORI48_METADATA_'+k);};
 function page(raw,spec){
+  if(spec[3]==='guardrail'){const p=inspectPair(raw);
+    return {pageId:p.pageId,body:p.body,properties:p.properties,revision:p.revision};}
   for(let i=0;i<12;i++){
     need(raw&&!raw.isError&&!raw.error,'READ');
     if(raw.structuredContent){raw=raw.structuredContent;continue;}
@@ -49,8 +52,8 @@ function patches(at){
     '작업 상태':i===2?'실행재개':'검증대기','다음 담당자':'가드레일 에이전트',
     '큐 구획':i===2?'현재':'조건 대기',
     '차단 대상':i===2?'':'Sori PR48 corrected head independent pair verdict pending',
-    '재개 지시':'Sori PR48 '+HEAD+'; existing pair affected delta review; genuine own CLAIM and RELEASE required. P-a P-b P-c only; no product acceptance.',
-    '큐 정리 근거':'observation-id: '+BODY_BATCH+'; parent RELEASE93 and child RELEASE4; prior pair RELEASE54 is for '+OLD_HEAD+' only. Provider UNKNOWN and late observation duty retained.',
+    '재개 지시':'Guardrail-role admission for existing SR-SORI-SM-W02.A-20261010 on Sori PR48 '+HEAD+'; fresh prospective F1 delta review and own CLAIM/verdict/RELEASE required. Correction57 retained; v55/v56 UNADMITTED and not consumed. Operator case admission grants no Guardrail role. P-a P-b P-c only; no product acceptance.',
+    '큐 정리 근거':'observation-id: '+BODY_BATCH+'; parent RELEASE93 and child RELEASE4; current pair CORRECTION57; v55/v56 stay UNADMITTED; historical RELEASE54 is for '+OLD_HEAD+' only. Provider UNKNOWN and late observation duty retained.',
     'date:큐 정리 시각:start':at,'date:큐 정리 시각:is_datetime':1
   }));
 }

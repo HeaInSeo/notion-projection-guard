@@ -18,6 +18,7 @@ function fixture(){
     pages.set(id,page(id,'## OWN QUEUE EVENT (current)\n```json\nQUEUE_EVENT_V1 '+JSON.stringify(event)+'\n```',
       {'이벤트 ID':event_id,'체크포인트 버전':version,'세션 ID':event.session_id,'작업 ID':event.task_id,'저장소 식별자':frozenHead}));
   }
+  pages.set('3f586e6dd1d181cd9f5bdcdab6290de7',require('./test-fixtures/sori48_pair_correction.cjs').pairPage());
   // Both live guardrail_queue and dashboard serialize this replacement inline.
   const before='PR149 provider terminations remain UNKNOWN, budgets stay consumed and no third PR149 request is allowed. ';
   const after=' NodeKit CLI COMPLETE 27/156 main d63869c6, deduped; BORI user managed.';

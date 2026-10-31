@@ -19,10 +19,8 @@ const page=(id,body)=>({structuredContent:{id,page_last_edited_at:'2026-10-30T00
 function observation(){
   const original=ev('EVT-SORI-W02-1B-I-PR48-F1-RELEASE-20261029T031819Z',93,'operator',HEAD);
   original.raw=page('3f586e6dd1d181ebb43dd7de62aa2ca4',central(0,prior));
-  const pair=ev('EVT-GR-SORI-W02-1B-PR48-STARTUP-REVIEW-RELEASE-20261029T024438Z',54,'guardrail',OLD_HEAD);
-  pair.raw=page('3f586e6dd1d181cd9f5bdcdab6290de7',
-    '## GUARDRAIL QUEUE EVENT (current) · RELEASE v54\n\n```json\nQUEUE_EVENT_V1 '+JSON.stringify(pair.event)+
-    '\n```\n\n<b>Verdict: NOT ACCEPTED on PR48 exact cf4485d9. P0=0, P1=0, P2=1.</b> Reviewer: independent.\n\n'+central(1,prior));
+  const pair={readOk:true,event:require('./test-fixtures/sori48_pair_correction.cjs').events[0],
+    raw:require('./test-fixtures/sori48_pair_correction.cjs').pairPage(central(1,prior))};
   return {schema:'SORI48_FRESH_SOURCE_OBSERVATION_V1',batchId:'SORI48-PAIR-ADMIT-20261029',
     ticket:'cae1d7ac-ce48-417d-ad58-5180f0315d7d',dispatchId:'cdbeae84-e053-4cbc-bdfe-d9dea48e3dc5',
     classification:'CLEAR_OBSERVATION_ONLY',freshSourcesComplete:true,stopAffectedActions:false,
