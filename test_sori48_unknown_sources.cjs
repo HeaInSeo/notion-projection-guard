@@ -3,6 +3,7 @@ const {test}=require('node:test'),assert=require('node:assert/strict');
 const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
 const source=fs.readFileSync(path.join(__dirname,'sori48_unknown_sources.js'),'utf8');
 const proposal=JSON.parse(fs.readFileSync(path.join(__dirname,'SORI48_UNKNOWN_CLOSURE_PROPOSAL.json')));
+const {CORRECTED_TEXT}=require('./sori48_pair_provider.cjs');
 const p=proposal.evidenceOfSupersession,head=p.newHead,base='2fa7f5e12fa4474b194acf0d6e1a0273666642c1';
 function fixture(){
   const pages=new Map(),calls=[];
@@ -67,6 +68,12 @@ test('different central wording promoting old head is a drift candidate',async()
   const f=fixture(),t=proposal.observedUnwrittenTargets.targets[0],x=f.pages.get(t.pageId).structuredContent;
   x.text=x.text.replace(t.oldLiteral,'Sori '+p.oldHead+' is admitted to review.');
   assert.equal((await f.collector.collect()).classification,'DRIFT');
+});
+test('exact approved corrected projection remains clear after the first shared write',async()=>{
+  const f=fixture(),t=proposal.observedUnwrittenTargets.targets[0],x=f.pages.get(t.pageId).structuredContent;
+  x.text=x.text.replace(t.oldLiteral,CORRECTED_TEXT);const r=await f.collector.collect();
+  assert.equal(r.classification,'CLEAR_OBSERVATION_ONLY');
+  assert.equal(r.targets[0].staleCurrentAdmissionCandidate,false);
 });
 test('attributed newer projection text is not drift merely because the text changed',async()=>{
   const f=fixture(),t=proposal.observedUnwrittenTargets.targets[0],x=f.pages.get(t.pageId).structuredContent;
