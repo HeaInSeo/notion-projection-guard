@@ -18,9 +18,14 @@ function approval(bytes){
     a.applied===false,'APPROVAL_SCOPE');
   return a;
 }
-function preflight(input){
+// Both ordinary and committed-receipt paths must validate the prospective caller
+// before reading or returning incident state. Historical OWNER stays unchanged.
+function validateOwner(input){
   need(input?.owner?.actor===OWNER&&typeof input.owner.runId==='string'&&input.owner.runId&&
     /^[a-f0-9]{64}$/.test(input.owner.scheduledProofSha256??''),'OWNER');
+}
+function preflight(input){
+  validateOwner(input);
   approval(input.approvalBytes);
   need(typeof input.beforeBytes==='string'&&sha(input.beforeBytes)===proposal.journalSha256,
     'JOURNAL_PREIMAGE');
@@ -66,8 +71,7 @@ function createProvider(deps){
   return async function close(input){
     return deps.withLock(async()=>{
       if(typeof deps.inspectCommitted==='function'){
-        need(input?.owner?.actor===OWNER&&typeof input.owner.runId==='string'&&input.owner.runId&&
-          /^[a-f0-9]{64}$/.test(input.owner.scheduledProofSha256??''),'OWNER');
+        validateOwner(input);
         approval(input.approvalBytes);
         const committed=deps.inspectCommitted();
         if(committed)return {eligible:false,applied:false,alreadyApplied:true,...committed};
