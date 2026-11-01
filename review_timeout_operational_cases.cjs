@@ -337,6 +337,32 @@ test('scheduled label without an actual current automation-run proof is rejected
   assert.throws(()=>scheduledProof({automationId:'a',schedule:'schedule'},
     {origin:'SCHEDULED',runId:'run',schedulerEvidenceFile:proofFile}),/actual currently running/);
 });
+test('scheduled proof rejects start-before-schedule run_now evidence',t=>{
+  const root=temp(t),proofFile=path.join(root,'proof.json'),now=Date.now();
+  const scheduled=new Date(now+30*60*1000),started=new Date(now-1000);
+  const two=n=>String(n).padStart(2,'0');
+  const schedule='BEGIN:VEVENT\\nDTSTART:20260806T07'+two(scheduled.getUTCMinutes())+
+    two(scheduled.getUTCSeconds())+'\\nRRULE:FREQ=HOURLY\\nEND:VEVENT';
+  const proof={source:'AUTOMATIONS_PEEK',automationId:'a',isEnabled:true,schedule,
+    run:{id:'run',recorded_status:'in_progress',scheduled_for:scheduled.toISOString(),
+      started_at:started.toISOString()},retrievedAt:new Date(now).toISOString()};
+  fs.writeFileSync(proofFile,JSON.stringify(proof),{mode:0o600});
+  assert.throws(()=>scheduledProof({automationId:'a',schedule},
+    {origin:'SCHEDULED',runId:'run',schedulerEvidenceFile:proofFile}),/manual\/immediate/);
+});
+test('scheduled proof accepts a bounded delayed hourly start',t=>{
+  const root=temp(t),proofFile=path.join(root,'proof.json'),now=Date.now();
+  const scheduled=new Date(now-8*60*1000),started=new Date(scheduled.getTime()+7*60*1000);
+  const two=n=>String(n).padStart(2,'0');
+  const schedule='BEGIN:VEVENT\\nDTSTART:20260806T07'+two(scheduled.getUTCMinutes())+
+    two(scheduled.getUTCSeconds())+'\\nRRULE:FREQ=HOURLY\\nEND:VEVENT';
+  const proof={source:'AUTOMATIONS_PEEK',automationId:'a',isEnabled:true,schedule,
+    run:{id:'run',recorded_status:'in_progress',scheduled_for:scheduled.toISOString(),
+      started_at:started.toISOString()},retrievedAt:new Date(now).toISOString()};
+  fs.writeFileSync(proofFile,JSON.stringify(proof),{mode:0o600});
+  assert.equal(scheduledProof({automationId:'a',schedule},
+    {origin:'SCHEDULED',runId:'run',schedulerEvidenceFile:proofFile}).runId,'run');
+});
 test('real operational tick imports, assesses and writes a receipt without sending',async t=>{
   const root=temp(t),dir=path.join(root,'ledger'),evidenceDirectory=path.join(root,'evidence');
   fs.mkdirSync(dir,{mode:0o700});fs.mkdirSync(evidenceDirectory,{mode:0o700});

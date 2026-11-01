@@ -5,7 +5,14 @@ const fs=require('node:fs'),crypto=require('node:crypto');
 const hash=x=>crypto.createHash('sha256').update(x).digest('hex');
 const copy=x=>JSON.parse(JSON.stringify(x));
 const need=(v,c)=>{if(!v)throw Error(c);};
-function createBridge({broker,probe,installation,reconcileUnpermitted,reconcilePermitExpiry,restoreUnsent,resumePrepared,resumeUnprepared,verifyExtensions,validateControlInit,assessControlPermit,continueApprovedControl}){
+const SORI48_PAIR_BODY_BATCH='SORI48-PAIR-ADMIT-CORRECTED-20261030';
+const SORI48_PAIR_BODY_IDS=['3f586e6dd1d181ebb43dd7de62aa2ca4','3f586e6dd1d181cd9f5bdcdab6290de7',
+  '3f586e6dd1d181ddb9f3e7217f64bfcd','3b286e6dd1d1817aa093fca807659f07',
+  '3b286e6dd1d181f2a75cfbd3885071c4','3bf86e6dd1d18110938bc358e17c779e',
+  '3ed86e6dd1d18118b0b8d98bb91892fb','3b286e6dd1d1811d9308d9a2b56c9de4'];
+const SORI48_PAIR_REFERENCE_IDS=[...SORI48_PAIR_BODY_IDS,'40786e6dd1d181ec8addcd1269f9b0bb',
+  '3b286e6dd1d18194866dd8d7a28c7ab4'];
+function createBridge({broker,probe,installation,reconcileUnpermitted,reconcilePermitExpiry,restoreUnsent,resumePrepared,resumeUnprepared,verifyExtensions,validateControlInit,assessControlPermit,continueApprovedControl,sori48ClosureCheck,sori48Metadata,validateSori48PairPlan}){
   let init=null,staged=null,closed=false,noCall=null;
   const check=()=>{
     need(!closed,'NORMAL_BRIDGE_CLOSED');broker.assertLock();verifyExtensions();
@@ -33,7 +40,20 @@ function createBridge({broker,probe,installation,reconcileUnpermitted,reconcileP
   }
   function bound(op){
     need(op?.batchId===init.batchId&&!Object.hasOwn(op,'ownerProof'),'NORMAL_OPERATION_SCOPE');
-    if(op.action==='fence_begin')need(JSON.stringify(op.edits)===JSON.stringify(init.edits),'NORMAL_PLAN_CHANGED');
+    if(init.sori48Metadata){
+      need(op.action.startsWith('normal_sori48_metadata_'),'NORMAL_METADATA_ACTION');
+      if(['normal_sori48_metadata_confirm','normal_sori48_metadata_ack'].includes(op.action)){
+        const r=broker.state.batches[init.batchId];
+        need(r&&op.planHash===r.planHash&&op.executor===broker.executor&&
+          op.ticket===r.attempt?.ticket&&op.dispatchId===r.attempt?.dispatchId,'NORMAL_METADATA_IDENTITY');
+      }
+      return;
+    }
+    if(['normal_sori48_unknown_check','normal_sori48_unknown_apply'].includes(op.action))need(
+      init.closure===true&&op.batchId===init.batchId&&
+      op.apply===(op.action==='normal_sori48_unknown_apply')&&
+      Object.keys(op).sort().join(',')==='action,apply,batchId','NORMAL_SORI48_CLOSURE_SCOPE');
+    else if(op.action==='fence_begin')need(JSON.stringify(op.edits)===JSON.stringify(init.edits),'NORMAL_PLAN_CHANGED');
     else if(['normal_reconcile_prepared','normal_reconcile_unprepared','normal_assess_control_permit','normal_user_case_control_continue'].includes(op.action))need(op.planHash===init.planHash&&
       broker.state.batches[init.batchId]?.planHash===init.planHash,'NORMAL_PLAN_CHANGED');
     else if(!['normal_reconcile_unpermitted','normal_reconcile_permit_expiry'].includes(op.action)){
@@ -51,25 +71,75 @@ function createBridge({broker,probe,installation,reconcileUnpermitted,reconcileP
   return {handle(input){
     need(!closed,'NORMAL_BRIDGE_CLOSED');
     if(input.action==='close'){closed=true;staged=null;return broker.handle({action:'close'});}
-    if(input.action==='normal_init'||input.action==='normal_control_init'){
+    // Read-only routing never relaxes either batch's canonical barrier. The
+    // chosen transaction still initializes and consumes fresh owned witnesses.
+    if(input.action==='normal_sori48_pair_route'){
+      need(!init&&!staged&&input.batchId===SORI48_PAIR_BODY_BATCH&&
+        typeof validateSori48PairPlan==='function'&&validateSori48PairPlan(input.edits)===true,
+        'NORMAL_SORI48_PAIR_SCOPE');
+      broker.assertLock();verifyExtensions();
+      const nativeId='SORI48-PAIR-METADATA-CORRECTED-20261030';
+      const native=broker.state.batches[nativeId];
+      const batchId=native?nativeId:SORI48_PAIR_BODY_BATCH;
+      const p=probe({root:installation.root,runtime:installation.runtime,
+        caseModuleHash:installation.caseModuleHash,brokerPid:process.pid,batchId});
+      need(p.canonical.exclusive===false&&p.brokerExecutor===broker.executor,'NORMAL_BRIDGE_OWNER');
+      if(!native)return {phase:'BODY'};
+      const body=broker.state.batches[SORI48_PAIR_BODY_BATCH];
+      need(body?.status==='COMPLETED'&&body.next===8&&body.receipt===null&&
+        JSON.stringify(body.edits)===JSON.stringify(input.edits)&&
+        body.planHash===hash(JSON.stringify(input.edits)),'NORMAL_PLAN_CHANGED');
+      need(sori48Metadata&&native.kind==='SORI48_PAIR_NATIVE_METADATA_V1','NORMAL_METADATA_SCOPE');
+      const status=sori48Metadata.status();
+      return {phase:'NATIVE',batchId:nativeId,planHash:status.planHash};
+    }
+    if(['normal_init','normal_control_init','normal_sori48_closure_init','normal_sori48_pair_init','normal_sori48_metadata_init'].includes(input.action)){
       need(!init&&!staged&&/^[a-f0-9]{32}$/.test(input.centralTaskId??'')&&typeof input.runId==='string'&&
-        /^[A-Za-z0-9-]{1,100}$/.test(input.batchId??'')&&Array.isArray(input.edits)&&input.edits.length>0&&
+        /^[A-Za-z0-9-]{1,100}$/.test(input.batchId??'')&&Array.isArray(input.edits)&&
+        (['normal_sori48_closure_init','normal_sori48_metadata_init'].includes(input.action)?input.edits.length===0:input.edits.length>0)&&
         Array.isArray(input.referenceIds)&&input.referenceIds.length>=4&&
         new Set(input.referenceIds).size===input.referenceIds.length&&
         input.referenceIds.every(id=>/^[a-f0-9]{32}$/.test(id))&&
         input.referenceIds.includes('3bf86e6dd1d18110938bc358e17c779e')&&
         input.referenceIds.includes('3b286e6dd1d18194866dd8d7a28c7ab4'),'NORMAL_INIT');
-      const control=input.action==='normal_control_init';
-      if(control){
+      const control=input.action==='normal_control_init',closure=input.action==='normal_sori48_closure_init',
+        sori48Pair=input.action==='normal_sori48_pair_init',metadata=input.action==='normal_sori48_metadata_init';
+      if(metadata){
+        need(input.batchId==='SORI48-PAIR-METADATA-CORRECTED-20261030'&&sori48Metadata&&
+          input.referenceIds.length===SORI48_PAIR_REFERENCE_IDS.length&&
+          SORI48_PAIR_REFERENCE_IDS.every(id=>input.referenceIds.includes(id)),'NORMAL_METADATA_SCOPE');
+      }else if(sori48Pair){
+        need(input.batchId===SORI48_PAIR_BODY_BATCH&&input.repository==='sori'&&input.pr===48&&
+          input.edits.length===SORI48_PAIR_BODY_IDS.length&&typeof validateSori48PairPlan==='function'&&
+          validateSori48PairPlan(input.edits)===true&&
+          JSON.stringify(input.edits.map(e=>e.pageId))===JSON.stringify(SORI48_PAIR_BODY_IDS)&&
+          input.referenceIds.length===SORI48_PAIR_REFERENCE_IDS.length&&
+          SORI48_PAIR_REFERENCE_IDS.every(id=>input.referenceIds.includes(id)),
+          'NORMAL_SORI48_PAIR_SCOPE');
+      }else if(closure){
+        need(input.batchId==='SORI48-PAIR-ADMIT-20261029'&&typeof sori48ClosureCheck==='function',
+          'NORMAL_SORI48_CLOSURE_UNAVAILABLE');
+      }else if(control){
         need(typeof validateControlInit==='function','NORMAL_CONTROL_UNAVAILABLE');
         validateControlInit({broker,input});
       }else need(!Object.hasOwn(input,'controlAdmissionId')&&['sori','nodekit'].includes(input.repository)&&
         Number.isSafeInteger(input.pr)&&input.pr>0&&
         new RegExp('^'+input.repository.toUpperCase()+input.pr+'-LANDED-[0-9]{8}$').test(input.batchId),
         'NORMAL_ADOPTED_SCOPE');
+      if(Object.hasOwn(input,'continuationPlanHash')){
+        need(metadata&&/^[a-f0-9]{64}$/.test(input.continuationPlanHash??'')&&
+          typeof validateSori48PairPlan==='function'&&validateSori48PairPlan(input.bodyEdits)===true,
+          'NORMAL_METADATA_CONTINUATION');
+        const body=broker.state.batches[SORI48_PAIR_BODY_BATCH];
+        need(body?.status==='COMPLETED'&&body.next===8&&
+          JSON.stringify(body.edits)===JSON.stringify(input.bodyEdits)&&
+          body.planHash===hash(JSON.stringify(input.bodyEdits))&&
+          sori48Metadata.status().planHash===input.continuationPlanHash,'NORMAL_PLAN_CHANGED');
+      }
       init={batchId:input.batchId,centralTaskId:input.centralTaskId,runId:input.runId,
         referenceIds:copy(input.referenceIds),edits:copy(input.edits),planHash:hash(JSON.stringify(input.edits)),
-        referenceToken:crypto.randomUUID(),...(control?{controlInput:copy(input)}:{})};
+        referenceToken:crypto.randomUUID(),...(control?{controlInput:copy(input)}:{}),
+        ...(closure?{closure:true}:{}),...(sori48Pair?{sori48Pair:true}:{}),...(metadata?{sori48Metadata:true}:{})};
       try{check();return {referenceToken:init.referenceToken,planHash:init.planHash,executor:broker.executor,
         continuation:broker.state.batches[init.batchId]?.dispatch?.phase??null};}
       catch(e){init=null;throw e;}
@@ -79,7 +149,10 @@ function createBridge({broker,probe,installation,reconcileUnpermitted,reconcileP
       need(!staged&&input.batchId===init.batchId&&
         ['fence_begin','fence_prepare','fence_authorize','fence_dispatch','normal_reconcile_unpermitted',
           'normal_reconcile_permit_expiry','normal_pre_call_expired','normal_reconcile_prepared','normal_reconcile_unprepared',
-          'normal_assess_control_permit','normal_user_case_control_continue'].includes(input.operation?.action)&&
+          'normal_assess_control_permit','normal_user_case_control_continue','normal_sori48_unknown_check',
+          'normal_sori48_unknown_apply','normal_sori48_metadata_begin','normal_sori48_metadata_dispatch',
+          'normal_sori48_metadata_resume','normal_sori48_metadata_ack','normal_sori48_metadata_verify'].includes(input.operation?.action)&&
+        (!input.operation.action.startsWith('normal_sori48_metadata_')||init.sori48Metadata===true)&&
         (!['normal_assess_control_permit','normal_user_case_control_continue'].includes(input.operation.action)||!!init.controlInput),
         'NORMAL_STAGE_SCOPE');bound(input.operation);check();
       const operation=copy(input.operation),stageId=crypto.randomUUID(),inputHash=hash(JSON.stringify(operation));
@@ -90,6 +163,27 @@ function createBridge({broker,probe,installation,reconcileUnpermitted,reconcileP
         'NORMAL_STAGE_IDENTITY');
       const op=staged.operation;staged=null;bound(op);
       const ownerProof=freshProof(input.liveSource,{action:input.action,stageId:input.stageId,inputHash:input.inputHash});
+      if(init.sori48Metadata){
+        const methods={normal_sori48_metadata_begin:'begin',normal_sori48_metadata_dispatch:'dispatch',
+          normal_sori48_metadata_resume:'resumeUnconfirmed',normal_sori48_metadata_ack:'acknowledge',
+          normal_sori48_metadata_verify:'verify'};
+        need(Object.hasOwn(methods,op.action),'NORMAL_METADATA_ACTION');
+        return sori48Metadata[methods[op.action]]({...op,ownerProof});
+      }
+      if(['normal_sori48_unknown_check','normal_sori48_unknown_apply'].includes(op.action)){
+        need(init.closure&&typeof sori48ClosureCheck==='function','NORMAL_SORI48_CLOSURE_UNAVAILABLE');
+        need(/^[a-f0-9]{64}$/.test(input.liveSource?.central?.schedulerEvidenceSha256??''),
+          'NORMAL_SORI48_SCHEDULED_PROOF');
+        const observation=input.liveSource?.sori48Observation;
+        need(observation?.schema==='SORI48_FRESH_SOURCE_OBSERVATION_V1'&&
+          observation.batchId===init.batchId&&observation.classification==='CLEAR_OBSERVATION_ONLY'&&
+          observation.freshSourcesComplete===true&&observation.applyAuthorized===false&&
+          observation.attributableTerminalResult===null,'NORMAL_SORI48_SOURCE_OBSERVATION');
+        return sori48ClosureCheck({...op,apply:op.action==='normal_sori48_unknown_apply',
+          freshSources:copy(observation.freshSources),lateObservation:copy(observation),
+          owner:{actor:ownerProof.ownerId,runId:ownerProof.generation,
+          scheduledProofSha256:input.liveSource.central.schedulerEvidenceSha256}});
+      }
       if(op.action==='normal_reconcile_unpermitted'){
         need(typeof reconcileUnpermitted==='function','NORMAL_RECOVERY_UNAVAILABLE');
         return reconcileUnpermitted(broker,{...op,ownerProof});
@@ -124,12 +218,18 @@ function createBridge({broker,probe,installation,reconcileUnpermitted,reconcileP
       return broker.handle({...op,ownerProof});
     }
     if(input.action==='case_live_send'){
-      need(!staged&&input.batchId===init.batchId&&input.operation?.action==='fence_confirm_send','NORMAL_SEND_SCOPE');
+      need(!staged&&input.batchId===init.batchId&&input.operation?.action===
+        (init.sori48Metadata?'normal_sori48_metadata_confirm':'fence_confirm_send'),'NORMAL_SEND_SCOPE');
       bound(input.operation);
-      const result=broker.handle({...input.operation,ownerProof:freshProof(input.liveSource,
-        {action:input.action,operation:input.operation})});
+      const operation={...input.operation,ownerProof:freshProof(input.liveSource,
+        {action:input.action,operation:input.operation})};
+      const result=init.sori48Metadata?sori48Metadata.confirm(operation):broker.handle(operation);
       noCall={token:crypto.randomUUID(),permit:copy(result.permit)};
       return {...result,noCallToken:noCall.token};
+    }
+    if(init.sori48Metadata){
+      need(!staged&&input.batchId===init.batchId&&input.action==='normal_sori48_metadata_status','NORMAL_METADATA_ACTION');
+      check();return sori48Metadata.status();
     }
     if(input.action==='fence_halt'&&input.batchId===init.batchId&&staged){
       bound(input);check();const discarded={stageId:staged.stageId,inputHash:staged.inputHash,action:staged.operation.action};

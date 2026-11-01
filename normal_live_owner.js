@@ -18,11 +18,24 @@
     need(a.length===1&&b.length===1,'NORMAL_LIVE_INCOMPLETE');
     return {body:b[0][1],props:JSON.parse(a[0][1]),revision:p.page_last_edited_at};
   }
+  const createSori48SourceCollector=config.createSori48SourceCollector;
   const c=copy(config),refs=c.references;
+  const metadataRows=new Set(['3f586e6dd1d181ebb43dd7de62aa2ca4','40786e6dd1d181ec8addcd1269f9b0bb',
+    '3f586e6dd1d181cd9f5bdcdab6290de7']);
+  const metadataKeys=new Set(['작업 상태','다음 담당자','큐 구획','차단 대상','재개 지시','큐 정리 근거',
+    'date:큐 정리 시각:start','date:큐 정리 시각:is_datetime']);
+  const protectedMetadata=p=>Object.fromEntries(Object.entries(p).filter(([k])=>!metadataKeys.has(k)));
+  const sourceBound=c.sori48Closure===true||c.sori48Pair===true||c.sori48Metadata===true;
   need(/^[a-f0-9]{32}$/.test(c.centralTaskId??'')&&typeof c.runId==='string'&&
     typeof c.referenceToken==='string'&&Array.isArray(refs)&&refs.length>=4&&
-    new Set(refs.map(r=>r.pageId)).size===refs.length,'NORMAL_LIVE_CONFIG');
+    new Set(refs.map(r=>r.pageId)).size===refs.length&&
+    (c.sori48Metadata!==true||[...metadataRows].every(id=>refs.some(r=>r.pageId===id)))&&
+    (!sourceBound||typeof createSori48SourceCollector==='function')&&
+    (c.sori48Closure!==true||/^[a-f0-9]{64}$/.test(c.schedulerEvidenceSha256??'')),
+    'NORMAL_LIVE_CONFIG');
   const frozen=refs.map(r=>({pageId:r.pageId,...page(r.page,r.pageId)}));
+  const sori48Collector=sourceBound?createSori48SourceCollector(tools):null;
+  if(sori48Collector)need(typeof sori48Collector.collect==='function','NORMAL_SORI48_SOURCE_COLLECTOR');
   return async function witness({batchId}){
     need(batchId===c.batchId,'NORMAL_LIVE_SCOPE');
     // Anchor every source to the start of its real read. Neither a slow reply
@@ -34,15 +47,27 @@
     const checks=frozen.map((f,i)=>{
       const live=page(jobs[i].value,f.pageId),edit=c.edits.find(e=>e.pageId===f.pageId);
       const changed=edit?f.body.replace(edit.oldStr,()=>edit.newStr):f.body;
-      need(live.body===f.body||live.body===changed,'NORMAL_LIVE_BODY_CHANGED');
+      need(c.sori48Metadata===true?live.body===changed:live.body===f.body||live.body===changed,
+        'NORMAL_LIVE_BODY_CHANGED');
       const expected=c.nativeExpectations.find(n=>n.pageId===f.pageId);
-      need(stable(live.props)===stable({...f.props,...(expected?.properties??{})}),'NORMAL_LIVE_PROPERTIES_CHANGED');
+      const propertiesMatch=c.sori48Metadata===true&&metadataRows.has(f.pageId)?
+        stable(protectedMetadata(live.props))===stable(protectedMetadata(f.props)):
+        stable(live.props)===stable({...f.props,...(expected?.properties??{})});
+      need(propertiesMatch,'NORMAL_LIVE_PROPERTIES_CHANGED');
       return {pageId:f.pageId,observedAt,matched:true,revision:live.revision};
     });
     const actual=unwrap(jobs[refs.length].value),task=actual?.automations?.find(t=>t.id===c.centralTaskId),run=task?.run_details?.last_run;
     need(task?.is_enabled===true&&run?.id===c.runId&&run.recorded_status==='in_progress','NORMAL_LIVE_CENTRAL_OWNER');
+    const sori48Observation=sori48Collector?await sori48Collector.collect():null;
+    if(sori48Observation)need(sori48Observation.schema==='SORI48_FRESH_SOURCE_OBSERVATION_V1'&&
+      sori48Observation.batchId===(c.sori48SourceBatchId??batchId)&&
+      sori48Observation.classification==='CLEAR_OBSERVATION_ONLY'&&
+      sori48Observation.freshSourcesComplete===true&&sori48Observation.applyAuthorized===false&&
+      sori48Observation.attributableTerminalResult===null,'NORMAL_SORI48_SOURCE_OBSERVATION');
     need(Date.now()-Date.parse(observedAt)<30000,'NORMAL_LIVE_EXPIRED');
     return {observedAt,referenceToken:c.referenceToken,nativeChecks:checks,
-      central:{id:task.id,is_enabled:task.is_enabled,run:copy(run)}};
+      central:{id:task.id,is_enabled:task.is_enabled,run:copy(run),
+        ...(c.sori48Closure===true?{schedulerEvidenceSha256:c.schedulerEvidenceSha256}:{})},
+      ...(sori48Observation?{sori48Observation:copy(sori48Observation)}:{})};
   };
 })

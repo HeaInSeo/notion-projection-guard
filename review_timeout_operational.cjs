@@ -69,10 +69,13 @@ function scheduledProof(config,input) {
   'actual currently running scheduled automation evidence required');
   const start = config.schedule.match(/DTSTART(?:;[^:]*)?:(\d{8})T(\d{2})(\d{2})(\d{2})Z?/);
   const scheduled = new Date(proof.run.scheduled_for);
+  const started = new Date(proof.run.started_at);
   need(start && config.schedule.includes('RRULE:FREQ=HOURLY') &&
     Number.isFinite(scheduled.getTime()) &&
     scheduled.getUTCMinutes() === Number(start[3]) &&
-    scheduled.getUTCSeconds() === Number(start[4]),
+    scheduled.getUTCSeconds() === Number(start[4]) &&
+    started.getTime() >= scheduled.getTime() &&
+    started.getTime() - scheduled.getTime() < 60 * 60 * 1000,
   'manual/immediate run is not a regular hourly adoption receipt');
   return {file:input.schedulerEvidenceFile,sha256:digest(readPrivate(input.schedulerEvidenceFile)),
     runId:proof.run.id,scheduledFor:proof.run.scheduled_for,startedAt:proof.run.started_at};
