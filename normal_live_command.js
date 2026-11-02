@@ -6,6 +6,7 @@
     'normal_rpc_client.js','normal_unsent.cjs','reconcile_permit_expiry.cjs','sori_startup_control.cjs'];
   const phaseNames=['SORI48_UNKNOWN_CLOSURE_PROPOSAL.json','sori48_unknown_state.cjs','sori48_unknown_closure.cjs',
     'sori48_unknown_runtime.cjs','sori48_unknown_evidence.cjs','sori48_unknown_sources.js','sori48_pair_provider.cjs','sori48_pair_metadata.cjs'];
+  const migrationNames=['central_migration_artifacts.cjs','central_migration_files.cjs'];
   const c=JSON.parse(JSON.stringify(installation));
   if(!c||!/^[a-f0-9]{40}$/.test(c.sourceHead??'')||!/^[a-f0-9]{64}$/.test(c.caseModuleHash??'')||
     ![c.root,c.runtime,c.extensionDirectory].every(p=>typeof p==='string'&&p.startsWith('/')&&!p.includes('\0'))||
@@ -14,7 +15,10 @@
     !names.every(n=>/^[a-f0-9]{64}$/.test(c.files[n]))||
     (c.phaseProviders!==undefined&&(!c.phaseProviders||
       Object.keys(c.phaseProviders).sort().join(',')!==phaseNames.slice().sort().join(',')||
-      !phaseNames.every(n=>/^[a-f0-9]{64}$/.test(c.phaseProviders[n])))))throw Error('NORMAL_INSTALLATION_MANIFEST');
+      !phaseNames.every(n=>/^[a-f0-9]{64}$/.test(c.phaseProviders[n]))))||
+    (c.migrationProviders!==undefined&&(!c.phaseProviders||!c.migrationProviders||
+      Object.keys(c.migrationProviders).sort().join(',')!==migrationNames.slice().sort().join(',')||
+      !migrationNames.every(n=>/^[a-f0-9]{64}$/.test(c.migrationProviders[n])))))throw Error('NORMAL_INSTALLATION_MANIFEST');
   const bootstrap=String.raw`
     const fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto'),readline=require('node:readline');
     const c=JSON.parse(process.argv[1]),need=(v,k)=>{if(!v)throw Error(k);};
@@ -25,6 +29,7 @@
       'normal_rpc_client.js','normal_unsent.cjs','reconcile_permit_expiry.cjs','sori_startup_control.cjs'];
     const phaseNames=['SORI48_UNKNOWN_CLOSURE_PROPOSAL.json','sori48_unknown_state.cjs','sori48_unknown_closure.cjs',
     'sori48_unknown_runtime.cjs','sori48_unknown_evidence.cjs','sori48_unknown_sources.js','sori48_pair_provider.cjs','sori48_pair_metadata.cjs'];
+    const migrationNames=['central_migration_artifacts.cjs','central_migration_files.cjs'];
     const data={};
     const trusted=file=>{const s=fs.lstatSync(file);need(s.isFile()&&!s.isSymbolicLink()&&
       s.uid===process.geteuid()&&!(s.mode&0o022),'NORMAL_RUNTIME_FILE');return fs.readFileSync(file);};
@@ -36,6 +41,8 @@
         need(hash(bytes)===c.files[n],'NORMAL_EXTENSION_PIN');data[n]=bytes.toString('utf8');}
       if(c.phaseProviders)for(const n of phaseNames){const bytes=trusted(path.join(c.extensionDirectory,n));
         need(hash(bytes)===c.phaseProviders[n],'NORMAL_PHASE_PROVIDER_PIN');data[n]=bytes.toString('utf8');}
+      if(c.migrationProviders)for(const n of migrationNames){const bytes=trusted(path.join(c.extensionDirectory,n));
+        need(hash(bytes)===c.migrationProviders[n],'NORMAL_MIGRATION_PROVIDER_PIN');data[n]=bytes.toString('utf8');}
     }
     verifyExtensions();
     const casePath=path.join(c.runtime,'case_exception.cjs');
@@ -49,6 +56,22 @@
       if(n.endsWith('.json'))return phaseCache[n]=JSON.parse(data[n]);
       const m={exports:{}},localRequire=id=>id.startsWith('./')?loadPhase(path.basename(id)):require(id);
       new Function('require','module','exports','__dirname',data[n])(localRequire,m,m.exports,c.extensionDirectory);return phaseCache[n]=m.exports;};
+    if(c.migrationProviders){
+      const cache={};
+      const migrationLoad=n=>{
+        need(migrationNames.includes(n),'NORMAL_MIGRATION_REQUIRE');
+        if(cache[n])return cache[n];
+        const m={exports:{}},localRequire=id=>id.startsWith('./')?migrationLoad(path.basename(id)):require(id);
+        new Function('require','module','exports',data[n])(localRequire,m,m.exports);
+        return cache[n]=m.exports;
+      };
+      // Server-local fixed paths only; historical evidence is a prerequisite,
+      // never a current-run/TTL/closure grant or a caller-provided RPC flag.
+      const history=migrationLoad('central_migration_files.cjs').collectPinnedConfiguration();
+      need(history?.grantsNothing===true&&history.history?.sourceCompatibility===false,
+        'NORMAL_MIGRATION_HISTORY');
+      verifyExtensions();
+    }
     const baseProbe=load('normal_projection_probe.cjs').probe;
     let closureRuntime,sori48Metadata,validateSori48PairPlan;
     const probe=args=>baseProbe({...args,inspectClosedUnknown:()=>closureRuntime?.inspectCommitted(),

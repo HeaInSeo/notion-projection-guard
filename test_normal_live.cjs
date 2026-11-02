@@ -607,3 +607,42 @@ test('installed command binds the exact pair validator before any canonical muta
  assert.match(r.stdout,/SORI48_PAIR_PROVIDER_EXACT_PLAN/);assert.match(r.stdout,/"requestId":"exact-plan","ok":true/);
  assert.equal(fs.readFileSync(path.join(f.root,'journal.json'),'utf8'),before);
 });
+
+function migrationBootstrapFixture(t){
+ const f=liveBootstrapFixture(t);
+ const phaseNames=['SORI48_UNKNOWN_CLOSURE_PROPOSAL.json','sori48_unknown_state.cjs','sori48_unknown_closure.cjs',
+  'sori48_unknown_runtime.cjs','sori48_unknown_evidence.cjs','sori48_unknown_sources.js','sori48_pair_provider.cjs','sori48_pair_metadata.cjs'];
+ f.installation.phaseProviders={};for(const n of phaseNames){const bytes=fs.readFileSync(path.join(__dirname,n));
+  fs.writeFileSync(path.join(f.dir,n),bytes,{mode:0o600});f.installation.phaseProviders[n]=sha(bytes);}
+ // These two synthetic modules isolate generated-loader routing. The actual
+ // fixed-file collector and immutable pins have independent adversarial tests.
+ const modules={'central_migration_artifacts.cjs':'module.exports={history:()=>({sourceCompatibility:false})};',
+ 'central_migration_files.cjs':"const a=require('./central_migration_artifacts.cjs');module.exports={collectPinnedConfiguration(){process.stdout.write('synthetic-migration-collected\\n');return {grantsNothing:true,history:a.history()};}};"};
+ f.installation.migrationProviders={};for(const [n,bytes] of Object.entries(modules)){
+  fs.writeFileSync(path.join(f.dir,n),bytes,{mode:0o600});f.installation.migrationProviders[n]=sha(bytes);}
+ return f;
+}
+test('generated server invokes separately pinned migration collector before ready',t=>{
+ const f=migrationBootstrapFixture(t),before=fs.readFileSync(path.join(f.root,'journal.json'),'utf8');
+ const r=require('node:child_process').spawnSync('/bin/sh',['-c',factory('normal_live_command.js')(f.installation)],
+  {input:'{"action":"close","requestId":"migration-close"}\n',encoding:'utf8',cwd:os.tmpdir()});
+ assert.equal(r.status,0,r.stderr);assert.ok(r.stdout.indexOf('synthetic-migration-collected')<r.stdout.indexOf('"ready":true'));
+ assert.equal(fs.readFileSync(path.join(f.root,'journal.json'),'utf8'),before);
+});
+for(const fault of ['changed bytes','partial manifest','without phase','granting collector','collector refusal'])
+ test('generated migration bootstrap refuses '+fault+' before ready',t=>{
+ const f=migrationBootstrapFixture(t),n='central_migration_files.cjs',p=path.join(f.dir,n);
+ if(fault==='changed bytes')fs.appendFileSync(p,'\nchanged');
+ if(fault==='partial manifest')delete f.installation.migrationProviders[n];
+ if(fault==='without phase')delete f.installation.phaseProviders;
+ if(fault==='granting collector'||fault==='collector refusal'){
+  const bytes=fault==='granting collector'?'module.exports={collectPinnedConfiguration:()=>({grantsNothing:false,history:{sourceCompatibility:true}})};':
+   'module.exports={collectPinnedConfiguration(){throw Error("synthetic-collector-refusal")}};';
+  fs.writeFileSync(p,bytes);f.installation.migrationProviders[n]=sha(bytes);
+ }
+ if(fault==='partial manifest'||fault==='without phase'){
+  assert.throws(()=>factory('normal_live_command.js')(f.installation),/NORMAL_INSTALLATION_MANIFEST/);return;
+ }
+ const r=require('node:child_process').spawnSync('/bin/sh',['-c',factory('normal_live_command.js')(f.installation)],{encoding:'utf8'});
+ assert.notEqual(r.status,0);assert.equal(r.stdout.includes('"ready":true'),false);
+});
