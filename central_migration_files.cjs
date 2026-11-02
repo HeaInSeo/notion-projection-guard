@@ -8,13 +8,12 @@ const files=Object.freeze({authorizationBytes:AUDIT+'/CENTRAL_SCHEDULER_MIGRATIO
   acceptanceBytes:V3+'/CONFIG_REVIEW_ACCEPTANCE.json',cutoverBytes:V3+'/CUTOVER_VERIFIED.json',configBytes:CONFIG});
 const need=(ok,why)=>{if(!ok)throw Error('CENTRAL_MIGRATION_FILE_'+why);};
 function read(file){
-  // Parent ownership is not required for root-owned /home etc., but every
-  // component must be a real directory with no group/world write permission.
-  let parent=path.dirname(file);
-  for(;;){const st=fs.lstatSync(parent);
-    need(st.isDirectory()&&!st.isSymbolicLink()&&!(st.mode&0o022)&&fs.realpathSync(parent)===parent,'DIRECTORY');
-    if(parent==='/')break;parent=path.dirname(parent);
-  }
+  // Match the existing runtime boundary: the fixed immediate directory must
+  // belong to this user and reject shared writes; realpath rejects aliases in
+  // the full path. Do not impose new permissions on unrelated host ancestors.
+  const parent=path.dirname(file),directory=fs.lstatSync(parent);
+  need(directory.isDirectory()&&!directory.isSymbolicLink()&&directory.uid===process.geteuid()&&
+    !(directory.mode&0o022)&&fs.realpathSync(parent)===parent,'DIRECTORY');
   const before=fs.lstatSync(file);
   need(before.isFile()&&!before.isSymbolicLink()&&before.uid===process.geteuid()&&
     !(before.mode&0o022)&&before.size<=4*1024*1024,'INPUT');
