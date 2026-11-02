@@ -607,3 +607,120 @@ test('installed command binds the exact pair validator before any canonical muta
  assert.match(r.stdout,/SORI48_PAIR_PROVIDER_EXACT_PLAN/);assert.match(r.stdout,/"requestId":"exact-plan","ok":true/);
  assert.equal(fs.readFileSync(path.join(f.root,'journal.json'),'utf8'),before);
 });
+
+function migrationBootstrapFixture(t){
+ const f=liveBootstrapFixture(t);
+ const phaseNames=['SORI48_UNKNOWN_CLOSURE_PROPOSAL.json','sori48_unknown_state.cjs','sori48_unknown_closure.cjs',
+  'sori48_unknown_runtime.cjs','sori48_unknown_evidence.cjs','sori48_unknown_sources.js','sori48_pair_provider.cjs','sori48_pair_metadata.cjs'];
+ f.installation.phaseProviders={};for(const n of phaseNames){const bytes=fs.readFileSync(path.join(__dirname,n));
+  fs.writeFileSync(path.join(f.dir,n),bytes,{mode:0o600});f.installation.phaseProviders[n]=sha(bytes);}
+ // These two synthetic modules isolate generated-loader routing. The actual
+ // fixed-file collector and immutable pins have independent adversarial tests.
+ const modules={'central_migration_artifacts.cjs':'module.exports={history:()=>({sourceCompatibility:false})};',
+ 'central_migration_files.cjs':"const a=require('./central_migration_artifacts.cjs');module.exports={collectPinnedConfiguration(){process.stdout.write('synthetic-migration-collected\\n');return {grantsNothing:true,history:a.history()};}};"};
+ f.installation.migrationProviders={};for(const [n,bytes] of Object.entries(modules)){
+  fs.writeFileSync(path.join(f.dir,n),bytes,{mode:0o600});f.installation.migrationProviders[n]=sha(bytes);}
+ return f;
+}
+test('generated server invokes separately pinned migration collector before ready',t=>{
+ const f=migrationBootstrapFixture(t),before=fs.readFileSync(path.join(f.root,'journal.json'),'utf8');
+ const r=require('node:child_process').spawnSync('/bin/sh',['-c',factory('normal_live_command.js')(f.installation)],
+  {input:'{"action":"close","requestId":"migration-close"}\n',encoding:'utf8',cwd:os.tmpdir()});
+ assert.equal(r.status,0,r.stderr);assert.ok(r.stdout.indexOf('synthetic-migration-collected')<r.stdout.indexOf('"ready":true'));
+ assert.equal(fs.readFileSync(path.join(f.root,'journal.json'),'utf8'),before);
+});
+for(const fault of ['changed bytes','partial manifest','without phase','granting collector','collector refusal'])
+ test('generated migration bootstrap refuses '+fault+' before ready',t=>{
+ const f=migrationBootstrapFixture(t),n='central_migration_files.cjs',p=path.join(f.dir,n);
+ if(fault==='changed bytes')fs.appendFileSync(p,'\nchanged');
+ if(fault==='partial manifest')delete f.installation.migrationProviders[n];
+ if(fault==='without phase')delete f.installation.phaseProviders;
+ if(fault==='granting collector'||fault==='collector refusal'){
+  const bytes=fault==='granting collector'?'module.exports={collectPinnedConfiguration:()=>({grantsNothing:false,history:{sourceCompatibility:true}})};':
+   'module.exports={collectPinnedConfiguration(){throw Error("synthetic-collector-refusal")}};';
+  fs.writeFileSync(p,bytes);f.installation.migrationProviders[n]=sha(bytes);
+ }
+ if(fault==='partial manifest'||fault==='without phase'){
+  assert.throws(()=>factory('normal_live_command.js')(f.installation),/NORMAL_INSTALLATION_MANIFEST/);return;
+ }
+ const r=require('node:child_process').spawnSync('/bin/sh',['-c',factory('normal_live_command.js')(f.installation)],{encoding:'utf8'});
+ assert.notEqual(r.status,0);assert.equal(r.stdout.includes('"ready":true'),false);
+});
+
+const newCentral='6ae6e6e4c880819192e89cd430271bfa',oldCentral='6a742f6443e8819184310cd28e6162cd';
+function newOwnerReceipt(o){return {schema:'CENTRAL_MIGRATION_EXECUTION_EVIDENCE_CHECK_V1',
+ actor:'automation:'+newCentral,originalIncidentOwner:'automation:'+oldCentral,
+ runId:o.runId,scheduledProofSha256:o.scheduledProofSha256};}
+for(const fault of [null,'missing old run','duplicate current task'])
+ test('new central witness observes both actual tasks: '+(fault??'valid'),async()=>{
+  const ids=[A,'b'.repeat(32),router,policyId],pageFor=id=>({structuredContent:{id,
+   page_last_edited_at:'2026-11-02T00:00:00Z',text:'<properties>\n{"title":"source"}\n</properties>\n<content>\nsource\n</content>'}});
+  const current={id:newCentral,is_enabled:true,schedule:'reviewed',timing_mode:'exact_schedule',
+   default_timezone:'Asia/Seoul',prompt:'reviewed prompt',run_details:{last_run:{id:run,recorded_status:'in_progress'}}};
+  const old={id:oldCentral,is_enabled:false,schedule:'old',timing_mode:'condition_watch',
+   default_timezone:'Asia/Seoul',run_details:{last_run:null}};
+  if(fault==='missing old run')delete old.run_details.last_run;
+  const calls=[],tools={mcp__codex_apps__notion_fetch:async({id})=>pageFor(id),
+   mcp__codex_apps__automations_peek:async({jawbone_id})=>{
+    calls.push(jawbone_id);return {structuredContent:{automations:jawbone_id===oldCentral?[old]:
+     fault==='duplicate current task'?[current,current]:[current]}};}};
+  const witness=factory('normal_live_owner.js')(tools,{centralTaskId:newCentral,runId:run,referenceToken:'token',
+   batchId,references:ids.map(pageId=>({pageId,page:pageFor(pageId)})),edits:[],nativeExpectations:[],
+   schedulerEvidenceSha256:'d'.repeat(64),schedulerEvidenceFile:'/private/original/PROOF.json'});
+  if(fault){await assert.rejects(()=>witness({batchId}),/NORMAL_MIGRATION_/);return;}
+  const result=await witness({batchId});
+  assert.deepEqual(calls,[newCentral,oldCentral]);assert.equal(result.migrationObservation.newTask.prompt,current.prompt);
+  assert.equal(result.migrationObservation.observedAt,result.observedAt);
+  assert.equal(result.migrationObservation.oldTask.run_details.last_run,null);
+  assert.equal(result.central.schedulerEvidenceFile,'/private/original/PROOF.json');
+ });
+for(const fault of [null,'no validator','validator refusal','history only'])
+ test('actual broker migration gate before fenced begin: '+(fault??'valid'),t=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'normal-new-central-')),b=new core.Broker(root,policy);
+  t.after(()=>{b.close();fs.rmSync(root,{recursive:true,force:true});});
+  let checks=0;const referenceIds=[A,'b'.repeat(32),router,policyId],observation={synthetic:'same-run'};
+  const validateMigratedOwner=fault==='no validator'?undefined:(owner,observed)=>{
+   checks++;assert.equal(owner.actor,'automation:'+newCentral);assert.equal(owner.runId,run);
+   assert.deepEqual(observed,observation);
+   if(fault==='validator refusal')throw Error('synthetic-uninstalled-source');
+   return fault==='history only'?{grantsNothing:true}:newOwnerReceipt(owner);
+  };
+  const bridge=createBridge({broker:b,installation:{root},verifyExtensions(){},validateMigratedOwner,
+   probe(){return {canonical:{exclusive:false,manifestHash:'e'.repeat(64)},brokerExecutor:b.executor,journalHash:'f'.repeat(64)};}});
+  const init=bridge.handle({action:'normal_init',batchId,edits:[edit],centralTaskId:newCentral,
+   runId:run,referenceIds,repository:'nodekit',pr:149});
+  const operation={action:'fence_begin',batchId,edits:[edit]};
+  const stage=bridge.handle({action:'case_stage_input',batchId,operation}),observedAt=new Date().toISOString();
+  const liveSource={observedAt,referenceToken:init.referenceToken,migrationObservation:observation,
+   nativeChecks:referenceIds.map(pageId=>({pageId,observedAt,matched:true,revision:'2026-11-02T00:00:00Z'})),
+   central:{id:newCentral,is_enabled:true,run:{id:run,recorded_status:'in_progress'},
+    schedulerEvidenceSha256:'d'.repeat(64),schedulerEvidenceFile:'/private/original/PROOF.json'}};
+  const consume=()=>bridge.handle({action:'case_consume_live',batchId,...stage,liveSource});
+  if(fault){assert.throws(consume);assert.equal(fs.existsSync(b.file),false);}
+  else {consume();assert.equal(checks,1);assert.equal(b.state.batches[batchId].status,'READY');}
+ });
+for(const fault of [false,true])test('generated server binds installed verifier to command identity: refusal='+fault,t=>{
+ const f=migrationBootstrapFixture(t);
+ const collector=[
+  "module.exports={collectPinnedConfiguration:()=>({grantsNothing:true,history:{sourceCompatibility:false}}),",
+  "validateInstalledExecution(installation,owner,observation){",
+  "if(observation.deny)throw Error('synthetic-uninstalled-source');",
+  "return {sourceHead:installation.sourceHead,actor:owner.actor,runId:owner.runId};}};"
+ ].join('\n');
+ const bridge=[
+  "module.exports={createBridge({validateMigratedOwner}){return {handle(q){",
+  "if(q.action==='migration-test')return validateMigratedOwner(q.owner,q.observation);",
+  "return {closed:true};}}}};"
+ ].join('\n');
+ fs.writeFileSync(path.join(f.dir,'central_migration_files.cjs'),collector);
+ f.installation.migrationProviders['central_migration_files.cjs']=sha(collector);
+ fs.writeFileSync(path.join(f.dir,'normal_bridge.cjs'),bridge);f.installation.files['normal_bridge.cjs']=sha(bridge);
+ const command=factory('normal_live_command.js')(f.installation);
+ const first={action:'migration-test',requestId:'actual-generated-test',owner:{actor:'automation:'+newCentral,runId:run},observation:{deny:fault}};
+ const result=require('node:child_process').spawnSync('/bin/sh',['-c',command],{
+  input:JSON.stringify(first)+'\n{"action":"close","requestId":"close"}\n',encoding:'utf8'});
+ assert.equal(result.status,0,result.stderr);
+ if(fault)assert.match(result.stdout,/"ok":false.*synthetic-uninstalled-source/);
+ else {assert.match(result.stdout,/"ok":true.*"sourceHead":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"/);
+  assert.match(result.stdout,new RegExp('"actor":"automation:'+newCentral+'"'));}
+});

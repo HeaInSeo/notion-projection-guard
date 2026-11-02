@@ -66,3 +66,12 @@ test('existing role flock and durable request-key intent prevent competing or du
  const repeated=launch();assert.notEqual(repeated.status,0);assert.match(repeated.stderr,/EEXIST/);
  assert.equal(fs.readFileSync(marker,'utf8'),first);
 });
+
+test('new PR identity is explicit in payload and dedupe key, never aliased to PR24',()=>{
+ const {r,o}=fixture();const old=m.prepare(r,o,now);r.pr=25;o.pr=25;
+ const next=m.prepare(r,o,now);assert.notEqual(next.requestKey,old.requestKey);
+ assert.match(next.argv[1],/PR25 head/);assert.doesNotMatch(next.argv[1],/PR24 head/);
+ o.pr=24;assert.throws(()=>m.prepare(r,o,now),/CURRENT_SOURCE/);
+});
+for(const pr of [0,-1,1.5,'25',null,Number.MAX_SAFE_INTEGER+1])
+ test('invalid PR identity rejected: '+String(pr),()=>{const {r,o}=fixture();r.pr=pr;o.pr=pr;assert.throws(()=>m.prepare(r,o,now),/SCOPE/);});

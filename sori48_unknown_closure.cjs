@@ -18,9 +18,24 @@ function approval(bytes){
     a.applied===false,'APPROVAL_SCOPE');
   return a;
 }
-function preflight(input){
-  need(input?.owner?.actor===OWNER&&typeof input.owner.runId==='string'&&input.owner.runId&&
+// Both ordinary and committed-receipt paths must validate the prospective caller
+// before reading or returning incident state. Historical OWNER stays unchanged.
+function validateOwner(input,validateMigratedOwner){
+  need(typeof input?.owner?.runId==='string'&&input.owner.runId&&
     /^[a-f0-9]{64}$/.test(input.owner.scheduledProofSha256??''),'OWNER');
+  if(input.owner.actor===OWNER)return;
+  need(input.owner.actor==='automation:6ae6e6e4c880819192e89cd430271bfa'&&
+    typeof validateMigratedOwner==='function','OWNER');
+  // The callback is an installed server dependency, not an input approval flag.
+  // It is also required on committed/restart paths before incident inspection.
+  const checked=validateMigratedOwner(input.owner,input.migrationObservation);
+  need(checked?.schema==='CENTRAL_MIGRATION_EXECUTION_EVIDENCE_CHECK_V1'&&
+    checked.actor===input.owner.actor&&checked.runId===input.owner.runId&&
+    checked.scheduledProofSha256===input.owner.scheduledProofSha256&&
+    checked.originalIncidentOwner===OWNER,'MIGRATION_OWNER');
+}
+function preflight(input,validateMigratedOwner){
+  validateOwner(input,validateMigratedOwner);
   approval(input.approvalBytes);
   need(typeof input.beforeBytes==='string'&&sha(input.beforeBytes)===proposal.journalSha256,
     'JOURNAL_PREIMAGE');
@@ -66,13 +81,12 @@ function createProvider(deps){
   return async function close(input){
     return deps.withLock(async()=>{
       if(typeof deps.inspectCommitted==='function'){
-        need(input?.owner?.actor===OWNER&&typeof input.owner.runId==='string'&&input.owner.runId&&
-          /^[a-f0-9]{64}$/.test(input.owner.scheduledProofSha256??''),'OWNER');
+        validateOwner(input,deps.validateMigratedOwner);
         approval(input.approvalBytes);
         const committed=deps.inspectCommitted();
         if(committed)return {eligible:false,applied:false,alreadyApplied:true,...committed};
       }
-      const checked=preflight(input);
+      const checked=preflight(input,deps.validateMigratedOwner);
       if(input.apply!==true)return {eligible:true,applied:false,status:state.STATUS,
         originalOutcome:'UNKNOWN',lateObservationRequired:true};
       const audit={schema:'SORI48_SUPERSEDED_UNKNOWN_PRIVATE_AUDIT_V1',
@@ -88,6 +102,8 @@ function createProvider(deps){
       const auditReceipt=await deps.persistAudit(audit);
       need(auditReceipt?.sha256===sha(JSON.stringify(audit)),'AUDIT_PERSIST');
       const afterBytes=candidate(input.beforeBytes,auditReceipt.sha256);
+      // Audit I/O cannot extend the original live witness or prospective owner.
+      validateOwner(input,deps.validateMigratedOwner);
       const readback=await deps.atomicWrite(proposal.journalSha256,afterBytes);
       need(typeof readback==='string'&&readback===afterBytes,'ATOMIC_READBACK');
       state.inspectTransition(input.beforeBytes,readback);

@@ -6,16 +6,16 @@ const REPO='HeaInSeo/notion-projection-guard',ROW='40786e6dd1d1818086faf517ccee6
 const TASK='GR-NPG-NORMAL-FRESHNESS-20261028',SESSION='1a591656-4902-4b98-a6cb-afca7eba849c';
 const need=(v,k)=>{if(!v)throw Error('SOURCE_REVIEW_'+k);};
 const sha=s=>crypto.createHash('sha256').update(s).digest('hex');
-function requestKey(r){return sha(JSON.stringify([REPO,24,r.head,r.base,r.tree,'guardrail',TASK,ROW,SESSION]));}
+function requestKey(r){return sha(JSON.stringify([REPO,r.pr,r.head,r.base,r.tree,'guardrail',TASK,ROW,SESSION]));}
 function prepare(request,observation,now=Date.now()){
   const r=JSON.parse(JSON.stringify(request)),o=JSON.parse(JSON.stringify(observation));
-  need(r.repository===REPO&&r.pr===24&&r.role==='guardrail'&&r.taskId===TASK&&
+  need(r.repository===REPO&&Number.isSafeInteger(r.pr)&&r.pr>0&&r.role==='guardrail'&&r.taskId===TASK&&
     r.row===ROW&&r.sessionId===SESSION&&r.triggerKind==='MANUAL_SCOPED_SOURCE_REVIEW','SCOPE');
   for(const k of ['head','base','tree'])need(/^[a-f0-9]{40}$/.test(r[k]??''),'IDENTITY');
   const at=Date.parse(r.createdAt),observed=Date.parse(o.observedAt);
   need(Number.isFinite(at)&&Number.isFinite(observed)&&at<=now&&observed<=now&&
     now-at<300000&&now-observed<30000,'STALE');
-  need(o.repository===REPO&&o.pr===24&&o.state==='open'&&o.head===r.head&&
+  need(o.repository===REPO&&o.pr===r.pr&&o.state==='open'&&o.head===r.head&&
     o.base===r.base&&o.tree===r.tree&&o.clean===true,'CURRENT_SOURCE');
   need(o.currentOwn?.role==='guardrail'&&o.currentOwn.task_id===TASK&&
     o.currentOwn.session_id===SESSION&&o.currentOwn.kind==='RELEASE'&&
@@ -27,7 +27,7 @@ function prepare(request,observation,now=Date.now()){
     o.legacyCaseLaunch?.gate==='READY'&&o.legacyCaseLaunch.scope==='GENERIC_SCAN_ONLY'&&
     o.sourceRowHook?.unrelated===true,'LEGACY_BOOTSTRAP');
   const payload=`MANUAL_SCOPED_SOURCE_REVIEW under the current direct user source-maintenance instruction. `+
-    `Review only ${REPO} PR24 head ${r.head}, base ${r.base}, tree ${r.tree}, clean source ${r.sourceDirectory}. `+
+    `Review only ${REPO} PR${r.pr} head ${r.head}, base ${r.base}, tree ${r.tree}, clean source ${r.sourceDirectory}. `+
     `Existing Guardrail task ${TASK}, row ${ROW}, same session ${SESSION}. Read the current own row, `+
     `role/domain authority and source first; independently refuse any conflict or newer owner. `+
     `This explicit source request selects the existing task; the generic hourly queue selector does not consume private request files. `+

@@ -151,3 +151,62 @@ test('changed closed-case receipt or audit cannot be accepted by a status consum
   const saved=JSON.parse(fs.readFileSync(f.file,'utf8'));saved.batches[f.proposal.batchId].receipt.ticket='changed';
   fs.writeFileSync(f.file,JSON.stringify(saved));assert.throws(()=>f.restart().inspectCommitted());
 });
+
+const migratedActor='automation:6ae6e6e4c880819192e89cd430271bfa';
+function migratedCheck(owner){
+ return {schema:'CENTRAL_MIGRATION_EXECUTION_EVIDENCE_CHECK_V1',actor:migratedActor,
+  originalIncidentOwner:realClosure.OWNER,runId:owner.runId,scheduledProofSha256:owner.scheduledProofSha256};
+}
+test('prospective new owner applies only through its installed dependency and preserves the original incident',async()=>{
+ const f=fixture(),d=deps(f.proposal);f.input.owner.actor=migratedActor;f.input.apply=true;
+ const original=JSON.parse(f.input.beforeBytes).batches[f.proposal.batchId];let after,checks=0;
+ d.validateMigratedOwner=owner=>{checks++;return migratedCheck(owner);};
+ d.atomicWrite=async(expected,bytes)=>{d.calls.write++;after=JSON.parse(bytes);return bytes;};
+ const result=await f.closure.createProvider(d)(f.input);
+ assert.equal(result.applied,true);assert.equal(checks,2);assert.equal(result.originalOutcome,'UNKNOWN');
+ assert.deepEqual(JSON.parse(JSON.stringify(after.batches[f.proposal.batchId].dispatch)),original.dispatch);
+ assert.deepEqual(JSON.parse(JSON.stringify(after.batches[f.proposal.batchId].receipt)),original.receipt);
+ assert.equal(after.batches[f.proposal.batchId].next,3);
+ assert.equal(realClosure.OWNER,'automation:6a742f6443e8819184310cd28e6162cd');
+});
+for(const kind of ['missing dependency','input flag only','validator rejection','wrong result run','wrong result owner'])
+ test('new owner rejects '+kind+' before any write',async()=>{
+  const f=fixture(),d=deps(f.proposal);f.input.owner.actor=migratedActor;f.input.apply=true;
+  if(kind==='input flag only')f.input.migration={ready:true,ownerVerified:true};
+  if(kind==='validator rejection')d.validateMigratedOwner=()=>{throw Error('uninstalled');};
+  if(kind==='wrong result run')d.validateMigratedOwner=o=>({...migratedCheck(o),runId:'other'});
+  if(kind==='wrong result owner')d.validateMigratedOwner=o=>({...migratedCheck(o),originalIncidentOwner:migratedActor});
+  await assert.rejects(()=>f.closure.createProvider(d)(f.input));assert.deepEqual(d.calls,{audit:0,write:0});
+ });
+test('committed path validates migrated owner before looking up any incident receipt',async()=>{
+ const f=fixture(),d=deps(f.proposal);f.input.owner.actor=migratedActor;let inspected=0;
+ d.inspectCommitted=()=>{inspected++;return {status:'CLOSED_SUPERSEDED_UNKNOWN'};};
+ await assert.rejects(()=>f.closure.createProvider(d)(f.input),/OWNER/);assert.equal(inspected,0);
+ d.validateMigratedOwner=()=>{throw Error('stale source');};
+ await assert.rejects(()=>f.closure.createProvider(d)(f.input),/stale source/);assert.equal(inspected,0);
+ d.validateMigratedOwner=migratedCheck;
+ const result=await f.closure.createProvider(d)(f.input);
+ assert.equal(result.alreadyApplied,true);assert.equal(inspected,1);assert.deepEqual(d.calls,{audit:0,write:0});
+});
+test('after real durable commit and response loss, a new migrated run authenticates before idempotent readback',async t=>{
+ const f=durableFixture(t);f.input.owner.actor=migratedActor;f.input.apply=true;
+ const runtime=f.restart(),write=runtime.atomicWrite;
+ const first={...runtime,validateMigratedOwner:migratedCheck,atomicWrite:async(...args)=>{
+  await write(...args);throw Error('reply lost after rename');
+ }};
+ await assert.rejects(()=>f.closure.createProvider(first)(f.input),/reply lost/);
+ const bytes=fs.readFileSync(f.file,'utf8');
+ f.input.owner.runId='next-actual-synthetic-run';let inspections=0;
+ const restarted=f.restart(),inspect=restarted.inspectCommitted;
+ const again=await f.closure.createProvider({...restarted,validateMigratedOwner:migratedCheck,
+  inspectCommitted(){inspections++;return inspect();}})(f.input);
+ assert.equal(again.alreadyApplied,true);assert.equal(again.originalOutcome,'UNKNOWN');
+ assert.equal(inspections,1);assert.equal(fs.readFileSync(f.file,'utf8'),bytes);
+});
+
+test('audit persistence does not extend prospective authority before canonical commit',async()=>{
+ const f=fixture(),d=deps(f.proposal);f.input.owner.actor=migratedActor;f.input.apply=true;let checks=0;
+ d.validateMigratedOwner=owner=>{if(++checks===2)throw Error('original-live-witness-expired');return migratedCheck(owner);};
+ await assert.rejects(()=>f.closure.createProvider(d)(f.input),/original-live-witness-expired/);
+ assert.equal(checks,2);assert.deepEqual(d.calls,{audit:1,write:0});
+});
