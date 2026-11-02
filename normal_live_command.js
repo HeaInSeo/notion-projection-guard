@@ -56,6 +56,7 @@
       if(n.endsWith('.json'))return phaseCache[n]=JSON.parse(data[n]);
       const m={exports:{}},localRequire=id=>id.startsWith('./')?loadPhase(path.basename(id)):require(id);
       new Function('require','module','exports','__dirname',data[n])(localRequire,m,m.exports,c.extensionDirectory);return phaseCache[n]=m.exports;};
+    let migrationFiles;
     if(c.migrationProviders){
       const cache={};
       const migrationLoad=n=>{
@@ -67,11 +68,18 @@
       };
       // Server-local fixed paths only; historical evidence is a prerequisite,
       // never a current-run/TTL/closure grant or a caller-provided RPC flag.
-      const history=migrationLoad('central_migration_files.cjs').collectPinnedConfiguration();
+      migrationFiles=migrationLoad('central_migration_files.cjs');
+      const history=migrationFiles.collectPinnedConfiguration();
       need(history?.grantsNothing===true&&history.history?.sourceCompatibility===false,
         'NORMAL_MIGRATION_HISTORY');
       verifyExtensions();
     }
+    const validateMigratedOwner=migrationFiles?(owner,observation)=>{
+      verifyExtensions();
+      need(typeof migrationFiles.validateInstalledExecution==='function','NORMAL_MIGRATION_EXECUTION_UNAVAILABLE');
+      const checked=migrationFiles.validateInstalledExecution(c,owner,observation);
+      verifyExtensions();return checked;
+    }:undefined;
     const baseProbe=load('normal_projection_probe.cjs').probe;
     let closureRuntime,sori48Metadata,validateSori48PairPlan;
     const probe=args=>baseProbe({...args,inspectClosedUnknown:()=>closureRuntime?.inspectCommitted(),
@@ -88,7 +96,7 @@
     if(c.phaseProviders){
       const runtime=loadPhase('sori48_unknown_runtime.cjs').createRuntime({root:c.root,getBroker:()=>b});
       closureRuntime=runtime;
-      const provider=loadPhase('sori48_unknown_closure.cjs').createProvider(runtime);
+      const provider=loadPhase('sori48_unknown_closure.cjs').createProvider({...runtime,validateMigratedOwner});
       const pairProvider=loadPhase('sori48_pair_provider.cjs').createProvider();
       validateSori48PairPlan=pairProvider.validatePlan;
       const nativeModule=loadPhase('sori48_pair_metadata.cjs');
@@ -111,7 +119,7 @@
     const bridge=load('normal_bridge.cjs').createBridge({broker:b,probe,installation:c,
       reconcileUnpermitted:reconcile,reconcilePermitExpiry,restoreUnsent,resumePrepared,resumeUnprepared,verifyExtensions,
       validateControlInit,assessControlPermit,continueApprovedControl,sori48ClosureCheck,sori48Metadata,
-      validateSori48PairPlan});
+      validateSori48PairPlan,validateMigratedOwner});
     process.stdout.write('NPG/2 {"ready":true}\n');
     const rl=readline.createInterface({input:process.stdin,crlfDelay:Infinity});
     rl.on('line',async line=>{let q;try{q=JSON.parse(line);const result=await bridge.handle(q);

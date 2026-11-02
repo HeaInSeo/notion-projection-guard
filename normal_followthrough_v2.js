@@ -14,6 +14,8 @@
       if(!failure)throw error;failure.closeError={message:error.message,code:error.code??null};
     }
   }
+  const migrationWitness=config.centralTaskId==='6ae6e6e4c880819192e89cd430271bfa'?
+    {schedulerEvidenceFile:config.schedulerEvidenceFile,schedulerEvidenceSha256:config.schedulerEvidenceSha256}:{};
   async function sori48(references,apply){
     references=copy(references);
     need(config.sori48Closure===true&&config.batchId==='SORI48-PAIR-ADMIT-20261029'&&
@@ -23,7 +25,7 @@
     const transport=config.createTransport(tools),client=createClient(transport);
     const runner=config.createLiveRunner(transport,{client,createWitness:config.createWitness,
       centralTaskId:config.centralTaskId,runId:config.runId,references,nativeExpectations:[],
-      sori48Closure:true,witnessConfig:{sori48Closure:true,
+      sori48Closure:true,witnessConfig:{...migrationWitness,sori48Closure:true,
         schedulerEvidenceSha256:config.schedulerEvidenceSha256,
         createSori48SourceCollector:config.createSori48SourceCollector}});
     const method=apply?'applySori48Closure':'checkSori48Closure';
@@ -52,7 +54,7 @@
     const runner=config.createLiveRunner(transport,{client,createWitness:config.createWitness,
       centralTaskId:config.centralTaskId,runId:config.runId,references,nativeExpectations:[],
       sori48Pair:true,binding:{repository:'sori',source:{pr:48}},
-      witnessConfig:{...config.witnessConfig,sori48Pair:true,
+      witnessConfig:{...config.witnessConfig,...migrationWitness,sori48Pair:true,
         sori48SourceBatchId:'SORI48-PAIR-ADMIT-20261029',
         createSori48SourceCollector:config.createSori48SourceCollector}});
     let failure=null;
@@ -79,7 +81,7 @@
     const runner=config.createLiveRunner(transport,{client,createWitness:config.createWitness,
       centralTaskId:config.centralTaskId,runId:config.runId,references,nativeExpectations:[],
       sori48Metadata:true,bodyEdits:admission.edits,continuationPlanHash,
-      witnessConfig:{...config.witnessConfig,sori48Metadata:true,
+      witnessConfig:{...config.witnessConfig,...migrationWitness,sori48Metadata:true,
         sori48SourceBatchId:'SORI48-PAIR-ADMIT-20261029',
         createSori48SourceCollector:config.createSori48SourceCollector}});
     let failure=null;
@@ -124,7 +126,7 @@
     const transport=config.createTransport(tools),client=createClient(transport);
     const runner=config.createLiveRunner(transport,{client,createWitness:config.createWitness,
       centralTaskId:config.centralTaskId,runId:config.runId,references,nativeExpectations:bundle.native,
-      binding:bundle.binding,recovery:config.recovery,witnessConfig:config.witnessConfig});
+      binding:bundle.binding,recovery:config.recovery,witnessConfig:{...config.witnessConfig,...migrationWitness}});
     let failure=null;
     try{return await config.createLandedProjection(tools,{createRunner:()=>runner,runnerConfig:{}}).run(bundle);}
     catch(error){failure=error;throw error;}

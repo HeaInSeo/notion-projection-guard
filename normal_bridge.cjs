@@ -12,7 +12,7 @@ const SORI48_PAIR_BODY_IDS=['3f586e6dd1d181ebb43dd7de62aa2ca4','3f586e6dd1d181cd
   '3ed86e6dd1d18118b0b8d98bb91892fb','3b286e6dd1d1811d9308d9a2b56c9de4'];
 const SORI48_PAIR_REFERENCE_IDS=[...SORI48_PAIR_BODY_IDS,'40786e6dd1d181ec8addcd1269f9b0bb',
   '3b286e6dd1d18194866dd8d7a28c7ab4'];
-function createBridge({broker,probe,installation,reconcileUnpermitted,reconcilePermitExpiry,restoreUnsent,resumePrepared,resumeUnprepared,verifyExtensions,validateControlInit,assessControlPermit,continueApprovedControl,sori48ClosureCheck,sori48Metadata,validateSori48PairPlan}){
+function createBridge({broker,probe,installation,reconcileUnpermitted,reconcilePermitExpiry,restoreUnsent,resumePrepared,resumeUnprepared,verifyExtensions,validateControlInit,assessControlPermit,continueApprovedControl,sori48ClosureCheck,sori48Metadata,validateSori48PairPlan,validateMigratedOwner}){
   let init=null,staged=null,closed=false,noCall=null;
   const check=()=>{
     need(!closed,'NORMAL_BRIDGE_CLOSED');broker.assertLock();verifyExtensions();
@@ -31,6 +31,17 @@ function createBridge({broker,probe,installation,reconcileUnpermitted,reconcileP
         v.observedAt===w.observedAt&&typeof v.revision==='string'),'NORMAL_LIVE_NATIVE');
     need(c?.id===init.centralTaskId&&c.is_enabled===true&&c.run?.id===init.runId&&
       c.run.recorded_status==='in_progress','NORMAL_LIVE_CENTRAL_OWNER');
+    if(init.centralTaskId==='6ae6e6e4c880819192e89cd430271bfa'){
+      need(typeof validateMigratedOwner==='function','NORMAL_MIGRATION_EXECUTION_UNAVAILABLE');
+      const migrated=validateMigratedOwner({actor:'automation:'+init.centralTaskId,runId:init.runId,
+        scheduledProofSha256:c.schedulerEvidenceSha256,schedulerEvidenceFile:c.schedulerEvidenceFile},
+        w.migrationObservation);
+      need(migrated?.schema==='CENTRAL_MIGRATION_EXECUTION_EVIDENCE_CHECK_V1'&&
+        migrated.actor==='automation:'+init.centralTaskId&&migrated.runId===init.runId&&
+        migrated.scheduledProofSha256===c.schedulerEvidenceSha256&&
+        migrated.originalIncidentOwner==='automation:6a742f6443e8819184310cd28e6162cd',
+        'NORMAL_MIGRATION_EXECUTION_OWNER');
+    }
     return {ownerId:'automation:'+init.centralTaskId,generation:init.runId,scope:init.batchId,
       prerequisites:true,conflicts:[],evidenceHash:p.canonical.manifestHash,
       observedAt:w.observedAt,validUntil:new Date(Math.min(now+15000,at+30000)).toISOString(),
@@ -182,7 +193,11 @@ function createBridge({broker,probe,installation,reconcileUnpermitted,reconcileP
         return sori48ClosureCheck({...op,apply:op.action==='normal_sori48_unknown_apply',
           freshSources:copy(observation.freshSources),lateObservation:copy(observation),
           owner:{actor:ownerProof.ownerId,runId:ownerProof.generation,
-          scheduledProofSha256:input.liveSource.central.schedulerEvidenceSha256}});
+          scheduledProofSha256:input.liveSource.central.schedulerEvidenceSha256,
+          ...(input.liveSource.central.schedulerEvidenceFile?
+            {schedulerEvidenceFile:input.liveSource.central.schedulerEvidenceFile}:{})},
+          ...(input.liveSource.migrationObservation?
+            {migrationObservation:copy(input.liveSource.migrationObservation)}:{})});
       }
       if(op.action==='normal_reconcile_unpermitted'){
         need(typeof reconcileUnpermitted==='function','NORMAL_RECOVERY_UNAVAILABLE');

@@ -33,6 +33,9 @@
     (!sourceBound||typeof createSori48SourceCollector==='function')&&
     (c.sori48Closure!==true||/^[a-f0-9]{64}$/.test(c.schedulerEvidenceSha256??'')),
     'NORMAL_LIVE_CONFIG');
+  const migrating=c.centralTaskId==='6ae6e6e4c880819192e89cd430271bfa';
+  if(migrating)need(typeof c.schedulerEvidenceFile==='string'&&
+    /^[a-f0-9]{64}$/.test(c.schedulerEvidenceSha256??''),'NORMAL_MIGRATION_CAPTURE_REQUIRED');
   const frozen=refs.map(r=>({pageId:r.pageId,...page(r.page,r.pageId)}));
   const sori48Collector=sourceBound?createSori48SourceCollector(tools):null;
   if(sori48Collector)need(typeof sori48Collector.collect==='function','NORMAL_SORI48_SOURCE_COLLECTOR');
@@ -42,7 +45,8 @@
     // nor the local consumer is allowed to renew this observation timestamp.
     const observedAt=new Date().toISOString();
     const jobs=await Promise.allSettled([...refs.map(r=>tools.mcp__codex_apps__notion_fetch({id:r.pageId})),
-      tools.mcp__codex_apps__automations_peek({jawbone_id:c.centralTaskId})]);
+      tools.mcp__codex_apps__automations_peek({jawbone_id:c.centralTaskId}),
+      ...(migrating?[tools.mcp__codex_apps__automations_peek({jawbone_id:'6a742f6443e8819184310cd28e6162cd'})]:[])]);
     for(const j of jobs)if(j.status==='rejected')throw j.reason;
     const checks=frozen.map((f,i)=>{
       const live=page(jobs[i].value,f.pageId),edit=c.edits.find(e=>e.pageId===f.pageId);
@@ -65,9 +69,24 @@
       sori48Observation.freshSourcesComplete===true&&sori48Observation.applyAuthorized===false&&
       sori48Observation.attributableTerminalResult===null,'NORMAL_SORI48_SOURCE_OBSERVATION');
     need(Date.now()-Date.parse(observedAt)<30000,'NORMAL_LIVE_EXPIRED');
+    let migrationObservation;
+    if(migrating){
+      const old=unwrap(jobs[refs.length+1].value)?.automations?.filter(
+        t=>t.id==='6a742f6443e8819184310cd28e6162cd');
+      need(old?.length===1,'NORMAL_MIGRATION_OLD_OWNER_UNKNOWN');
+      need(Object.hasOwn(old[0].run_details??{},'last_run')&&
+        actual.automations.filter(t=>t.id===c.centralTaskId).length===1,'NORMAL_MIGRATION_RUN_UNKNOWN');
+      const thin=(t,prompt)=>({id:t.id,is_enabled:t.is_enabled,schedule:t.schedule,
+        timing_mode:t.timing_mode,default_timezone:t.default_timezone,
+        run_details:{last_run:copy(t.run_details.last_run)},
+        ...(prompt?{prompt:t.prompt}:{})});
+      migrationObservation={observedAt,oldTask:thin(old[0],false),newTask:thin(task,true)};
+    }
     return {observedAt,referenceToken:c.referenceToken,nativeChecks:checks,
+      ...(migrationObservation?{migrationObservation}:{}),
       central:{id:task.id,is_enabled:task.is_enabled,run:copy(run),
-        ...(c.sori48Closure===true?{schedulerEvidenceSha256:c.schedulerEvidenceSha256}:{})},
+        ...(c.sori48Closure===true||migrating?{schedulerEvidenceSha256:c.schedulerEvidenceSha256}:{}),
+        ...(migrating?{schedulerEvidenceFile:c.schedulerEvidenceFile}:{})},
       ...(sori48Observation?{sori48Observation:copy(sori48Observation)}:{})};
   };
 })
